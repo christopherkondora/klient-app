@@ -53,8 +53,19 @@
     },
     "mac": {
       "icon": "assets/icon.icns",
-      "target": "dmg"
+      "target": [
+        {
+          "target": "dmg",
+          "arch": ["universal"]
+        }
+      ],
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "notarize": false
     },
+    "afterSign": "scripts/notarize.js",
     "publish": {
       "provider": "github",
       "owner": "christopherkondora",
