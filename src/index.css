@@ -1,0 +1,557 @@
+@import "tailwindcss";
+
+@theme {
+  /* Brand color palette */
+  --color-ink: #01161E;
+  --color-teal: #124559;
+  --color-steel: #598392;
+  --color-ash: #AEC3B0;
+  --color-cream: #EFF6E0;
+
+  /* Semantic color scale (dark theme native) */
+  --color-surface-950: #010E13;
+  --color-surface-900: #01161E;
+  --color-surface-800: #0C2230;
+  --color-surface-700: #124559;
+  --color-surface-600: #1A5A72;
+  --color-surface-500: #598392;
+  --color-surface-400: #7FA0AD;
+  --color-surface-300: #AEC3B0;
+  --color-surface-200: #C8D8C0;
+  --color-surface-100: #DDE9D5;
+  --color-surface-50: #EFF6E0;
+
+  /* Primary accent = teal */
+  --color-primary-900: #0A2A36;
+  --color-primary-800: #0E3649;
+  --color-primary-700: #124559;
+  --color-primary-600: #1A5A72;
+  --color-primary-500: #598392;
+  --color-primary-400: #7FA0AD;
+  --color-primary-300: #AEC3B0;
+  --color-primary-200: #C8D8C0;
+  --color-primary-100: #DDE9D5;
+  --color-primary-50: #EFF6E0;
+
+  /* Font families */
+  --font-heading: 'Space Grotesk', sans-serif;
+  --font-body: 'Red Hat Display', sans-serif;
+}
+
+/* ===== Light — Beige (Nappali) ===== */
+[data-theme="light"] {
+  --color-ink: #E4EFD4;
+  --color-cream: #01161E;
+  --color-ash: #1E3840;
+  --color-steel: #4A7080;
+  --color-teal: #124559;
+
+  --color-surface-950: #EDF5E0;
+  --color-surface-900: #DCEACC;
+  --color-surface-800: #FFFFFF;
+  --color-surface-700: #C8D8B8;
+  --color-surface-600: #AEC3B0;
+  --color-surface-500: #7A9A7E;
+  --color-surface-400: #598392;
+  --color-surface-300: #3A5A45;
+  --color-surface-200: #2A4A35;
+  --color-surface-100: #1A3A25;
+  --color-surface-50: #124559;
+}
+
+/* ===== Teal — Ocean (Egyedi) ===== */
+[data-theme="teal-ocean"] {
+  --color-ink: #0B2D3E;
+  --color-cream: #EFF6E0;
+  --color-ash: #AEC3B0;
+  --color-steel: #7FA0AD;
+  --color-teal: #598392;
+
+  --color-surface-950: #071E2A;
+  --color-surface-900: #0D3545;
+  --color-surface-800: #1A4D63;
+  --color-surface-700: #1A5A72;
+  --color-surface-600: #2A7A92;
+  --color-surface-500: #598392;
+  --color-surface-400: #7FA0AD;
+  --color-surface-300: #AEC3B0;
+  --color-surface-200: #C8D8C0;
+  --color-surface-100: #DDE9D5;
+  --color-surface-50: #EFF6E0;
+}
+
+/* ===== Ash — Soft (Természetes) ===== */
+[data-theme="ash-soft"] {
+  --color-ink: #B2C8B4;
+  --color-cream: #01161E;
+  --color-ash: #1A3530;
+  --color-steel: #3A6055;
+  --color-teal: #124559;
+
+  --color-surface-950: #C0D2C2;
+  --color-surface-900: #9EB8A0;
+  --color-surface-800: #D4E0D5;
+  --color-surface-700: #8AAE8C;
+  --color-surface-600: #78A07A;
+  --color-surface-500: #5A8A5C;
+  --color-surface-400: #3A6A3C;
+  --color-surface-300: #2A5A2C;
+  --color-surface-200: #1A4A1C;
+  --color-surface-100: #124559;
+  --color-surface-50: #01161E;
+}
+
+/* Accent color overrides for readability on light backgrounds */
+[data-theme="light"],
+[data-theme="ash-soft"] {
+  --color-emerald-400: #059669;
+  --color-emerald-500: #047857;
+  --color-amber-400: #d97706;
+  --color-amber-500: #b45309;
+  --color-orange-400: #ea580c;
+  --color-orange-500: #c2410c;
+  --color-green-400: #16a34a;
+  --color-green-500: #15803d;
+  --color-red-400: #dc2626;
+  --color-red-500: #b91c1c;
+}
+
+/* Ensure teal accent buttons have light text in light themes */
+[data-theme="light"] .bg-teal,
+[data-theme="ash-soft"] .bg-teal {
+  --color-cream: #EFF6E0;
+}
+
+/* Base styles */
+* {
+  font-family: var(--font-body);
+}
+
+/* Heading font utility */
+.font-pixel {
+  font-family: var(--font-heading);
+  font-weight: 700;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-surface-700);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-surface-600);
+}
+
+/* Focus & selection */
+::selection {
+  background: rgba(89, 131, 146, 0.3);
+  color: var(--color-cream);
+}
+
+/* Smooth transitions globally */
+button, a, input, select, textarea {
+  transition: all 0.15s ease;
+}
+
+/* Native select styling */
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23598392' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 14 18 9'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  padding-right: 28px !important;
+}
+
+select option {
+  background: var(--color-surface-800);
+  color: var(--color-cream);
+  padding: 6px 8px;
+}
+
+select option:checked {
+  background: var(--color-teal);
+  color: var(--color-cream);
+}
+
+/* Number input spinner */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  appearance: none;
+  margin: 0;
+}
+
+/* ===== Micro-animations ===== */
+
+/* Modal entrance */
+@keyframes modal-in {
+  from { opacity: 0; transform: scale(0.97) translateY(4px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+@keyframes backdrop-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.animate-in {
+  animation: modal-in 0.15s ease-out;
+}
+
+/* Apply to all modal backdrops and panels */
+.fixed.inset-0.bg-black\/60 {
+  animation: backdrop-in 0.12s ease-out;
+  background-color: rgba(1, 22, 30, 0.75) !important;
+  backdrop-filter: blur(4px);
+}
+
+.fixed.inset-0.bg-black\/60 > div {
+  animation: modal-in 0.15s ease-out;
+  box-shadow: 0 25px 60px rgba(0, 0, 0, 0.4);
+  border-top: 2px solid var(--color-teal);
+}
+
+/* Card hover lift */
+@keyframes card-press {
+  0% { transform: scale(1); }
+  50% { transform: scale(0.985); }
+  100% { transform: scale(1); }
+}
+
+.hover\:border-teal\/25:active {
+  animation: card-press 0.12s ease;
+}
+
+/* Button press feedback */
+button:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+/* Sidebar nav item slide-in */
+@keyframes slide-right {
+  from { opacity: 0; transform: translateX(-4px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+aside nav a {
+  animation: slide-right 0.15s ease-out both;
+}
+
+aside nav a:nth-child(1) { animation-delay: 0.02s; }
+aside nav a:nth-child(2) { animation-delay: 0.035s; }
+aside nav a:nth-child(3) { animation-delay: 0.05s; }
+aside nav a:nth-child(4) { animation-delay: 0.065s; }
+aside nav a:nth-child(5) { animation-delay: 0.08s; }
+aside nav a:nth-child(6) { animation-delay: 0.095s; }
+
+/* Stat card entrance */
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.grid > .bg-surface-800\/50 {
+  animation: fade-up 0.18s ease-out both;
+}
+
+.grid > .bg-surface-800\/50:nth-child(1) { animation-delay: 0.02s; }
+.grid > .bg-surface-800\/50:nth-child(2) { animation-delay: 0.04s; }
+.grid > .bg-surface-800\/50:nth-child(3) { animation-delay: 0.06s; }
+.grid > .bg-surface-800\/50:nth-child(4) { animation-delay: 0.08s; }
+
+/* Progress bar fill animation */
+@keyframes bar-fill {
+  from { width: 0; }
+}
+
+.rounded-full.h-full, .h-full.rounded-full {
+  animation: bar-fill 0.2s ease-out;
+}
+
+/* Finance page — staggered section entrance */
+.max-w-6xl.space-y-6 > * {
+  animation: fade-up 0.18s ease-out both;
+}
+
+.space-y-6 > :nth-child(1) { animation-delay: 0s; }
+.space-y-6 > :nth-child(2) { animation-delay: 0.03s; }
+.space-y-6 > :nth-child(3) { animation-delay: 0.06s; }
+.space-y-6 > :nth-child(4) { animation-delay: 0.09s; }
+.space-y-6 > :nth-child(5) { animation-delay: 0.12s; }
+.space-y-6 > :nth-child(6) { animation-delay: 0.15s; }
+.space-y-6 > :nth-child(7) { animation-delay: 0.18s; }
+.space-y-6 > :nth-child(8) { animation-delay: 0.21s; }
+
+/* Card hover lift (finance cards) */
+.bg-surface-800\/50.rounded-xl,
+.bg-surface-800\/50.rounded-2xl {
+  transition: transform 0.15s ease-out, box-shadow 0.15s ease-out;
+}
+
+.bg-surface-800\/50.rounded-xl:hover,
+.bg-surface-800\/50.rounded-2xl:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+}
+
+/* Shortcut grid item hover */
+aside .grid button {
+  transition: transform 0.12s ease-out, background-color 0.12s ease-out;
+}
+
+aside .grid button:hover {
+  transform: scale(1.06);
+}
+
+/* Tooltip-style scale on color picker dots */
+button.rounded-full[style*="background-color"] {
+  transition: transform 0.1s ease-out, border-color 0.1s ease-out;
+}
+
+/* Recording pulse glow */
+@keyframes rec-glow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); }
+  50% { box-shadow: 0 0 8px 2px rgba(239, 68, 68, 0.2); }
+}
+
+.animate-pulse {
+  animation: rec-glow 1.2s ease-in-out infinite;
+}
+
+/* Spinner */
+@keyframes smooth-spin {
+  to { transform: rotate(360deg); }
+}
+
+.animate-spin {
+  animation: smooth-spin 0.7s linear infinite;
+}
+
+/* Tab switch indicator */
+@keyframes tab-indicator {
+  from { opacity: 0; transform: scaleX(0.9); }
+  to { opacity: 1; transform: scaleX(1); }
+}
+
+.bg-teal\/20.text-cream {
+  animation: tab-indicator 0.12s ease-out;
+}
+
+/* TipTap Editor */
+.ProseMirror {
+  outline: none;
+  min-height: 120px;
+}
+
+.ProseMirror p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  color: var(--color-steel);
+  opacity: 0.4;
+  pointer-events: none;
+  height: 0;
+}
+
+.ProseMirror h1 {
+  font-size: 1.5rem;
+  font-weight: 700;
+  margin: 0.6em 0 0.3em;
+  letter-spacing: -0.01em;
+}
+
+.ProseMirror h2 {
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin: 0.4em 0 0.2em;
+}
+
+.ProseMirror .note-image-wrapper {
+  margin: 0.5em 0;
+}
+
+.ProseMirror .note-resizable-img {
+  border-radius: 8px;
+  object-fit: cover;
+}
+
+.ProseMirror .note-link {
+  color: var(--color-teal);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.ProseMirror .note-link:hover {
+  color: var(--color-cream);
+}
+
+.ProseMirror ul,
+.ProseMirror ol {
+  padding-left: 1.25rem;
+  margin: 0.25em 0;
+}
+
+.ProseMirror ul {
+  list-style-type: disc;
+}
+
+.ProseMirror ol {
+  list-style-type: decimal;
+}
+
+.ProseMirror li {
+  margin: 0.15em 0;
+}
+
+/* Task list (checkboxes) */
+.ProseMirror ul[data-type="taskList"] {
+  list-style-type: none;
+  padding-left: 0;
+}
+
+.ProseMirror ul[data-type="taskList"] li {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.ProseMirror ul[data-type="taskList"] li label {
+  display: flex;
+  align-items: center;
+  margin-top: 0.25rem;
+}
+
+.ProseMirror ul[data-type="taskList"] li label input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--color-steel);
+  border-radius: 3px;
+  background: transparent;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.ProseMirror ul[data-type="taskList"] li label input[type="checkbox"]:checked {
+  background: var(--color-teal);
+  border-color: var(--color-teal);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23EFF6E0' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='20 6 9 17 4 12'%3E%3C/polyline%3E%3C/svg%3E");
+  background-size: 12px;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+
+.ProseMirror ul[data-type="taskList"] li[data-checked="true"] > div > p {
+  text-decoration: line-through;
+  opacity: 0.5;
+}
+
+.ProseMirror mark {
+  background-color: rgba(250, 204, 21, 0.25);
+  color: #fde68a;
+  border-radius: 2px;
+  padding: 0 2px;
+}
+
+.ProseMirror s {
+  opacity: 0.5;
+}
+
+/* Notes editor area: neumorphic + dotted background */
+.notes-editor-area {
+  position: relative;
+  background-color: rgba(1, 22, 30, 0.6);
+  border-radius: 12px;
+  box-shadow:
+    inset 1px 1px 3px rgba(0, 0, 0, 0.15),
+    inset -1px -1px 3px rgba(89, 131, 146, 0.03);
+  border: 1px solid rgba(89, 131, 146, 0.06);
+  padding: 12px;
+}
+
+[data-theme="light"] .notes-editor-area {
+  background-color: rgba(255, 255, 255, 0.5);
+  box-shadow:
+    inset 1px 1px 3px rgba(0, 0, 0, 0.04),
+    inset -1px -1px 3px rgba(255, 255, 255, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.4);
+}
+
+.notes-editor-area::before {
+  content: '';
+  position: absolute;
+  inset: 14px;
+  background-image: radial-gradient(circle, rgba(89, 131, 146, 0.15) 1px, transparent 1px);
+  background-size: 16px 16px;
+  background-position: 0px 0px;
+  border-radius: 6px;
+  pointer-events: none;
+  z-index: 0;
+}
+
+[data-theme="light"] .notes-editor-area::before {
+  background-image: radial-gradient(circle, rgba(74, 112, 128, 0.12) 1px, transparent 1px);
+}
+
+[data-theme="ash-soft"] .notes-editor-area {
+  background-color: rgba(255, 255, 255, 0.35);
+  box-shadow:
+    inset 1px 1px 3px rgba(0, 0, 0, 0.04),
+    inset -1px -1px 3px rgba(255, 255, 255, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+}
+
+[data-theme="ash-soft"] .notes-editor-area::before {
+  background-image: radial-gradient(circle, rgba(58, 96, 85, 0.25) 1px, transparent 1px);
+}
+
+[data-theme="teal-ocean"] .notes-editor-area {
+  background-color: rgba(11, 45, 62, 0.7);
+}
+
+[data-theme="teal-ocean"] .notes-editor-area::before {
+  background-image: radial-gradient(circle, rgba(127, 160, 173, 0.18) 1px, transparent 1px);
+}
+
+.notes-editor-area > * {
+  position: relative;
+  z-index: 1;
+}
+
+/* Dark date picker for notes */
+.notes-date-input {
+  color-scheme: dark;
+  background-color: var(--color-surface-900, #0a1a20);
+  color: var(--color-cream, #EFF6E0);
+  border: 1px solid rgba(89, 131, 146, 0.2);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+.notes-date-input::-webkit-calendar-picker-indicator {
+  filter: invert(0.8) sepia(0.3) hue-rotate(160deg);
+  cursor: pointer;
+}
+
+.notes-date-input::-webkit-datetime-edit {
+  color: var(--color-cream, #EFF6E0);
+}
+
+.notes-date-input:focus {
+  outline: none;
+  border-color: var(--color-teal, #124559);
+  box-shadow: 0 0 0 2px rgba(18, 69, 89, 0.3);
+}
