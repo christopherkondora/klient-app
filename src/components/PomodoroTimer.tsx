@@ -254,7 +254,7 @@ export default function PomodoroTimer() {
       {/* Toggle button */}
       <button
         onClick={() => setOpen(v => !v)}
-        className={`fixed bottom-6 right-[5.5rem] z-50 w-14 h-14 rounded-full flex items-center justify-center shadow-lg transition-all ${
+        className={`fixed bottom-6 right-[5.5rem] z-30 w-14 h-14 rounded-full flex items-center justify-center shadow-lg transition-all ${
           running
             ? 'bg-teal text-cream animate-pulse shadow-teal/30'
             : 'bg-teal text-cream shadow-teal/25 hover:bg-teal/80 hover:scale-105'
@@ -270,7 +270,7 @@ export default function PomodoroTimer() {
 
       {/* Panel */}
       {open && (
-        <div className="fixed bottom-24 right-[5.5rem] z-50 w-72 bg-surface-900/95 backdrop-blur-md border border-teal/15 rounded-2xl shadow-2xl overflow-hidden">
+        <div className="fixed bottom-24 right-[5.5rem] z-30 w-72 bg-surface-900/95 backdrop-blur-md border border-teal/15 rounded-2xl shadow-2xl overflow-hidden">
           {/* Header */}
           <div className="flex items-center justify-between px-4 py-3 border-b border-teal/10">
             <div className="flex items-center gap-2">
