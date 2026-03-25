@@ -390,7 +390,7 @@ export default function Dashboard() {
             ) : (
               <div className="space-y-1.5 max-h-52 overflow-auto">
                 {deadlines.map((project) => {
-                  const daysLeft = differenceInDays(parseISO(project.deadline), new Date());
+                  const daysLeft = differenceInDays(parseISO(project.deadline!), new Date());
                   return (
                     <div
                       key={project.id}
