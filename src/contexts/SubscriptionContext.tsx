@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
 import { useAuth } from './AuthContext';
 
 interface SubscriptionContextType {
@@ -27,7 +27,21 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
   const [subscription, setSubscription] = useState<Subscription | null>(null);
   const [loading, setLoading] = useState(true);
-  const [celebratingPayment, setCelebratingPayment] = useState(false);
+  const [celebratingPayment, setCelebratingPaymentRaw] = useState(false);
+  const initialLoadDone = useRef(false);
+
+  // Safety: auto-clear celebration after 6s no matter what
+  const celebrationTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const setCelebratingPayment = useCallback((v: boolean) => {
+    setCelebratingPaymentRaw(v);
+    if (celebrationTimer.current) { clearTimeout(celebrationTimer.current); celebrationTimer.current = null; }
+    if (v) {
+      celebrationTimer.current = setTimeout(() => {
+        setCelebratingPaymentRaw(false);
+        celebrationTimer.current = null;
+      }, 6000);
+    }
+  }, []);
 
   const refresh = useCallback(async () => {
     if (!user) {
@@ -39,11 +53,13 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
       const sub = await window.electronAPI.getSubscription();
       setSubscription(prev => {
         const next = sub ?? prev;
-        // Detect transition to paid: trigger celebration in same batch
-        const wasPaid = prev?.status === 'active' && prev?.plan !== 'trial';
-        const isPaid = next?.status === 'active' && next?.plan !== 'trial';
-        if (!wasPaid && isPaid) {
-          setCelebratingPayment(true);
+        // Only detect transition after initial subscription load (not on app startup)
+        if (initialLoadDone.current) {
+          const wasPaid = prev?.status === 'active' && prev?.plan !== 'trial';
+          const isPaid = next?.status === 'active' && next?.plan !== 'trial';
+          if (!wasPaid && isPaid) {
+            setCelebratingPayment(true);
+          }
         }
         return next;
       });
@@ -51,6 +67,8 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
       // Don't overwrite existing subscription on transient errors
     } finally {
       setLoading(false);
+      // Only mark initial load done when we actually fetched with a user
+      if (user) initialLoadDone.current = true;
     }
   }, [user]);
 

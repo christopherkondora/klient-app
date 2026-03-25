@@ -50,15 +50,22 @@ export function registerIpcHandlers() {
   // Register via Supabase Auth
   ipcMain.handle('db:user:register', async (_event, data: Record<string, unknown>) => {
     const sb = getSupabase();
+    const email = data.email as string;
     const { data: authData, error } = await sb.auth.signUp({
-      email: data.email as string,
+      email,
       password: data.password as string,
       options: {
         data: { name: data.name as string },
+        emailRedirectTo: 'https://klient.work/confirmed',
       },
     });
     if (error) { console.error('[Auth] Register error:', error.message); throw new Error(error.message); }
     if (!authData.user) throw new Error('Regisztráció sikertelen');
+
+    // If identities is empty, the email already exists but is unconfirmed — resend confirmation
+    if (authData.user.identities?.length === 0) {
+      await sb.auth.resend({ type: 'signup', email, options: { emailRedirectTo: 'https://klient.work/confirmed' } });
+    }
 
     const local = ensureLocalUser(authData.user.id, authData.user.email ?? '', data.name as string);
     return local;
@@ -105,8 +112,9 @@ export function registerIpcHandlers() {
       password: data.password as string,
     });
     if (error) {
-      // Supabase returns this specific error when email isn't confirmed
-      if (error.message.toLowerCase().includes('email not confirmed')) {
+      const msg = error.message.toLowerCase();
+      // Supabase returns this when email isn't confirmed yet
+      if (msg.includes('email not confirmed') || msg.includes('invalid login')) {
         return { confirmed: false };
       }
       throw new Error(error.message);

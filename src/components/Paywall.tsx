@@ -107,20 +107,34 @@ export default function Paywall({ overlay, onClose }: { overlay?: boolean; onClo
       setShowCelebration(true);
 
       // Auto-dismiss after 4 seconds
-      minTimeRef.current = setTimeout(() => {
+      const timer = setTimeout(() => {
         setCelebratingPayment(false);
         setShowCelebration(false);
         if (overlay && onClose) onClose();
       }, 4000);
+      minTimeRef.current = timer;
+
+      return () => clearTimeout(timer);
     }
   }, [isPaidActive]);
 
-  // Cleanup timers on unmount
+  // Safety: if celebratingPayment is true but we're mounted without celebration showing, clear it
+  useEffect(() => {
+    if (isPaidActive && !showCelebration && successHandled.current) {
+      const safetyTimer = setTimeout(() => {
+        setCelebratingPayment(false);
+      }, 500);
+      return () => clearTimeout(safetyTimer);
+    }
+  }, [isPaidActive, showCelebration]);
+
+  // Cleanup timers on unmount — also clear celebrating state to prevent stuck screen
   useEffect(() => {
     return () => {
       stopPolling();
       if (minTimeRef.current) clearTimeout(minTimeRef.current);
       if (postCheckoutTimer.current) clearTimeout(postCheckoutTimer.current);
+      setCelebratingPayment(false);
     };
   }, []);
 
