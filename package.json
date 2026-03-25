@@ -1,6 +1,6 @@
 {
   "name": "klient",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Business management system for marketing agencies and freelancers",
   "main": "dist-electron/main.js",
   "scripts": {
@@ -35,7 +35,7 @@
       "assets/**/*"
     ],
     "win": {
-      "icon": "assets/icon.png",
+      "icon": "assets/icon.ico",
       "target": "nsis",
       "signAndEditExecutable": false
     },

@@ -1,4 +1,5 @@
-import { Routes, Route, Navigate } from 'react-router-dom';
+import { useRef, useEffect } from 'react';
+import { Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 import Layout from './components/Layout';
 import Dashboard from './pages/Dashboard';
 import Clients from './pages/Clients';
@@ -18,6 +19,19 @@ import { useSubscription } from './contexts/SubscriptionContext';
 export default function App() {
   const { user, loading } = useAuth();
   const { isActive, loading: subLoading, celebratingPayment } = useSubscription();
+  const navigate = useNavigate();
+  const wasPaywalled = useRef(false);
+
+  const showPaywall = Boolean(user && user.onboarding_complete && (!isActive || celebratingPayment));
+
+  useEffect(() => {
+    if (showPaywall) {
+      wasPaywalled.current = true;
+    } else if (wasPaywalled.current) {
+      wasPaywalled.current = false;
+      navigate('/', { replace: true });
+    }
+  }, [showPaywall, navigate]);
 
   if (loading || (user && subLoading)) {
     return (
@@ -31,7 +45,7 @@ export default function App() {
     return <Onboarding />;
   }
 
-  if (!isActive || celebratingPayment) {
+  if (showPaywall) {
     return <Paywall />;
   }
 

@@ -46,7 +46,6 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
   const refresh = useCallback(async () => {
     if (!user) {
       setSubscription(null);
-      setLoading(false);
       return;
     }
     try {
