@@ -20,6 +20,8 @@ const USER_FIELDS = 'id, name, email, invoice_platform, onboarding_complete, pom
 function ensureLocalUser(supabaseId: string, email: string, name?: string): Record<string, unknown> {
   let local = queryOne(`SELECT ${USER_FIELDS} FROM user_settings WHERE id = ?`, [supabaseId]);
   if (!local) {
+    // Remove stale row if same email exists with a different (old/deleted) Supabase ID
+    execute('DELETE FROM user_settings WHERE email = ? AND id != ?', [email, supabaseId]);
     execute(
       'INSERT INTO user_settings (id, name, email, password_hash, invoice_platform, onboarding_complete) VALUES (?, ?, ?, ?, ?, ?)',
       [supabaseId, name || email.split('@')[0], email, 'supabase-managed', 'none', 0]
@@ -88,9 +90,31 @@ export function registerIpcHandlers() {
   // Password reset request
   ipcMain.handle('db:user:resetPassword', async (_event, email: string) => {
     const sb = getSupabase();
-    const { error } = await sb.auth.resetPasswordForEmail(email);
+    const { error } = await sb.auth.resetPasswordForEmail(email, {
+      redirectTo: 'https://klient.work/reset-password',
+    });
     if (error) throw new Error(error.message);
     return { success: true };
+  });
+
+  // Check if user's email is confirmed by attempting login
+  ipcMain.handle('db:user:checkEmailConfirmed', async (_event, data: Record<string, unknown>) => {
+    const sb = getSupabase();
+    const { data: authData, error } = await sb.auth.signInWithPassword({
+      email: data.email as string,
+      password: data.password as string,
+    });
+    if (error) {
+      // Supabase returns this specific error when email isn't confirmed
+      if (error.message.toLowerCase().includes('email not confirmed')) {
+        return { confirmed: false };
+      }
+      throw new Error(error.message);
+    }
+    if (!authData.user) return { confirmed: false };
+    // Login succeeded → email is confirmed, session is now active
+    const local = ensureLocalUser(authData.user.id, authData.user.email ?? '', authData.user.user_metadata?.name as string);
+    return { confirmed: true, user: local };
   });
 
   // Google OAuth
@@ -224,7 +248,11 @@ export function registerIpcHandlers() {
         .eq('user_id', session.user.id)
         .single();
 
-      if (error || !data) return null;
+      if (error) {
+        console.error('[Subscription] Query error:', error.message, error.code);
+        return null;
+      }
+      if (!data) return null;
 
       // Check if trial has expired server-side
       if (data.status === 'trial' && data.trial_ends_at) {
@@ -256,90 +284,21 @@ export function registerIpcHandlers() {
     }
   });
 
-  // Activate subscription via LemonSqueezy license key validation
-  ipcMain.handle('db:subscription:activate', async (_event, data: { license_key: string }) => {
-    const sb = getSupabase();
-    const { data: { session } } = await sb.auth.getSession();
-    if (!session?.user) throw new Error('Nincs bejelentkezve');
-
-    // Validate the license key with LemonSqueezy API
-    const response = await net.fetch('https://api.lemonsqueezy.com/v1/licenses/validate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-      body: JSON.stringify({ license_key: data.license_key, instance_name: session.user.email }),
-    });
-
-    if (!response.ok) throw new Error('Licenckulcs érvényesítés sikertelen');
-
-    const result = await response.json() as {
-      valid: boolean;
-      license_key?: { status: string; expires_at: string | null };
-      meta?: { variant_name: string; store_id: number; product_id: number; customer_id: number };
-      error?: string;
-    };
-
-    if (!result.valid) throw new Error(result.error || 'Érvénytelen licenckulcs');
-
-    // Determine plan from variant name or expiry
-    const expiresAt = result.license_key?.expires_at;
-    let plan: 'monthly' | 'yearly' | 'lifetime' = 'monthly';
-    const variantName = (result.meta?.variant_name || '').toLowerCase();
-    if (variantName.includes('lifetime') || variantName.includes('élettartam') || !expiresAt) {
-      plan = 'lifetime';
-    } else if (variantName.includes('yearly') || variantName.includes('éves')) {
-      plan = 'yearly';
-    }
-
-    // Update subscription in Supabase
-    const now = new Date().toISOString();
-    const updateData: Record<string, unknown> = {
-      status: 'active',
-      plan,
-      current_period_start: now,
-      lemon_squeezy_customer_id: String(result.meta?.customer_id || ''),
-    };
-
-    if (plan === 'lifetime') {
-      updateData.current_period_end = null;
-    } else if (expiresAt) {
-      updateData.current_period_end = expiresAt;
-    }
-
-    const { error: updateErr } = await sb.from('subscriptions')
-      .update(updateData)
-      .eq('user_id', session.user.id);
-
-    if (updateErr) throw new Error('Előfizetés aktiválás sikertelen');
-
-    // Return fresh subscription
-    const { data: sub } = await sb.from('subscriptions')
-      .select('*')
-      .eq('user_id', session.user.id)
-      .single();
-
-    return sub;
-  });
-
-  // Open LemonSqueezy checkout in external browser
+  // ── Stripe Checkout — creates session via Supabase Edge Function ──
   ipcMain.handle('db:subscription:checkout', async (_event, data: { plan: 'monthly' | 'yearly' | 'lifetime' }) => {
     const sb = getSupabase();
     const { data: { session } } = await sb.auth.getSession();
     if (!session?.user) throw new Error('Nincs bejelentkezve');
 
-    // These will be replaced with actual LemonSqueezy variant checkout URLs
-    const checkoutUrls: Record<string, string> = {
-      monthly: process.env.LS_CHECKOUT_MONTHLY || '',
-      yearly: process.env.LS_CHECKOUT_YEARLY || '',
-      lifetime: process.env.LS_CHECKOUT_LIFETIME || '',
-    };
+    const res = await sb.functions.invoke('create-checkout', {
+      body: { plan: data.plan },
+    });
 
-    const baseUrl = checkoutUrls[data.plan];
-    if (!baseUrl) throw new Error('Checkout URL nincs beállítva');
+    if (res.error) throw new Error(res.error.message || 'Checkout hiba');
+    const result = res.data as { url?: string; error?: string };
+    if (result.error || !result.url) throw new Error(result.error || 'Nincs checkout URL');
 
-    // Append user email and user_id for webhook linking
-    const url = `${baseUrl}?checkout[email]=${encodeURIComponent(session.user.email || '')}&checkout[custom][user_id]=${session.user.id}`;
-
-    return { success: true, url };
+    return { success: true, url: result.url };
   });
 
   // ============ CLIENTS ============

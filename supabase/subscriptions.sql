@@ -14,8 +14,8 @@ CREATE TABLE IF NOT EXISTS public.subscriptions (
   trial_ends_at TIMESTAMPTZ,
   current_period_start TIMESTAMPTZ,
   current_period_end   TIMESTAMPTZ,
-  lemon_squeezy_customer_id     TEXT,
-  lemon_squeezy_subscription_id TEXT,
+  stripe_customer_id    TEXT,
+  stripe_subscription_id TEXT,
   created_at    TIMESTAMPTZ DEFAULT NOW(),
   updated_at    TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE (user_id)

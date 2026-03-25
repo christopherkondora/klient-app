@@ -13,12 +13,12 @@ interface ElectronAPI {
   loginUser: (data: { email: string; password: string }) => Promise<UserSettings>;
   logoutUser: () => Promise<{ success: boolean }>;
   resetPassword: (email: string) => Promise<{ success: boolean }>;
+  checkEmailConfirmed: (data: { email: string; password: string }) => Promise<{ confirmed: boolean; user?: UserSettings }>;
   googleAuth: () => Promise<UserSettings>;
   updateUser: (id: string, data: Partial<UserSettings>) => Promise<UserSettings>;
 
   // Subscription
   getSubscription: () => Promise<Subscription | null>;
-  activateSubscription: (data: { license_key: string }) => Promise<Subscription>;
   openCheckout: (data: { plan: 'monthly' | 'yearly' | 'lifetime' }) => Promise<{ success: boolean; url: string }>;
 
   // Update
@@ -329,8 +329,8 @@ interface Subscription {
   trial_ends_at: string | null;
   current_period_start: string | null;
   current_period_end: string | null;
-  lemon_squeezy_customer_id: string | null;
-  lemon_squeezy_subscription_id: string | null;
+  stripe_customer_id: string | null;
+  stripe_subscription_id: string | null;
   created_at: string;
   updated_at: string;
 }

@@ -1,25 +1,18 @@
 -- ============================================================
--- KLIENT – LemonSqueezy Webhook Edge Function
--- Deploy via: supabase functions deploy lemonsqueezy-webhook
+-- KLIENT – Stripe Webhook Edge Function helpers
+-- Deploy via: supabase functions deploy stripe-webhook
 -- Set your webhook signing secret:
---   supabase secrets set LEMON_SQUEEZY_WEBHOOK_SECRET=your_secret
--- ============================================================
--- This is a reference. The actual Edge Function goes in
--- supabase/functions/lemonsqueezy-webhook/index.ts
+--   supabase secrets set STRIPE_WEBHOOK_SECRET=your_secret
 -- ============================================================
 
--- Below is the SQL for a simple approach using a Postgres function
--- that can be called by a lightweight webhook proxy.
--- For production, use the Edge Function in the next file.
-
--- Activate subscription (called after successful payment)
+-- Activate subscription (called after successful Stripe payment)
 CREATE OR REPLACE FUNCTION public.activate_subscription(
   p_user_id UUID,
   p_plan TEXT,
   p_period_start TIMESTAMPTZ,
   p_period_end TIMESTAMPTZ,
-  p_ls_customer_id TEXT,
-  p_ls_subscription_id TEXT
+  p_stripe_customer_id TEXT,
+  p_stripe_subscription_id TEXT
 )
 RETURNS VOID
 LANGUAGE plpgsql
@@ -33,8 +26,8 @@ BEGIN
     plan = p_plan,
     current_period_start = p_period_start,
     current_period_end = p_period_end,
-    lemon_squeezy_customer_id = p_ls_customer_id,
-    lemon_squeezy_subscription_id = p_ls_subscription_id
+    stripe_customer_id = p_stripe_customer_id,
+    stripe_subscription_id = p_stripe_subscription_id
   WHERE user_id = p_user_id;
 END;
 $$;

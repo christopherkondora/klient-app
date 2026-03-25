@@ -13,12 +13,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   loginUser: (data: unknown) => ipcRenderer.invoke('db:user:login', data),
   logoutUser: () => ipcRenderer.invoke('db:user:logout'),
   resetPassword: (email: string) => ipcRenderer.invoke('db:user:resetPassword', email),
+  checkEmailConfirmed: (data: { email: string; password: string }) => ipcRenderer.invoke('db:user:checkEmailConfirmed', data),
   googleAuth: () => ipcRenderer.invoke('db:user:googleAuth'),
   updateUser: (id: string, data: unknown) => ipcRenderer.invoke('db:user:update', id, data),
 
   // Subscription
   getSubscription: () => ipcRenderer.invoke('db:subscription:get'),
-  activateSubscription: (data: { license_key: string }) => ipcRenderer.invoke('db:subscription:activate', data),
   openCheckout: (data: { plan: string }) => ipcRenderer.invoke('db:subscription:checkout', data),
 
   // Update

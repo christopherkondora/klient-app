@@ -17,7 +17,7 @@ import { useSubscription } from './contexts/SubscriptionContext';
 
 export default function App() {
   const { user, loading } = useAuth();
-  const { isActive, loading: subLoading } = useSubscription();
+  const { isActive, loading: subLoading, celebratingPayment } = useSubscription();
 
   if (loading || (user && subLoading)) {
     return (
@@ -31,7 +31,7 @@ export default function App() {
     return <Onboarding />;
   }
 
-  if (!isActive) {
+  if (!isActive || celebratingPayment) {
     return <Paywall />;
   }
 

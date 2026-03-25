@@ -7,8 +7,9 @@ interface SubscriptionContextType {
   isActive: boolean;
   daysRemaining: number | null;
   refresh: () => Promise<void>;
-  activate: (licenseKey: string) => Promise<void>;
   openCheckout: (plan: 'monthly' | 'yearly' | 'lifetime') => Promise<string>;
+  celebratingPayment: boolean;
+  setCelebratingPayment: (v: boolean) => void;
 }
 
 const SubscriptionContext = createContext<SubscriptionContextType>({
@@ -17,14 +18,16 @@ const SubscriptionContext = createContext<SubscriptionContextType>({
   isActive: false,
   daysRemaining: null,
   refresh: async () => {},
-  activate: async () => {},
   openCheckout: async () => { return ''; },
+  celebratingPayment: false,
+  setCelebratingPayment: () => {},
 });
 
 export function SubscriptionProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
   const [subscription, setSubscription] = useState<Subscription | null>(null);
   const [loading, setLoading] = useState(true);
+  const [celebratingPayment, setCelebratingPayment] = useState(false);
 
   const refresh = useCallback(async () => {
     if (!user) {
@@ -34,9 +37,18 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
     }
     try {
       const sub = await window.electronAPI.getSubscription();
-      setSubscription(sub);
+      setSubscription(prev => {
+        const next = sub ?? prev;
+        // Detect transition to paid: trigger celebration in same batch
+        const wasPaid = prev?.status === 'active' && prev?.plan !== 'trial';
+        const isPaid = next?.status === 'active' && next?.plan !== 'trial';
+        if (!wasPaid && isPaid) {
+          setCelebratingPayment(true);
+        }
+        return next;
+      });
     } catch {
-      setSubscription(null);
+      // Don't overwrite existing subscription on transient errors
     } finally {
       setLoading(false);
     }
@@ -79,18 +91,13 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
     return Math.max(0, Math.ceil(diff / (1000 * 60 * 60 * 24)));
   })();
 
-  const activate = async (licenseKey: string) => {
-    const sub = await window.electronAPI.activateSubscription({ license_key: licenseKey });
-    setSubscription(sub);
-  };
-
   const openCheckout = async (plan: 'monthly' | 'yearly' | 'lifetime'): Promise<string> => {
     const result = await window.electronAPI.openCheckout({ plan });
     return result.url;
   };
 
   return (
-    <SubscriptionContext.Provider value={{ subscription, loading, isActive, daysRemaining, refresh, activate, openCheckout }}>
+    <SubscriptionContext.Provider value={{ subscription, loading, isActive, daysRemaining, refresh, openCheckout, celebratingPayment, setCelebratingPayment }}>
       {children}
     </SubscriptionContext.Provider>
   );

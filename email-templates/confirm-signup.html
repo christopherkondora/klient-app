@@ -1,0 +1,41 @@
+Subject: Erősítsd meg az email címed — Klient
+
+<!-- PASTE THIS INTO: Supabase Dashboard → Authentication → Email Templates → Confirm signup -->
+
+<div style="background-color:#01161E;padding:40px 0;font-family:'Red Hat Display',-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif">
+  <div style="max-width:460px;margin:0 auto;background:linear-gradient(180deg,rgba(18,69,89,0.12) 0%,rgba(1,22,30,0.95) 100%);border:1px solid rgba(18,69,89,0.2);border-radius:16px;overflow:hidden">
+    <!-- Header -->
+    <div style="padding:32px 32px 0;text-align:center">
+      <h1 style="font-family:'Space Grotesk',sans-serif;font-size:22px;font-weight:700;color:#EFF6E0;letter-spacing:0.05em;margin:0">KLIENT</h1>
+    </div>
+
+    <!-- Icon -->
+    <div style="text-align:center;padding:28px 0 8px">
+      <div style="display:inline-block;width:56px;height:56px;border-radius:50%;background:rgba(18,69,89,0.2);border:1px solid rgba(18,69,89,0.3);line-height:56px">
+        <span style="font-size:28px">✉️</span>
+      </div>
+    </div>
+
+    <!-- Content -->
+    <div style="padding:16px 32px 32px;text-align:center">
+      <h2 style="font-family:'Space Grotesk',sans-serif;font-size:18px;font-weight:600;color:#EFF6E0;margin:0 0 8px">Erősítsd meg az email címed</h2>
+      <p style="color:#598392;font-size:14px;line-height:1.6;margin:0 0 28px">
+        Köszönjük a regisztrációt! Kattints az alábbi gombra az email címed megerősítéséhez.
+      </p>
+
+      <!-- CTA Button -->
+      <a href="{{ .ConfirmationURL }}" target="_blank" style="display:inline-block;padding:14px 36px;background:#124559;color:#EFF6E0;text-decoration:none;font-size:14px;font-weight:600;border-radius:10px;letter-spacing:0.02em">
+        Email megerősítése
+      </a>
+
+      <p style="color:rgba(89,131,146,0.5);font-size:11px;margin-top:28px;line-height:1.5">
+        Ha nem te hoztad létre ezt a fiókot, nyugodtan hagyd figyelmen kívül ezt az emailt.
+      </p>
+    </div>
+
+    <!-- Footer -->
+    <div style="padding:16px 32px;border-top:1px solid rgba(18,69,89,0.15);text-align:center">
+      <p style="color:rgba(89,131,146,0.35);font-size:10px;margin:0">© 2025 Klient · klient.work</p>
+    </div>
+  </div>
+</div>

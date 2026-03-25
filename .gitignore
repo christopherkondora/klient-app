@@ -7,3 +7,6 @@ release/
 *.db-journal
 *.db-wal
 .env
+
+klient.work/
+supabase/.temp/
