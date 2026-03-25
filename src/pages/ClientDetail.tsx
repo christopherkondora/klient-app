@@ -187,17 +187,28 @@ export default function ClientDetail() {
   async function processRecording(recordingId: string, filePath: string) {
     setProcessingId(recordingId);
     try {
-      const { text } = await window.electronAPI.transcribeRecording(filePath);
+      const { text, error: transcribeError } = await window.electronAPI.transcribeRecording(filePath);
+      if (transcribeError) {
+        console.error('Transcription error:', transcribeError);
+        alert(`Lejegyzési hiba: ${transcribeError}`);
+        return;
+      }
       if (text) {
         await window.electronAPI.updateRecording(recordingId, { transcription: text });
-        const { summary } = await window.electronAPI.summarizeRecording(text);
+        const { summary, error: summarizeError } = await window.electronAPI.summarizeRecording(text);
+        if (summarizeError) {
+          console.error('Summarize error:', summarizeError);
+        }
         if (summary) {
           await window.electronAPI.updateRecording(recordingId, { ai_summary: summary });
         }
         loadData();
+      } else {
+        alert('A lejegyzés nem adott vissza szöveget. Ellenőrizd, hogy a felvétel tartalmaz-e beszédet.');
       }
     } catch (err) {
       console.error('Failed to process recording:', err);
+      alert(`Feldolgozási hiba: ${err}`);
     } finally {
       setProcessingId(null);
     }
@@ -396,7 +407,7 @@ export default function ClientDetail() {
                        project.status === 'on_hold' ? 'Szünetelő' : 'Törölve'}
                     </span>
                     <span className="text-xs text-steel">
-                      {format(parseISO(project.deadline), 'yyyy. MM. dd.')}
+                      {project.deadline ? format(parseISO(project.deadline), 'yyyy. MM. dd.') : <span className="text-steel/40 italic">Nincs határidő</span>}
                     </span>
                   </div>
                 </div>

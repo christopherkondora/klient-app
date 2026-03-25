@@ -55,7 +55,7 @@ function createTables() {
       name TEXT NOT NULL,
       description TEXT,
       status TEXT DEFAULT 'active' CHECK(status IN ('active', 'completed', 'on_hold', 'cancelled')),
-      deadline TEXT NOT NULL,
+      deadline TEXT,
       estimated_hours REAL NOT NULL,
       allocated_hours REAL DEFAULT 0,
       is_hours_distributed INTEGER DEFAULT 0,
@@ -254,6 +254,7 @@ function runMigrations() {
   const projCols = db.exec("PRAGMA table_info(projects)");
   const clientIdCol = projCols[0]?.values.find(row => row[1] === 'client_id');
   if (clientIdCol && clientIdCol[3] === 1) { // notnull = 1
+    db.run('PRAGMA foreign_keys = OFF');
     db.exec(`
       CREATE TABLE IF NOT EXISTS projects_new (
         id TEXT PRIMARY KEY,
@@ -261,7 +262,7 @@ function runMigrations() {
         name TEXT NOT NULL,
         description TEXT,
         status TEXT DEFAULT 'active' CHECK(status IN ('active', 'completed', 'on_hold', 'cancelled')),
-        deadline TEXT NOT NULL,
+        deadline TEXT,
         estimated_hours REAL NOT NULL,
         allocated_hours REAL DEFAULT 0,
         is_hours_distributed INTEGER DEFAULT 0,
@@ -277,6 +278,38 @@ function runMigrations() {
       DROP TABLE projects;
       ALTER TABLE projects_new RENAME TO projects;
     `);
+    db.run('PRAGMA foreign_keys = ON');
+  }
+
+  // Migrate projects table: make deadline nullable
+  const projCols2 = db.exec("PRAGMA table_info(projects)");
+  const deadlineCol = projCols2[0]?.values.find(row => row[1] === 'deadline');
+  if (deadlineCol && deadlineCol[3] === 1) { // notnull = 1
+    db.run('PRAGMA foreign_keys = OFF');
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS projects_new2 (
+        id TEXT PRIMARY KEY,
+        client_id TEXT,
+        name TEXT NOT NULL,
+        description TEXT,
+        status TEXT DEFAULT 'active' CHECK(status IN ('active', 'completed', 'on_hold', 'cancelled')),
+        deadline TEXT,
+        estimated_hours REAL NOT NULL,
+        allocated_hours REAL DEFAULT 0,
+        is_hours_distributed INTEGER DEFAULT 0,
+        priority TEXT DEFAULT 'medium' CHECK(priority IN ('low', 'medium', 'high', 'urgent')),
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now')),
+        closed_at TEXT,
+        color TEXT,
+        FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
+      );
+      INSERT INTO projects_new2 (id, client_id, name, description, status, deadline, estimated_hours, allocated_hours, is_hours_distributed, priority, created_at, updated_at, closed_at, color)
+        SELECT id, client_id, name, description, status, deadline, estimated_hours, allocated_hours, is_hours_distributed, priority, created_at, updated_at, closed_at, color FROM projects;
+      DROP TABLE projects;
+      ALTER TABLE projects_new2 RENAME TO projects;
+    `);
+    db.run('PRAGMA foreign_keys = ON');
   }
 
   // Clean up empty string client_id/deadline values → NULL

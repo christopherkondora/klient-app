@@ -128,30 +128,43 @@ import fs from 'fs';
 import { getSupabase } from './supabase';
 
 // ── Deepgram real-time streaming (for dictation) ──
-// Note: streaming stays client-side for low latency; uses Edge Function to fetch the API key
 let dgSocket: WebSocket | null = null;
 let cachedDgKey: string | null = null;
 
-async function getDgKey(): Promise<string | null> {
-  if (cachedDgKey) return cachedDgKey;
+async function getDgKey(): Promise<{ key: string | null; error?: string }> {
+  if (cachedDgKey) return { key: cachedDgKey };
   try {
     const sb = getSupabase();
-    const { data, error } = await sb.functions.invoke('transcribe', {
-      body: JSON.stringify({ getKey: true }),
-      headers: { 'x-audio-content-type': 'none' },
-    });
-    // The key fetching isn't supported yet — we'll handle streaming differently later
-    return null;
-  } catch {
-    return null;
+
+    const { data: { session }, error: sessionError } = await sb.auth.getSession();
+    if (sessionError || !session) {
+      return { key: null, error: `Session hiba: ${sessionError?.message || 'Nincs aktív munkamenet'}` };
+    }
+
+    const { data, error } = await sb.functions.invoke('get-deepgram-key');
+    if (error) {
+      let detail = error.message || String(error);
+      try {
+        if (error.context && typeof error.context.text === 'function') {
+          const body = await error.context.text();
+          detail += ` | ${error.context.status} | ${body}`;
+        }
+      } catch { /* ignore */ }
+      return { key: null, error: `Edge Function hiba: ${detail}` };
+    }
+    if (!data?.key) {
+      return { key: null, error: `Nem érkezett kulcs a válaszban` };
+    }
+    cachedDgKey = data.key;
+    return { key: cachedDgKey };
+  } catch (err) {
+    return { key: null, error: `Váratlan hiba: ${err}` };
   }
 }
 
 ipcMain.handle('speech:startStream', async () => {
-  // For now, real-time dictation streaming still needs the Deepgram key.
-  // It's fetched from the Edge Function or falls back to env
-  const apiKey = process.env.DEEPGRAM_API_KEY || cachedDgKey;
-  if (!apiKey) return { ok: false, error: 'No Deepgram API key' };
+  const { key: apiKey, error: keyError } = await getDgKey();
+  if (!apiKey) return { ok: false, error: keyError || 'No Deepgram API key' };
   if (dgSocket && dgSocket.readyState === WebSocket.OPEN) return { ok: true };
 
   return new Promise<{ ok: boolean; error?: string }>((resolve) => {
@@ -209,43 +222,49 @@ ipcMain.handle('speech:stopStream', () => {
   return { ok: true };
 });
 
-// ── Transcribe a full recording file via Edge Function ──
+// ── Transcribe a full recording file via Deepgram directly ──
 ipcMain.handle('recordings:transcribe', async (_event, filePath: string) => {
   try {
+    const { key: apiKey, error: keyError } = await getDgKey();
+    if (!apiKey) return { text: '', error: keyError || 'Nem sikerült a Deepgram API kulcsot lekérni' };
+
     const audio = fs.readFileSync(filePath);
+    console.log(`[Transcribe] File: ${filePath}, size: ${(audio.length / 1024 / 1024).toFixed(1)} MB`);
     const ext = path.extname(filePath).slice(1) || 'webm';
     const mimeMap: Record<string, string> = { webm: 'audio/webm', wav: 'audio/wav', mp3: 'audio/mpeg', ogg: 'audio/ogg' };
     const contentType = mimeMap[ext] || 'audio/webm';
 
-    const sb = getSupabase();
-    const { data: { session } } = await sb.auth.getSession();
-    if (!session) return { text: '' };
-
-    // Call Edge Function with raw audio (can't use sb.functions.invoke for binary body)
-    const supabaseUrl = process.env.SUPABASE_URL || 'https://arbhhltbjovuxwvfcnni.supabase.co';
     const response = await fetch(
-      `${supabaseUrl}/functions/v1/transcribe`,
+      'https://api.deepgram.com/v1/listen?language=hu&model=nova-3&punctuate=true&smart_format=true',
       {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${session.access_token}`,
-          'x-audio-content-type': contentType,
+          'Authorization': `Token ${apiKey}`,
+          'Content-Type': contentType,
         },
         body: audio,
       }
     );
 
-    const json = await response.json() as { text?: string };
-    return { text: json.text || '' };
+    if (!response.ok) {
+      const errText = await response.text();
+      console.error(`[Transcribe] Deepgram HTTP ${response.status}:`, errText);
+      return { text: '', error: `Deepgram hiba: ${response.status}` };
+    }
+
+    const json = await response.json() as { results?: { channels?: { alternatives?: { transcript?: string }[] }[] } };
+    const transcript = json.results?.channels?.[0]?.alternatives?.[0]?.transcript || '';
+    console.log(`[Transcribe] Success, transcript length: ${transcript.length} chars`);
+    return { text: transcript };
   } catch (err) {
     console.error('[Transcribe] Error:', err);
-    return { text: '' };
+    return { text: '', error: String(err) };
   }
 });
 
 // ── Summarize via Edge Function ──
 ipcMain.handle('recordings:summarize', async (_event, transcription: string) => {
-  if (!transcription) return { summary: '' };
+  if (!transcription) return { summary: '', error: 'Nincs szöveg az összefoglaláshoz' };
   try {
     const sb = getSupabase();
     const { data, error } = await sb.functions.invoke('summarize', {
@@ -253,12 +272,12 @@ ipcMain.handle('recordings:summarize', async (_event, transcription: string) => 
     });
     if (error) {
       console.error('[Summarize] Edge Function error:', error);
-      return { summary: '' };
+      return { summary: '', error: String(error) };
     }
     return { summary: data?.summary || '' };
   } catch (err) {
     console.error('[Summarize] Error:', err);
-    return { summary: '' };
+    return { summary: '', error: String(err) };
   }
 });
 

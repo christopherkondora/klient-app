@@ -62,8 +62,8 @@ interface ElectronAPI {
   createRecording: (data: Partial<Recording>) => Promise<Recording>;
   updateRecording: (id: string, data: Partial<Recording>) => Promise<Recording>;
   deleteRecording: (id: string) => Promise<{ success: boolean }>;
-  transcribeRecording: (filePath: string) => Promise<{ text: string }>;
-  summarizeRecording: (transcription: string) => Promise<{ summary: string }>;
+  transcribeRecording: (filePath: string) => Promise<{ text: string; error?: string }>;
+  summarizeRecording: (transcription: string) => Promise<{ summary: string; error?: string }>;
 
   // Shortcuts
   getShortcuts: () => Promise<Shortcut[]>;
@@ -155,7 +155,7 @@ interface Project {
   name: string;
   description: string;
   status: 'active' | 'completed' | 'on_hold' | 'cancelled';
-  deadline: string;
+  deadline: string | null;
   estimated_hours: number;
   allocated_hours: number;
   is_hours_distributed: number;
