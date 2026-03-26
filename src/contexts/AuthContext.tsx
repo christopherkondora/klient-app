@@ -8,6 +8,7 @@ interface AuthContextType {
   updateUser: (data: Partial<UserSettings>) => Promise<void>;
   logout: () => Promise<void>;
   resetPassword: (email: string) => Promise<void>;
+  changePassword: (currentPassword: string, newPassword: string) => Promise<void>;
   googleLogin: () => Promise<void>;
   checkEmailConfirmed: (email: string, password: string) => Promise<boolean>;
 }
@@ -20,6 +21,7 @@ const AuthContext = createContext<AuthContextType>({
   updateUser: async () => {},
   logout: async () => {},
   resetPassword: async () => {},
+  changePassword: async () => {},
   googleLogin: async () => {},
   checkEmailConfirmed: async () => false,
 });
@@ -62,6 +64,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await window.electronAPI.resetPassword(email);
   };
 
+  const changePassword = async (currentPassword: string, newPassword: string) => {
+    await window.electronAPI.changePassword({ currentPassword, newPassword });
+  };
+
   const googleLogin = async () => {
     const u = await window.electronAPI.googleAuth();
     setUser(u);
@@ -76,7 +82,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, register, updateUser, logout, resetPassword, googleLogin, checkEmailConfirmed }}>
+    <AuthContext.Provider value={{ user, loading, login, register, updateUser, logout, resetPassword, changePassword, googleLogin, checkEmailConfirmed }}>
       {children}
     </AuthContext.Provider>
   );

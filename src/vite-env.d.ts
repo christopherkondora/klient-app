@@ -13,6 +13,7 @@ interface ElectronAPI {
   loginUser: (data: { email: string; password: string }) => Promise<UserSettings>;
   logoutUser: () => Promise<{ success: boolean }>;
   resetPassword: (email: string) => Promise<{ success: boolean }>;
+  changePassword: (data: { currentPassword: string; newPassword: string }) => Promise<{ success: boolean }>;
   checkEmailConfirmed: (data: { email: string; password: string }) => Promise<{ confirmed: boolean; user?: UserSettings }>;
   googleAuth: () => Promise<UserSettings>;
   updateUser: (id: string, data: Partial<UserSettings>) => Promise<UserSettings>;
@@ -20,6 +21,8 @@ interface ElectronAPI {
   // Subscription
   getSubscription: () => Promise<Subscription | null>;
   openCheckout: (data: { plan: 'monthly' | 'yearly' | 'lifetime' }) => Promise<{ success: boolean; url: string }>;
+  cancelSubscription: () => Promise<{ success: boolean }>;
+  reactivateSubscription: () => Promise<{ success: boolean }>;
 
   // Update
   installUpdate: () => Promise<void>;

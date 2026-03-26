@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   loginUser: (data: unknown) => ipcRenderer.invoke('db:user:login', data),
   logoutUser: () => ipcRenderer.invoke('db:user:logout'),
   resetPassword: (email: string) => ipcRenderer.invoke('db:user:resetPassword', email),
+  changePassword: (data: { currentPassword: string; newPassword: string }) => ipcRenderer.invoke('db:user:changePassword', data),
   checkEmailConfirmed: (data: { email: string; password: string }) => ipcRenderer.invoke('db:user:checkEmailConfirmed', data),
   googleAuth: () => ipcRenderer.invoke('db:user:googleAuth'),
   updateUser: (id: string, data: unknown) => ipcRenderer.invoke('db:user:update', id, data),
@@ -20,6 +21,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Subscription
   getSubscription: () => ipcRenderer.invoke('db:subscription:get'),
   openCheckout: (data: { plan: string }) => ipcRenderer.invoke('db:subscription:checkout', data),
+  cancelSubscription: () => ipcRenderer.invoke('db:subscription:cancel'),
+  reactivateSubscription: () => ipcRenderer.invoke('db:subscription:reactivate'),
 
   // Update
   installUpdate: () => ipcRenderer.invoke('update:install'),

@@ -8,6 +8,8 @@ interface SubscriptionContextType {
   daysRemaining: number | null;
   refresh: () => Promise<void>;
   openCheckout: (plan: 'monthly' | 'yearly' | 'lifetime') => Promise<string>;
+  cancelSubscription: () => Promise<void>;
+  reactivateSubscription: () => Promise<void>;
   celebratingPayment: boolean;
   setCelebratingPayment: (v: boolean) => void;
 }
@@ -19,6 +21,8 @@ const SubscriptionContext = createContext<SubscriptionContextType>({
   daysRemaining: null,
   refresh: async () => {},
   openCheckout: async () => { return ''; },
+  cancelSubscription: async () => {},
+  reactivateSubscription: async () => {},
   celebratingPayment: false,
   setCelebratingPayment: () => {},
 });
@@ -113,8 +117,18 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
     return result.url;
   };
 
+  const cancelSubscription = async () => {
+    await window.electronAPI.cancelSubscription();
+    await refresh();
+  };
+
+  const reactivateSubscription = async () => {
+    await window.electronAPI.reactivateSubscription();
+    await refresh();
+  };
+
   return (
-    <SubscriptionContext.Provider value={{ subscription, loading, isActive, daysRemaining, refresh, openCheckout, celebratingPayment, setCelebratingPayment }}>
+    <SubscriptionContext.Provider value={{ subscription, loading, isActive, daysRemaining, refresh, openCheckout, cancelSubscription, reactivateSubscription, celebratingPayment, setCelebratingPayment }}>
       {children}
     </SubscriptionContext.Provider>
   );

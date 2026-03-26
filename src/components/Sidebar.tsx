@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { version } from '../../package.json';
 import { NavLink } from 'react-router-dom';
 import {
   Home, Users, Briefcase, Calendar, Plus, Trash2, SquarePen,
@@ -164,7 +165,11 @@ export default function Sidebar({ onOpenShortcut, activeShortcutUrl }: { onOpenS
           }
         </button>
 
-        {!collapsed && <p className="font-pixel text-[11px] text-teal tracking-wider px-3">KLIENT V1.0.0</p>}
+        {!collapsed && (
+          <p className="font-pixel text-[11px] text-teal tracking-wider px-3">
+            KLIENT V{version} <span className="text-steel/60">BETA</span>
+          </p>
+        )}
       </div>
 
       {/* Context Menu */}

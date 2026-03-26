@@ -5,6 +5,7 @@ import TitleBar from './TitleBar';
 import NotesPanel from './NotesPanel';
 import PomodoroTimer from './PomodoroTimer';
 import TrialBanner from './TrialBanner';
+import UpdateBanner from './UpdateBanner';
 import { ArrowLeft, StickyNote } from 'lucide-react';
 
 export default function Layout() {
@@ -14,6 +15,7 @@ export default function Layout() {
   return (
     <div className="flex flex-col h-screen bg-ink text-cream">
       <TitleBar />
+      <UpdateBanner />
       <TrialBanner />
       <div className="flex flex-1 overflow-hidden">
         <Sidebar onOpenShortcut={setActiveShortcutUrl} activeShortcutUrl={activeShortcutUrl} />

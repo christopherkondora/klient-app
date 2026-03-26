@@ -94,6 +94,23 @@ export function registerIpcHandlers() {
     return { success: true };
   });
 
+  // Change password (authenticated user)
+  ipcMain.handle('db:user:changePassword', async (_event, data: { currentPassword: string; newPassword: string }) => {
+    const sb = getSupabase();
+    // Verify current password by re-authenticating
+    const { data: { session } } = await sb.auth.getSession();
+    if (!session?.user?.email) throw new Error('Nincs bejelentkezve');
+    const { error: verifyError } = await sb.auth.signInWithPassword({
+      email: session.user.email,
+      password: data.currentPassword,
+    });
+    if (verifyError) throw new Error('A jelenlegi jelszó helytelen');
+    // Update password
+    const { error } = await sb.auth.updateUser({ password: data.newPassword });
+    if (error) throw new Error(error.message);
+    return { success: true };
+  });
+
   // Password reset request
   ipcMain.handle('db:user:resetPassword', async (_event, email: string) => {
     const sb = getSupabase();
@@ -307,6 +324,38 @@ export function registerIpcHandlers() {
     if (result.error || !result.url) throw new Error(result.error || 'Nincs checkout URL');
 
     return { success: true, url: result.url };
+  });
+
+  // Cancel subscription (cancel_at_period_end)
+  ipcMain.handle('db:subscription:cancel', async () => {
+    const sb = getSupabase();
+    const { data: { session } } = await sb.auth.getSession();
+    if (!session?.user) throw new Error('Nincs bejelentkezve');
+
+    const res = await sb.functions.invoke('manage-subscription', {
+      body: { action: 'cancel' },
+    });
+
+    if (res.error) throw new Error(res.error.message || 'Lemondási hiba');
+    const result = res.data as { success?: boolean; error?: string };
+    if (result.error) throw new Error(result.error);
+    return { success: true };
+  });
+
+  // Reactivate cancelled subscription
+  ipcMain.handle('db:subscription:reactivate', async () => {
+    const sb = getSupabase();
+    const { data: { session } } = await sb.auth.getSession();
+    if (!session?.user) throw new Error('Nincs bejelentkezve');
+
+    const res = await sb.functions.invoke('manage-subscription', {
+      body: { action: 'reactivate' },
+    });
+
+    if (res.error) throw new Error(res.error.message || 'Újraaktiválási hiba');
+    const result = res.data as { success?: boolean; error?: string };
+    if (result.error) throw new Error(result.error);
+    return { success: true };
   });
 
   // ============ CLIENTS ============
