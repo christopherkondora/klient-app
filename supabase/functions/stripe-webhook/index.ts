@@ -4,6 +4,7 @@ const STRIPE_WEBHOOK_SECRET = Deno.env.get('STRIPE_WEBHOOK_SECRET')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const BILLINGO_API_KEY = Deno.env.get('BILLINGO_API_KEY') || '';
+const STRIPE_ENV = Deno.env.get('STRIPE_ENV') || 'test';
 
 // Supabase client with service_role (bypasses RLS)
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
@@ -78,8 +79,14 @@ async function createBillingoInvoice(params: {
     if (partnerRes.ok) {
       const partner = await partnerRes.json();
       partnerId = partner.id;
+      console.log('[Billingo] Partner created/found:', { partner_id: partnerId, email: params.customerEmail });
     } else {
-      console.error('[Billingo] Partner creation failed:', await partnerRes.text());
+      const errorText = await partnerRes.text();
+      console.error('[Billingo] Partner creation failed:', {
+        status: partnerRes.status,
+        error: errorText,
+        email: params.customerEmail,
+      });
       return;
     }
 
@@ -121,12 +128,28 @@ async function createBillingoInvoice(params: {
 
     if (invoiceRes.ok) {
       const invoice = await invoiceRes.json();
-      console.log(`[Billingo] Invoice created: ${invoice.id}`);
+      console.log('[Billingo] Invoice created successfully:', {
+        invoice_id: invoice.id,
+        plan: params.plan,
+        amount: params.amountHuf,
+        partner_id: partnerId,
+      });
     } else {
-      console.error('[Billingo] Invoice creation failed:', await invoiceRes.text());
+      const errorText = await invoiceRes.text();
+      console.error('[Billingo] Invoice creation failed:', {
+        status: invoiceRes.status,
+        error: errorText,
+        plan: params.plan,
+        amount: params.amountHuf,
+        partner_id: partnerId,
+      });
     }
   } catch (err) {
-    console.error('[Billingo] Error:', err);
+    console.error('[Billingo] Unexpected error:', {
+      error: err instanceof Error ? err.message : String(err),
+      stack: err instanceof Error ? err.stack : undefined,
+      plan: params.plan,
+    });
   }
 }
 
@@ -165,7 +188,11 @@ Deno.serve(async (req) => {
   }
 
   const obj = event.data.object;
-  console.log(`[Webhook] Event: ${event.type}`);
+  console.log('[Webhook] Event received:', {
+    type: event.type,
+    environment: STRIPE_ENV,
+    session_id: obj.id,
+  });
 
   try {
     switch (event.type) {
@@ -178,8 +205,20 @@ Deno.serve(async (req) => {
         const metadata = obj.metadata as Record<string, string> || {};
         const plan = metadata.plan || 'monthly';
 
+        console.log('[Webhook] Checkout completed:', {
+          user_id: userId,
+          mode,
+          plan,
+          customer_id: stripeCustomerId,
+          email: customerEmail,
+        });
+
         if (!userId) {
-          console.error('[Webhook] No user_id in session');
+          console.error('[Webhook] CRITICAL: No user_id in session', {
+            session_id: obj.id,
+            metadata,
+            client_reference_id: obj.client_reference_id,
+          });
           break;
         }
 
@@ -222,15 +261,24 @@ Deno.serve(async (req) => {
           if (existing) {
             const { error: updErr } = await supabase.from('subscriptions')
               .update(subPayload).eq('user_id', userId);
-            if (updErr) console.error('[Webhook] Update error:', updErr);
+            if (updErr) {
+              console.error('[Webhook] Subscription update failed:', { user_id: userId, plan, error: updErr });
+            } else {
+              console.log('[Webhook] Subscription activated:', { user_id: userId, plan, subscription_id: stripeSubId });
+            }
           } else {
             const { error: insErr } = await supabase.from('subscriptions')
               .insert({ user_id: userId, ...subPayload });
-            if (insErr) console.error('[Webhook] Insert error:', insErr);
+            if (insErr) {
+              console.error('[Webhook] Subscription insert failed:', { user_id: userId, plan, error: insErr });
+            } else {
+              console.log('[Webhook] Subscription created:', { user_id: userId, plan, subscription_id: stripeSubId });
+            }
           }
         }
 
         // Create Billingo invoice
+        console.log('[Webhook] Creating Billingo invoice:', { plan, amount: PLAN_AMOUNTS[plan] });
         await createBillingoInvoice({
           customerEmail,
           plan,
@@ -249,8 +297,19 @@ Deno.serve(async (req) => {
         const stripeCustomerId = obj.customer as string || '';
         const stripeSubId = obj.id as string || '';
 
+        console.log('[Webhook] Subscription event:', {
+          event: event.type,
+          user_id: userId,
+          status,
+          subscription_id: stripeSubId,
+        });
+
         if (!userId) {
-          console.error('[Webhook] No user_id in subscription metadata');
+          console.error('[Webhook] CRITICAL: No user_id in subscription metadata', {
+            subscription_id: stripeSubId,
+            customer_id: stripeCustomerId,
+            metadata,
+          });
           break;
         }
 
@@ -280,7 +339,7 @@ Deno.serve(async (req) => {
           ? new Date((obj.current_period_end as number) * 1000).toISOString()
           : null;
 
-        await supabase.from('subscriptions').update({
+        const { error: updateErr } = await supabase.from('subscriptions').update({
           status: appStatus,
           plan,
           current_period_start: periodStart,
@@ -288,6 +347,12 @@ Deno.serve(async (req) => {
           stripe_customer_id: stripeCustomerId,
           stripe_subscription_id: stripeSubId,
         }).eq('user_id', userId);
+
+        if (updateErr) {
+          console.error('[Webhook] Subscription sync failed:', { user_id: userId, error: updateErr });
+        } else {
+          console.log('[Webhook] Subscription synced:', { user_id: userId, status: appStatus, plan });
+        }
 
         break;
       }
@@ -297,14 +362,28 @@ Deno.serve(async (req) => {
         const metadata = obj.metadata as Record<string, string> || {};
         const userId = metadata.user_id;
 
+        console.log('[Webhook] Subscription deleted:', {
+          user_id: userId,
+          subscription_id: obj.id,
+        });
+
         if (!userId) {
-          console.error('[Webhook] No user_id in subscription metadata');
+          console.error('[Webhook] CRITICAL: No user_id in subscription metadata', {
+            subscription_id: obj.id,
+            metadata,
+          });
           break;
         }
 
-        await supabase.from('subscriptions').update({
+        const { error: deleteErr } = await supabase.from('subscriptions').update({
           status: 'expired',
         }).eq('user_id', userId);
+
+        if (deleteErr) {
+          console.error('[Webhook] Subscription expiration failed:', { user_id: userId, error: deleteErr });
+        } else {
+          console.log('[Webhook] Subscription expired:', { user_id: userId });
+        }
 
         break;
       }
@@ -312,29 +391,59 @@ Deno.serve(async (req) => {
       // ── Payment failed ──
       case 'invoice.payment_failed': {
         const subscriptionId = obj.subscription as string;
-        if (!subscriptionId) break;
+        const invoiceId = obj.id as string;
+        const attemptCount = obj.attempt_count as number;
+
+        console.log('[Webhook] Payment failed:', {
+          subscription_id: subscriptionId,
+          invoice_id: invoiceId,
+          attempt_count: attemptCount,
+        });
+
+        if (!subscriptionId) {
+          console.error('[Webhook] No subscription_id in failed invoice');
+          break;
+        }
 
         // Look up user by stripe_subscription_id
-        const { data: sub } = await supabase
+        const { data: sub, error: lookupErr } = await supabase
           .from('subscriptions')
           .select('user_id')
           .eq('stripe_subscription_id', subscriptionId)
           .single();
 
+        if (lookupErr) {
+          console.error('[Webhook] Failed to lookup subscription:', { subscription_id: subscriptionId, error: lookupErr });
+          break;
+        }
+
         if (sub?.user_id) {
-          await supabase.from('subscriptions').update({
+          const { error: updateErr } = await supabase.from('subscriptions').update({
             status: 'past_due',
           }).eq('user_id', sub.user_id);
+
+          if (updateErr) {
+            console.error('[Webhook] Failed to mark subscription past_due:', { user_id: sub.user_id, error: updateErr });
+          } else {
+            console.log('[Webhook] Subscription marked past_due:', { user_id: sub.user_id, attempt_count: attemptCount });
+          }
+        } else {
+          console.error('[Webhook] Subscription not found in database:', { subscription_id: subscriptionId });
         }
 
         break;
       }
 
       default:
-        console.log(`[Webhook] Unhandled event: ${event.type}`);
+        console.log('[Webhook] Unhandled event type:', { type: event.type, id: obj.id });
     }
   } catch (err) {
-    console.error('[Webhook] Processing error:', err);
+    console.error('[Webhook] Processing error:', {
+      error: err instanceof Error ? err.message : String(err),
+      stack: err instanceof Error ? err.stack : undefined,
+      event_type: event.type,
+      event_id: obj.id,
+    });
     return new Response('Internal error', { status: 500 });
   }
 

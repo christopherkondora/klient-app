@@ -4,6 +4,7 @@ const STRIPE_SECRET_KEY = Deno.env.get('STRIPE_SECRET_KEY')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+const STRIPE_ENV = Deno.env.get('STRIPE_ENV') || 'test';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -69,8 +70,21 @@ Deno.serve(async (req) => {
 
     const { action } = await req.json() as { action: 'cancel' | 'reactivate' };
 
+    console.log('[ManageSubscription] Action requested:', {
+      action,
+      user_id: user.id,
+      subscription_id: sub.stripe_subscription_id,
+      current_status: sub.status,
+      environment: STRIPE_ENV,
+    });
+
     if (action === 'cancel') {
       if (!sub.stripe_subscription_id) {
+        console.error('[ManageSubscription] Cannot cancel:', {
+          user_id: user.id,
+          reason: 'no_stripe_subscription_id',
+          plan: sub.plan,
+        });
         return new Response(JSON.stringify({ error: 'Nem lehet lemondani (nincs Stripe előfizetés)' }), {
           status: 400,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -83,10 +97,23 @@ Deno.serve(async (req) => {
       await stripeRequest(`/subscriptions/${sub.stripe_subscription_id}`, 'POST', params);
 
       // Update local status (service role to bypass RLS)
-      await adminClient
+      const { error: updateErr } = await adminClient
         .from('subscriptions')
         .update({ status: 'cancelled', updated_at: new Date().toISOString() })
         .eq('user_id', user.id);
+
+      if (updateErr) {
+        console.error('[ManageSubscription] DB update failed after cancel:', {
+          user_id: user.id,
+          error: updateErr,
+        });
+      } else {
+        console.log('[ManageSubscription] Subscription cancelled:', {
+          user_id: user.id,
+          subscription_id: sub.stripe_subscription_id,
+          cancels_at: sub.current_period_end,
+        });
+      }
 
       return new Response(JSON.stringify({ success: true, message: 'Előfizetés lemondva a jelenlegi időszak végéig' }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -95,6 +122,11 @@ Deno.serve(async (req) => {
 
     if (action === 'reactivate') {
       if (!sub.stripe_subscription_id) {
+        console.error('[ManageSubscription] Cannot reactivate:', {
+          user_id: user.id,
+          reason: 'no_stripe_subscription_id',
+          plan: sub.plan,
+        });
         return new Response(JSON.stringify({ error: 'Nem lehet újraaktiválni' }), {
           status: 400,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -107,22 +139,39 @@ Deno.serve(async (req) => {
       await stripeRequest(`/subscriptions/${sub.stripe_subscription_id}`, 'POST', params);
 
       // Update local status (service role to bypass RLS)
-      await adminClient
+      const { error: updateErr } = await adminClient
         .from('subscriptions')
         .update({ status: 'active', updated_at: new Date().toISOString() })
         .eq('user_id', user.id);
+
+      if (updateErr) {
+        console.error('[ManageSubscription] DB update failed after reactivate:', {
+          user_id: user.id,
+          error: updateErr,
+        });
+      } else {
+        console.log('[ManageSubscription] Subscription reactivated:', {
+          user_id: user.id,
+          subscription_id: sub.stripe_subscription_id,
+        });
+      }
 
       return new Response(JSON.stringify({ success: true, message: 'Előfizetés újraaktiválva' }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
 
+    console.error('[ManageSubscription] Invalid action:', { action, user_id: user.id });
     return new Response(JSON.stringify({ error: 'Érvénytelen művelet' }), {
       status: 400,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   } catch (err) {
-    console.error('[ManageSubscription] Error:', err);
+    console.error('[ManageSubscription] Unexpected error:', {
+      error: err instanceof Error ? err.message : String(err),
+      stack: err instanceof Error ? err.stack : undefined,
+      user_id: 'unknown',
+    });
     return new Response(JSON.stringify({ error: (err as Error).message || 'Szerverhiba' }), {
       status: 500,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },

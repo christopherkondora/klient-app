@@ -12,6 +12,8 @@ import Finances from './pages/Finances';
 import Files from './pages/Files';
 import Onboarding from './pages/Onboarding';
 import Paywall from './components/Paywall';
+import PaymentSuccess from './pages/PaymentSuccess';
+import PaymentCancel from './pages/PaymentCancel';
 import { useAuth } from './contexts/AuthContext';
 import { useSubscription } from './contexts/SubscriptionContext';
 
@@ -51,6 +53,10 @@ export default function App() {
 
   return (
     <Routes>
+      {/* Stripe redirect pages (no layout, standalone) */}
+      <Route path="/success" element={<PaymentSuccess />} />
+      <Route path="/cancel" element={<PaymentCancel />} />
+
       <Route element={<Layout />}>
         <Route path="/" element={<Dashboard />} />
         <Route path="/finances" element={<Finances />} />
