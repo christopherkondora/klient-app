@@ -290,6 +290,56 @@ export default function Settings() {
                 </>
               )}
             </div>
+
+            {/* Business Info */}
+            <div className="bg-surface-800/50 rounded-lg border border-teal/10 p-6 space-y-4">
+              <div>
+                <h3 className="text-sm font-semibold text-ash">Vállalkozási adatok</h3>
+                <p className="text-[11px] text-steel mt-0.5">Ezek az adatok jelennek meg a generált szerződéseken.</p>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-medium text-steel mb-1.5">Cégnév / Vállalkozó neve</label>
+                  <input
+                    type="text"
+                    value={user?.company_name || ''}
+                    onChange={e => updateUser({ company_name: e.target.value })}
+                    className="w-full px-3 py-2 rounded-lg bg-surface-800 border border-teal/10 text-sm text-cream focus:outline-none focus:border-teal/40"
+                    placeholder="Pl. Kovács Péter EV"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-steel mb-1.5">Adószám</label>
+                  <input
+                    type="text"
+                    value={user?.tax_number || ''}
+                    onChange={e => updateUser({ tax_number: e.target.value })}
+                    className="w-full px-3 py-2 rounded-lg bg-surface-800 border border-teal/10 text-sm text-cream focus:outline-none focus:border-teal/40"
+                    placeholder="12345678-1-42"
+                  />
+                </div>
+                <div className="col-span-2">
+                  <label className="block text-xs font-medium text-steel mb-1.5">Székhely / Cím</label>
+                  <input
+                    type="text"
+                    value={user?.address || ''}
+                    onChange={e => updateUser({ address: e.target.value })}
+                    className="w-full px-3 py-2 rounded-lg bg-surface-800 border border-teal/10 text-sm text-cream focus:outline-none focus:border-teal/40"
+                    placeholder="1234 Budapest, Példa utca 1."
+                  />
+                </div>
+                <div className="col-span-2">
+                  <label className="block text-xs font-medium text-steel mb-1.5">Bankszámlaszám</label>
+                  <input
+                    type="text"
+                    value={user?.bank_account || ''}
+                    onChange={e => updateUser({ bank_account: e.target.value })}
+                    className="w-full px-3 py-2 rounded-lg bg-surface-800 border border-teal/10 text-sm text-cream focus:outline-none focus:border-teal/40"
+                    placeholder="12345678-12345678-12345678"
+                  />
+                </div>
+              </div>
+            </div>
           </div>
         )}
 
