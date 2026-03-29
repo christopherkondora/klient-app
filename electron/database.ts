@@ -332,4 +332,27 @@ function runMigrations() {
   if (!userColNames.includes('revenue_goal_yearly')) {
     db.run("ALTER TABLE user_settings ADD COLUMN revenue_goal_yearly REAL DEFAULT 0");
   }
+  // Business info for contracts
+  if (!userColNames.includes('company_name')) {
+    db.run("ALTER TABLE user_settings ADD COLUMN company_name TEXT DEFAULT ''");
+  }
+  if (!userColNames.includes('tax_number')) {
+    db.run("ALTER TABLE user_settings ADD COLUMN tax_number TEXT DEFAULT ''");
+  }
+  if (!userColNames.includes('address')) {
+    db.run("ALTER TABLE user_settings ADD COLUMN address TEXT DEFAULT ''");
+  }
+  if (!userColNames.includes('bank_account')) {
+    db.run("ALTER TABLE user_settings ADD COLUMN bank_account TEXT DEFAULT ''");
+  }
+
+  // Client fields for contracts
+  const clientCols = db.exec("PRAGMA table_info(clients)");
+  const clientColNames = clientCols[0]?.values.map(row => row[1]) || [];
+  if (!clientColNames.includes('tax_number')) {
+    db.run("ALTER TABLE clients ADD COLUMN tax_number TEXT DEFAULT ''");
+  }
+  if (!clientColNames.includes('representative_name')) {
+    db.run("ALTER TABLE clients ADD COLUMN representative_name TEXT DEFAULT ''");
+  }
 }

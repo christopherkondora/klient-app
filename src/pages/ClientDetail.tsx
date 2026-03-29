@@ -12,6 +12,7 @@ import { ProjectForm, TimeSlot } from './Projects';
 import { useAuth } from '../contexts/AuthContext';
 import InvoicePdfViewer from '../components/InvoicePdfViewer';
 import ConfirmDialog from '../components/ConfirmDialog';
+import ContractGenerateModal from '../components/ContractGenerateModal';
 import { useThemedColor } from '../utils/colors';
 
 const PLATFORM_URLS: Record<string, { label: string; url: string }> = {
@@ -27,15 +28,18 @@ export default function ClientDetail() {
   const { user } = useAuth();
   const tc = useThemedColor();
   const [searchParams] = useSearchParams();
-  const initialTab = (['projects', 'notes', 'recordings', 'invoices'] as const).includes(searchParams.get('tab') as any)
-    ? (searchParams.get('tab') as 'projects' | 'notes' | 'recordings' | 'invoices')
+  const initialTab = (['projects', 'notes', 'recordings', 'invoices', 'contracts'] as const).includes(searchParams.get('tab') as any)
+    ? (searchParams.get('tab') as 'projects' | 'notes' | 'recordings' | 'invoices' | 'contracts')
     : 'projects';
   const [client, setClient] = useState<Client | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [notes, setNotes] = useState<Note[]>([]);
   const [recordings, setRecordings] = useState<Recording[]>([]);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
-  const [activeTab, setActiveTab] = useState<'projects' | 'notes' | 'recordings' | 'invoices'>(initialTab);
+  const [contracts, setContracts] = useState<Contract[]>([]);
+  const [activeTab, setActiveTab] = useState<'projects' | 'notes' | 'recordings' | 'invoices' | 'contracts'>(initialTab);
+  const [showContractModal, setShowContractModal] = useState(false);
+  const [deleteContractId, setDeleteContractId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [showGmail, setShowGmail] = useState(false);
   const [showInvoicePlatform, setShowInvoicePlatform] = useState(false);
@@ -71,12 +75,13 @@ export default function ClientDetail() {
 
   async function loadData() {
     try {
-      const [clientData, projectsData, notesData, recordingsData, invoicesData, clientsData] = await Promise.all([
+      const [clientData, projectsData, notesData, recordingsData, invoicesData, contractsData, clientsData] = await Promise.all([
         window.electronAPI.getClient(id!),
         window.electronAPI.getProjects(id!),
         window.electronAPI.getNotes(),
         window.electronAPI.getRecordings(id!),
         window.electronAPI.getClientInvoices(id!),
+        window.electronAPI.getContracts(id!),
         window.electronAPI.getClients(),
       ]);
       setClient(clientData);
@@ -85,6 +90,7 @@ export default function ClientDetail() {
       setNotes(notesData.filter(n => n.client_id === id));
       setRecordings(recordingsData);
       setInvoices(invoicesData);
+      setContracts(contractsData);
       setAllClients(clientsData);
     } catch (err) {
       console.error('Failed to load client data:', err);
@@ -262,6 +268,7 @@ export default function ClientDetail() {
     { key: 'notes' as const, label: 'Jegyzetek', icon: StickyNote, count: notes.length },
     { key: 'recordings' as const, label: 'Felvételek', icon: Mic, count: recordings.length },
     { key: 'invoices' as const, label: 'Számlák', icon: Receipt, count: invoices.length },
+    { key: 'contracts' as const, label: 'Szerződések', icon: ScrollText, count: contracts.length },
   ];
 
   return (
@@ -713,6 +720,87 @@ export default function ClientDetail() {
             ))
           )}
         </div>
+      )}
+
+      {/* Tab Content: Contracts */}
+      {activeTab === 'contracts' && (
+        <div className="space-y-3">
+          <div className="flex justify-end">
+            <button
+              onClick={() => setShowContractModal(true)}
+              className="flex items-center gap-2 px-3 py-1.5 bg-teal text-cream rounded-lg text-sm hover:bg-teal/80"
+            >
+              <Plus width={14} height={14} /> Új szerződés
+            </button>
+          </div>
+          {contracts.length === 0 ? (
+            <p className="text-sm text-steel/60 italic text-center py-8">Nincsenek szerződések ehhez az ügyfélhez.</p>
+          ) : (
+            contracts.map(c => (
+              <div
+                key={c.id}
+                className="bg-surface-800/50 rounded-lg border border-teal/10 p-4 flex items-center justify-between group"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-md bg-teal/10 flex items-center justify-center">
+                    <ScrollText width={14} height={14} className="text-teal" />
+                  </div>
+                  <div>
+                    <h3 className="font-medium text-cream text-sm">{c.name}</h3>
+                    <p className="text-xs text-steel">
+                      {c.project_name ? `${c.project_name} • ` : ''}
+                      {format(parseISO(c.created_at), 'yyyy. MM. dd.')}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => window.electronAPI.openFile(c.file_path)}
+                    className="px-2 py-1 text-xs text-steel hover:text-cream hover:bg-teal/10 rounded opacity-0 group-hover:opacity-100 transition-all"
+                  >
+                    Megnyitás
+                  </button>
+                  <button
+                    onClick={() => setDeleteContractId(c.id)}
+                    className="p-1 text-steel hover:text-red-400 hover:bg-red-400/10 rounded opacity-0 group-hover:opacity-100 transition-all"
+                  >
+                    <Trash2 width={13} height={13} />
+                  </button>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      )}
+
+      {/* Contract Generate Modal */}
+      {showContractModal && (
+        <ContractGenerateModal
+          clientId={id!}
+          clientName={client.name}
+          projects={projects}
+          onClose={() => setShowContractModal(false)}
+          onGenerated={(contract) => {
+            setContracts(prev => [contract, ...prev]);
+            setShowContractModal(false);
+          }}
+        />
+      )}
+
+      {/* Delete Contract Confirm */}
+      {deleteContractId && (
+        <ConfirmDialog
+          title="Szerződés törlése"
+          message="Biztosan törölni szeretnéd ezt a szerződést? A PDF fájl is törlődik."
+          confirmLabel="Törlés"
+          variant="danger"
+          onConfirm={async () => {
+            await window.electronAPI.deleteContract(deleteContractId);
+            setContracts(prev => prev.filter(c => c.id !== deleteContractId));
+            setDeleteContractId(null);
+          }}
+          onCancel={() => setDeleteContractId(null)}
+        />
       )}
 
       {/* Save Recording Modal */}

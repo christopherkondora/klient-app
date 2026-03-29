@@ -82,6 +82,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   updateShortcut: (id: string, data: unknown) => ipcRenderer.invoke('db:shortcuts:update', id, data),
   deleteShortcut: (id: string) => ipcRenderer.invoke('db:shortcuts:delete', id),
 
+  // Database operations - Contracts
+  getContractTemplates: () => ipcRenderer.invoke('db:contracts:getTemplates'),
+  getContracts: (clientId?: string) => ipcRenderer.invoke('db:contracts:getAll', clientId),
+  generateContract: (data: unknown) => ipcRenderer.invoke('db:contracts:generate', data),
+  deleteContract: (id: string) => ipcRenderer.invoke('db:contracts:delete', id),
+
   // Database operations - Invoices
   getInvoices: (projectId?: string) => ipcRenderer.invoke('db:invoices:getAll', projectId),
   getClientInvoices: (clientId: string) => ipcRenderer.invoke('db:invoices:getByClient', clientId),

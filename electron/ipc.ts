@@ -14,7 +14,7 @@ function getFilesRoot(): string {
   return path.join(app.getPath('userData'), 'Files');
 }
 
-const USER_FIELDS = 'id, name, email, invoice_platform, onboarding_complete, pomodoro_project_tracking, revenue_goal_yearly, created_at';
+const USER_FIELDS = 'id, name, email, invoice_platform, onboarding_complete, pomodoro_project_tracking, revenue_goal_yearly, company_name, tax_number, address, bank_account, created_at';
 
 /** Ensure a local user_settings row exists for a Supabase user, return it */
 function ensureLocalUser(supabaseId: string, email: string, name?: string): Record<string, unknown> {
@@ -246,7 +246,7 @@ export function registerIpcHandlers() {
 
   // Update local user settings (non-auth fields)
   ipcMain.handle('db:user:update', (_event, id: string, data: Record<string, unknown>) => {
-    const allowedFields = ['name', 'email', 'invoice_platform', 'onboarding_complete', 'pomodoro_project_tracking', 'revenue_goal_yearly'];
+    const allowedFields = ['name', 'email', 'invoice_platform', 'onboarding_complete', 'pomodoro_project_tracking', 'revenue_goal_yearly', 'company_name', 'tax_number', 'address', 'bank_account'];
     const filteredData: Record<string, unknown> = {};
     for (const key of allowedFields) {
       if (key in data) filteredData[key] = data[key];
@@ -394,7 +394,7 @@ export function registerIpcHandlers() {
         }
       }
     }
-    const allowedFields = ['name', 'email', 'phone', 'company', 'address', 'notes', 'color'];
+    const allowedFields = ['name', 'email', 'phone', 'company', 'address', 'notes', 'color', 'tax_number', 'representative_name'];
     const filteredData: Record<string, unknown> = {};
     for (const key of allowedFields) {
       if (key in data) filteredData[key] = data[key];
@@ -716,6 +716,138 @@ export function registerIpcHandlers() {
 
   ipcMain.handle('db:shortcuts:delete', (_event, id: string) => {
     execute('DELETE FROM shortcuts WHERE id = ?', [id]);
+    return { success: true };
+  });
+
+  // ============ CONTRACTS ============
+
+  ipcMain.handle('db:contracts:getTemplates', () => {
+    const { CONTRACT_TEMPLATES } = require('./contract-templates');
+    return CONTRACT_TEMPLATES.map((t: { id: string; name: string; description: string; fields: unknown[] }) => ({
+      id: t.id, name: t.name, description: t.description, fields: t.fields,
+    }));
+  });
+
+  ipcMain.handle('db:contracts:getAll', (_event, clientId?: string) => {
+    if (clientId) {
+      return queryAll(
+        `SELECT ct.*, c.name as client_name, p.name as project_name
+         FROM contracts ct
+         LEFT JOIN clients c ON ct.client_id = c.id
+         LEFT JOIN projects p ON ct.project_id = p.id
+         WHERE ct.client_id = ?
+         ORDER BY ct.created_at DESC`,
+        [clientId]
+      );
+    }
+    return queryAll(
+      `SELECT ct.*, c.name as client_name, p.name as project_name
+       FROM contracts ct
+       LEFT JOIN clients c ON ct.client_id = c.id
+       LEFT JOIN projects p ON ct.project_id = p.id
+       ORDER BY ct.created_at DESC`
+    );
+  });
+
+  ipcMain.handle('db:contracts:generate', async (_event, data: {
+    templateId: string;
+    clientId: string;
+    projectId?: string;
+    fields: Record<string, string>;
+    contractDate: string;
+  }) => {
+    const { generateContractPdf } = await import('./pdf-generator');
+    const { CONTRACT_TEMPLATES } = await import('./contract-templates');
+
+    const client = queryOne('SELECT * FROM clients WHERE id = ?', [data.clientId]) as Record<string, string> | null;
+    if (!client) throw new Error('Ügyfél nem található');
+
+    // Get the current user
+    const sb = getSupabase();
+    const { data: { session } } = await sb.auth.getSession();
+    if (!session?.user) throw new Error('Nincs bejelentkezve');
+    const user = queryOne(`SELECT ${USER_FIELDS} FROM user_settings WHERE id = ?`, [session.user.id]) as Record<string, string> | null;
+    if (!user) throw new Error('Felhasználó nem található');
+
+    // Validate user has required company information for contracts
+    if (!user.company_name || !user.address) {
+      throw new Error('A szerződés generálásához kérjük, töltse ki céges adatait (cégnév, cím) a Beállítások menüben.');
+    }
+
+    // Validate client has required information for contracts
+    if (!client.address) {
+      throw new Error('A szerződés generálásához az ügyfél címe kötelező. Kérjük, egészítse ki az ügyfél adatait.');
+    }
+
+    const template = CONTRACT_TEMPLATES.find((t: { id: string }) => t.id === data.templateId);
+    if (!template) throw new Error('Sablon nem található');
+
+    const contractData = {
+      userName: user.name || '',
+      userCompany: user.company_name || '',
+      userAddress: user.address || '',
+      userTaxNumber: user.tax_number || '',
+      userBankAccount: user.bank_account || '',
+      userEmail: user.email || '',
+      clientName: client.name || '',
+      clientCompany: client.company || '',
+      clientAddress: client.address || '',
+      clientTaxNumber: client.tax_number || '',
+      clientRepresentative: client.representative_name || '',
+      clientEmail: client.email || '',
+      fields: data.fields,
+      contractDate: data.contractDate,
+      contractPlace: data.fields.place || '',
+    };
+
+    let pdfBuffer: Buffer;
+    try {
+      pdfBuffer = await generateContractPdf(data.templateId, contractData);
+    } catch (err: any) {
+      throw new Error(`PDF generálási hiba: ${err.message || 'Ismeretlen hiba történt'}`);
+    }
+
+    // Save PDF to client's Files folder
+    const clientFolder = path.join(getFilesRoot(), sanitizeFolderName(client.name));
+    const contractsFolder = path.join(clientFolder, 'Szerződések');
+    try {
+      if (!fs.existsSync(contractsFolder)) {
+        fs.mkdirSync(contractsFolder, { recursive: true });
+      }
+    } catch (err: any) {
+      throw new Error(`Mappa létrehozási hiba: ${err.message || 'Nem sikerült létrehozni a szerződések mappát'}`);
+    }
+
+    const dateStr = data.contractDate.replace(/-/g, '');
+    const fileName = `${template.name}_${sanitizeFolderName(client.name)}_${dateStr}.pdf`;
+    const filePath = path.join(contractsFolder, fileName);
+
+    try {
+      fs.writeFileSync(filePath, pdfBuffer);
+    } catch (err: any) {
+      throw new Error(`Fájl mentési hiba: ${err.message || 'Nem sikerült menteni a szerződést'}`);
+    }
+
+    // Save record in DB
+    const id = uuidv4();
+    execute(
+      `INSERT INTO contracts (id, project_id, client_id, name, file_path, signed_date, created_at) VALUES (?, ?, ?, ?, ?, ?, datetime('now'))`,
+      [id, data.projectId || null, data.clientId, template.name, filePath, null]
+    );
+
+    return queryOne(
+      `SELECT ct.*, c.name as client_name, p.name as project_name
+       FROM contracts ct LEFT JOIN clients c ON ct.client_id = c.id LEFT JOIN projects p ON ct.project_id = p.id
+       WHERE ct.id = ?`, [id]
+    );
+  });
+
+  ipcMain.handle('db:contracts:delete', (_event, id: string) => {
+    const contract = queryOne('SELECT file_path FROM contracts WHERE id = ?', [id]) as { file_path: string } | null;
+    if (contract?.file_path) {
+      try { fs.unlinkSync(contract.file_path); } catch { /* file may not exist */ }
+    }
+    execute('DELETE FROM contracts WHERE id = ?', [id]);
     return { success: true };
   });
 

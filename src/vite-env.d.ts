@@ -74,6 +74,12 @@ interface ElectronAPI {
   updateShortcut: (id: string, data: Partial<Shortcut>) => Promise<Shortcut>;
   deleteShortcut: (id: string) => Promise<{ success: boolean }>;
 
+  // Contracts
+  getContractTemplates: () => Promise<ContractTemplate[]>;
+  getContracts: (clientId?: string) => Promise<Contract[]>;
+  generateContract: (data: { templateId: string; clientId: string; projectId?: string; fields: Record<string, string>; contractDate: string }) => Promise<Contract>;
+  deleteContract: (id: string) => Promise<{ success: boolean }>;
+
   // Invoices
   getInvoices: (projectId?: string) => Promise<Invoice[]>;
   getClientInvoices: (clientId: string) => Promise<Invoice[]>;
@@ -144,6 +150,8 @@ interface Client {
   phone: string;
   company: string;
   address: string;
+  tax_number: string;
+  representative_name: string;
   notes: string;
   color: string;
   created_at: string;
@@ -226,6 +234,35 @@ interface Shortcut {
   icon: string | null;
   sort_order: number;
   created_at: string;
+}
+
+interface Contract {
+  id: string;
+  project_id: string | null;
+  client_id: string;
+  client_name?: string;
+  project_name?: string;
+  name: string;
+  file_path: string;
+  signed_date: string | null;
+  created_at: string;
+}
+
+interface ContractTemplateField {
+  key: string;
+  label: string;
+  type: 'text' | 'number' | 'date' | 'textarea';
+  required: boolean;
+  placeholder?: string;
+  defaultValue?: string;
+  suffix?: string;
+}
+
+interface ContractTemplate {
+  id: string;
+  name: string;
+  description: string;
+  fields: ContractTemplateField[];
 }
 
 interface Invoice {
@@ -321,6 +358,10 @@ interface UserSettings {
   onboarding_complete: number;
   pomodoro_project_tracking: number;
   revenue_goal_yearly: number;
+  company_name: string;
+  tax_number: string;
+  address: string;
+  bank_account: string;
   created_at: string;
 }
 
