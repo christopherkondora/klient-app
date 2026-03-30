@@ -7,8 +7,11 @@ import PomodoroTimer from './PomodoroTimer';
 import TrialBanner from './TrialBanner';
 import UpdateBanner from './UpdateBanner';
 import { ArrowLeft, StickyNote } from 'lucide-react';
+import { useAuth } from '../contexts/AuthContext';
 
 export default function Layout() {
+  const { user } = useAuth();
+  const teamMode = user?.team_mode === 1;
   const [activeShortcutUrl, setActiveShortcutUrl] = useState<string | null>(null);
   const [notesPanelOpen, setNotesPanelOpen] = useState(false);
 
@@ -50,7 +53,7 @@ export default function Layout() {
         </main>
       </div>
       <NotesPanel open={notesPanelOpen} onClose={() => setNotesPanelOpen(false)} />
-      <PomodoroTimer />
+      {!teamMode && <PomodoroTimer />}
       <button
         onClick={() => setNotesPanelOpen(true)}
         className="fixed bottom-6 right-6 w-14 h-14 rounded-full bg-teal text-cream shadow-lg shadow-teal/25 hover:bg-teal/80 hover:scale-105 transition-all flex items-center justify-center z-30"

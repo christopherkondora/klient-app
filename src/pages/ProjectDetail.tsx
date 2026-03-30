@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, Clock, Calendar, StickyNote, Receipt, FileText,
   Plus, Check, AlertTriangle, Trash2, Pencil, User, ArrowRight, FolderOpen, Settings2, X,
-  ChevronLeft, ChevronRight,
+  ChevronLeft, ChevronRight, Users, UserMinus,
 } from 'lucide-react';
 import { format, parseISO, startOfMonth, endOfMonth, startOfWeek, endOfWeek, addDays, addMonths, subMonths, isSameMonth, isSameDay } from 'date-fns';
 import { hu } from 'date-fns/locale';
@@ -20,11 +20,12 @@ export default function ProjectDetail() {
   const { user } = useAuth();
   const tc = useThemedColor();
   const hasInvoicing = user?.invoice_platform && user.invoice_platform !== 'none';
+  const teamMode = user?.team_mode === 1;
   const [project, setProject] = useState<Project | null>(null);
   const [notes, setNotes] = useState<Note[]>([]);
   const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>([]);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
-  const [activeTab, setActiveTab] = useState<'overview' | 'notes' | 'invoices'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'notes' | 'invoices' | 'team'>('overview');
   const [showNoteForm, setShowNoteForm] = useState(false);
   const [showCloseForm, setShowCloseForm] = useState(false);
   const [showInvoiceForm, setShowInvoiceForm] = useState(false);
@@ -33,6 +34,9 @@ export default function ProjectDetail() {
   const [showManageHours, setShowManageHours] = useState(false);
   const [viewingInvoice, setViewingInvoice] = useState<Invoice | null>(null);
   const [allClients, setAllClients] = useState<Client[]>([]);
+  const [projectAssignments, setProjectAssignments] = useState<ProjectAssignment[]>([]);
+  const [allTeamMembers, setAllTeamMembers] = useState<TeamMember[]>([]);
+  const [showAssignModal, setShowAssignModal] = useState(false);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -41,18 +45,22 @@ export default function ProjectDetail() {
 
   async function loadData() {
     try {
-      const [projectData, notesData, eventsData, invoicesData, clientsData] = await Promise.all([
+      const [projectData, notesData, eventsData, invoicesData, clientsData, assignmentsData, teamMembersData] = await Promise.all([
         window.electronAPI.getProject(id!),
         window.electronAPI.getNotes(id!),
         window.electronAPI.getCalendarEvents('2000-01-01', '2099-12-31'),
         window.electronAPI.getInvoices(id!),
         window.electronAPI.getClients(),
+        window.electronAPI.getProjectAssignments(id!),
+        window.electronAPI.getTeamMembers(),
       ]);
       setProject(projectData);
       setNotes(notesData);
       setCalendarEvents(eventsData.filter(e => e.project_id === id));
       setInvoices(invoicesData);
       setAllClients(clientsData);
+      setProjectAssignments(assignmentsData);
+      setAllTeamMembers(teamMembersData);
     } catch (err) {
       console.error('Failed to load project data:', err);
     } finally {
@@ -225,38 +233,49 @@ export default function ProjectDetail() {
         {/* Stats */}
         <div className="grid grid-cols-3 gap-4 mt-6">
           <div className="bg-teal/5 rounded-lg p-4">
-            <div className="flex items-center justify-between text-steel text-xs mb-2">
-              <div className="flex items-center gap-2">
-                <Clock width={13} height={13} /> Teljesített munkaórák
-              </div>
-              {project.status === 'active' && (
-                <button
-                  onClick={() => setShowManageHours(true)}
-                  className="flex items-center gap-1 text-[10px] text-steel hover:text-cream transition-colors"
-                >
-                  <Settings2 width={10} height={10} /> Kezelés
-                </button>
-              )}
-            </div>
-            <div className="flex items-center gap-2">
-              <div className="flex-1 h-2 bg-teal/15 rounded-full overflow-hidden">
-                <div
-                  className="h-full rounded-full transition-all"
-                  style={{
-                    width: `${Math.min(hoursPercent, 100)}%`,
-                    backgroundColor: hoursPercent >= 100 ? '#4ade80' : '#598392',
-                  }}
-                />
-              </div>
-              <span className="text-sm font-bold text-cream">
-                {completedHours.toFixed(1)}/{allocatedHours.toFixed(1)}h
-              </span>
-            </div>
-            {!project.is_hours_distributed && project.status === 'active' && (
-              <p className="text-[10px] text-amber-400 mt-2 flex items-center gap-1">
-                <AlertTriangle width={10} height={10} />
-                Az órákat el kell osztanod a naptárban
-              </p>
+            {teamMode ? (
+              <>
+                <div className="flex items-center gap-2 text-steel text-xs mb-2">
+                  <Users width={13} height={13} /> Csapattagok
+                </div>
+                <p className="text-sm font-bold text-cream">{projectAssignments.length} hozzárendelve</p>
+              </>
+            ) : (
+              <>
+                <div className="flex items-center justify-between text-steel text-xs mb-2">
+                  <div className="flex items-center gap-2">
+                    <Clock width={13} height={13} /> Teljesített munkaórák
+                  </div>
+                  {project.status === 'active' && (
+                    <button
+                      onClick={() => setShowManageHours(true)}
+                      className="flex items-center gap-1 text-[10px] text-steel hover:text-cream transition-colors"
+                    >
+                      <Settings2 width={10} height={10} /> Kezelés
+                    </button>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="flex-1 h-2 bg-teal/15 rounded-full overflow-hidden">
+                    <div
+                      className="h-full rounded-full transition-all"
+                      style={{
+                        width: `${Math.min(hoursPercent, 100)}%`,
+                        backgroundColor: hoursPercent >= 100 ? '#4ade80' : '#598392',
+                      }}
+                    />
+                  </div>
+                  <span className="text-sm font-bold text-cream">
+                    {completedHours.toFixed(1)}/{allocatedHours.toFixed(1)}h
+                  </span>
+                </div>
+                {!project.is_hours_distributed && project.status === 'active' && (
+                  <p className="text-[10px] text-amber-400 mt-2 flex items-center gap-1">
+                    <AlertTriangle width={10} height={10} />
+                    Az órákat el kell osztanod a naptárban
+                  </p>
+                )}
+              </>
             )}
           </div>
           <div className="bg-teal/5 rounded-lg p-4">
@@ -282,6 +301,7 @@ export default function ProjectDetail() {
           { key: 'overview' as const, label: 'Naptárbejegyzések', icon: Calendar },
           { key: 'notes' as const, label: 'Jegyzetek', icon: StickyNote, count: notes.length },
           ...(hasInvoicing ? [{ key: 'invoices' as const, label: 'Számlák', icon: Receipt, count: invoices.length }] : []),
+          ...(teamMode ? [{ key: 'team' as const, label: 'Csapattagok', icon: Users, count: projectAssignments.length }] : []),
         ].map(tab => (
           <button
             key={tab.key}
@@ -411,6 +431,96 @@ export default function ProjectDetail() {
               </div>
             ))
           )}
+        </div>
+      )}
+
+      {activeTab === 'team' && teamMode && (
+        <div className="space-y-3">
+          <div className="flex justify-end">
+            <button
+              onClick={() => setShowAssignModal(true)}
+              className="flex items-center gap-2 px-3 py-1.5 bg-teal text-cream rounded-lg text-sm hover:bg-teal/80"
+            >
+              <Plus width={14} height={14} /> Csapattag hozzárendelése
+            </button>
+          </div>
+          {projectAssignments.length === 0 ? (
+            <div className="text-center py-8">
+              <Users width={28} height={28} className="mx-auto text-steel/30 mb-2" />
+              <p className="text-steel/60 text-sm">Még nincsenek csapattagok hozzárendelve ehhez a projekthez.</p>
+            </div>
+          ) : (
+            projectAssignments.map(a => (
+              <div key={a.id} className="bg-surface-800/50 rounded-lg border border-teal/10 p-4 flex items-center justify-between group">
+                <div className="flex items-center gap-3">
+                  <div className="w-8 h-8 rounded-lg bg-teal/15 border border-teal/20 flex items-center justify-center text-teal font-bold text-xs">
+                    {a.member_name?.charAt(0) || '?'}
+                  </div>
+                  <div>
+                    <h3 className="font-medium text-cream text-sm">{a.member_name}</h3>
+                    <div className="flex items-center gap-2 text-[11px] text-steel">
+                      {a.member_role && <span>{a.member_role}</span>}
+                      {a.member_email && <span>· {a.member_email}</span>}
+                    </div>
+                  </div>
+                </div>
+                <button
+                  onClick={async () => {
+                    await window.electronAPI.unassignFromProject(id!, a.team_member_id);
+                    loadData();
+                  }}
+                  className="p-1.5 rounded hover:bg-red-500/10 text-steel/40 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all"
+                  title="Eltávolítás a projektből"
+                >
+                  <UserMinus width={14} height={14} />
+                </button>
+              </div>
+            ))
+          )}
+        </div>
+      )}
+
+      {/* Assign Team Member Modal */}
+      {showAssignModal && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={() => setShowAssignModal(false)}>
+          <div className="bg-surface-800 rounded-xl border border-teal/15 p-6 w-full max-w-sm shadow-2xl" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="font-pixel text-[14px] text-cream">Csapattag hozzárendelése</h2>
+              <button onClick={() => setShowAssignModal(false)} className="p-1 rounded hover:bg-teal/10 text-steel hover:text-cream">
+                <X width={14} height={14} />
+              </button>
+            </div>
+            {(() => {
+              const assignedIds = new Set(projectAssignments.map(a => a.team_member_id));
+              const available = allTeamMembers.filter(m => !assignedIds.has(m.id));
+              if (available.length === 0) {
+                return <p className="text-sm text-steel/60 text-center py-4">Minden csapattag hozzá van rendelve ehhez a projekthez.</p>;
+              }
+              return (
+                <div className="space-y-1.5 max-h-64 overflow-y-auto">
+                  {available.map(m => (
+                    <button
+                      key={m.id}
+                      onClick={async () => {
+                        await window.electronAPI.assignToProject(id!, m.id);
+                        setShowAssignModal(false);
+                        loadData();
+                      }}
+                      className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg border border-teal/10 hover:border-teal/25 hover:bg-teal/5 transition-colors text-left"
+                    >
+                      <div className="w-8 h-8 rounded-lg bg-teal/15 border border-teal/20 flex items-center justify-center text-teal font-bold text-xs shrink-0">
+                        {m.name.charAt(0)}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-sm text-cream font-medium truncate">{m.name}</div>
+                        {m.role && <div className="text-[11px] text-steel">{m.role}</div>}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              );
+            })()}
+          </div>
         </div>
       )}
 

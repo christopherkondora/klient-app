@@ -576,7 +576,8 @@ export default function Settings() {
               </div>
             </div>
 
-            {/* Pomodoro */}
+            {/* Pomodoro — hidden in team mode */}
+            {user?.team_mode !== 1 && (
             <div className="bg-surface-800/50 rounded-lg border border-teal/10 p-6">
               <h3 className="text-sm font-semibold text-ash mb-1">Pomodoro</h3>
               <p className="text-[11px] text-steel mb-4">Ha bekapcsolod, a befejezett Pomodoro munkamenetek automatikusan rögzülnek a kiválasztott projekt naptári eseményéhez.</p>
@@ -590,6 +591,28 @@ export default function Settings() {
                 >
                   <span className={`absolute top-1/2 -translate-y-1/2 w-4 h-4 rounded-full transition-all ${
                     user?.pomodoro_project_tracking === 1
+                      ? 'left-5.5 bg-cream'
+                      : 'left-0.5 bg-steel/60'
+                  }`} />
+                </button>
+              </div>
+            </div>
+            )}
+
+            {/* Team mode */}
+            <div className="bg-surface-800/50 rounded-lg border border-teal/10 p-6">
+              <h3 className="text-sm font-semibold text-ash mb-1">Csapat mód</h3>
+              <p className="text-[11px] text-steel mb-4">Csapat módban kezelheted a csapattagjaidat és hozzárendelheted őket projektekhez. Az időkövetés funkciók elrejtésre kerülnek.</p>
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-steel">Csapat mód</span>
+                <button
+                  onClick={() => updateUser({ team_mode: user?.team_mode === 1 ? 0 : 1 })}
+                  className={`relative w-10 h-5 rounded-full transition-colors ${
+                    user?.team_mode === 1 ? 'bg-teal' : 'bg-surface-800 border border-teal/20'
+                  }`}
+                >
+                  <span className={`absolute top-1/2 -translate-y-1/2 w-4 h-4 rounded-full transition-all ${
+                    user?.team_mode === 1
                       ? 'left-5.5 bg-cream'
                       : 'left-0.5 bg-steel/60'
                   }`} />

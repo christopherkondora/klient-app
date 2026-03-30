@@ -10,6 +10,7 @@ import Calendar from './pages/Calendar';
 import Settings from './pages/Settings';
 import Finances from './pages/Finances';
 import Files from './pages/Files';
+import Team from './pages/Team';
 import Onboarding from './pages/Onboarding';
 import Paywall from './components/Paywall';
 import PaymentSuccess from './pages/PaymentSuccess';
@@ -65,6 +66,7 @@ export default function App() {
         <Route path="/projects" element={<Projects />} />
         <Route path="/projects/:id" element={<ProjectDetail />} />
         <Route path="/calendar" element={<Calendar />} />
+        <Route path="/team" element={<Team />} />
         <Route path="/files" element={<Files />} />
         <Route path="/settings" element={<Settings />} />
       </Route>

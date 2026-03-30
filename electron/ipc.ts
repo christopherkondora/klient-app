@@ -246,7 +246,7 @@ export function registerIpcHandlers() {
 
   // Update local user settings (non-auth fields)
   ipcMain.handle('db:user:update', (_event, id: string, data: Record<string, unknown>) => {
-    const allowedFields = ['name', 'email', 'invoice_platform', 'onboarding_complete', 'pomodoro_project_tracking', 'revenue_goal_yearly', 'company_name', 'tax_number', 'address', 'bank_account'];
+    const allowedFields = ['name', 'email', 'invoice_platform', 'onboarding_complete', 'pomodoro_project_tracking', 'revenue_goal_yearly', 'company_name', 'tax_number', 'address', 'bank_account', 'team_mode'];
     const filteredData: Record<string, unknown> = {};
     for (const key of allowedFields) {
       if (key in data) filteredData[key] = data[key];

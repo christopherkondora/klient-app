@@ -1,9 +1,9 @@
 import { useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '../contexts/ThemeContext';
-import { ArrowRight, ArrowLeft, Check, Loader2, Receipt, Target, Palette, BarChart3, Calendar, FolderOpen, FileText, Mic, Eye, EyeOff, Mail, RefreshCw } from 'lucide-react';
+import { ArrowRight, ArrowLeft, Check, Loader2, Receipt, Target, Palette, BarChart3, Calendar, FolderOpen, FileText, Mic, Eye, EyeOff, Mail, RefreshCw, Users, UserCheck } from 'lucide-react';
 
-type Step = 'auth' | 'confirm-email' | 'platform' | 'goal' | 'theme' | 'done';
+type Step = 'auth' | 'confirm-email' | 'work-mode' | 'platform' | 'goal' | 'theme' | 'done';
 type AuthMode = 'login' | 'register' | 'reset';
 
 const INVOICE_PLATFORMS = [
@@ -51,7 +51,7 @@ export default function Onboarding() {
   const { theme, setTheme } = useTheme();
 
   // If user is logged in but hasn't completed onboarding, start at setup steps
-  const [step, setStep] = useState<Step>(user ? 'platform' : 'auth');
+  const [step, setStep] = useState<Step>(user ? 'work-mode' : 'auth');
   const [authMode, setAuthMode] = useState<AuthMode>('register');
   const [error, setError] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
@@ -68,6 +68,7 @@ export default function Onboarding() {
   const [name, setName] = useState('');
   const [platform, setPlatform] = useState('none');
   const [revenueGoal, setRevenueGoal] = useState(10_000_000);
+  const [workMode, setWorkMode] = useState<'individual' | 'team'>('individual');
 
   const strength = getPasswordStrength(password);
 
@@ -121,7 +122,7 @@ export default function Onboarding() {
       }
       // login success → move to setup steps
       setSubmitting(false);
-      animateStep('platform');
+      animateStep('work-mode');
     } catch {
       setError(
         authMode === 'login'
@@ -141,7 +142,7 @@ export default function Onboarding() {
     try {
       await googleLogin();
       setSubmitting(false);
-      animateStep('platform');
+      animateStep('work-mode');
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Google bejelentkezés sikertelen';
       if (msg !== 'Google bejelentkezés megszakítva') {
@@ -157,6 +158,7 @@ export default function Onboarding() {
       await updateUser({
         invoice_platform: platform,
         revenue_goal_yearly: revenueGoal,
+        team_mode: workMode === 'team' ? 1 : 0,
         onboarding_complete: 1,
       });
     } catch { /* continue anyway */ }
@@ -170,7 +172,7 @@ export default function Onboarding() {
   };
 
   // Steps that show in step dots (only setup steps, not auth or done)
-  const setupSteps: Step[] = ['platform', 'goal', 'theme'];
+  const setupSteps: Step[] = ['work-mode', 'platform', 'goal', 'theme'];
 
   const stepContent: Record<Step, React.ReactNode> = {
     // ─── STEP 1: AUTH ───
@@ -439,7 +441,7 @@ export default function Onboarding() {
             try {
               const confirmed = await checkEmailConfirmed(email, password);
               if (confirmed) {
-                animateStep('platform');
+                animateStep('work-mode');
               } else {
                 setError('Az email cím még nincs megerősítve. Ellenőrizd a postaládád!');
               }
@@ -469,7 +471,63 @@ export default function Onboarding() {
       </div>
     ),
 
-    // ─── STEP 2: PLATFORM ───
+    // ─── STEP 2: WORK MODE ───
+    'work-mode': (
+      <div className="space-y-6">
+        <div className="text-center">
+          <div className="w-10 h-10 rounded-xl bg-teal/15 border border-teal/20 flex items-center justify-center mx-auto mb-3">
+            <Users width={20} height={20} className="text-teal" />
+          </div>
+          <h2 className="font-pixel text-base text-cream">Munkamód</h2>
+          <p className="text-steel text-sm mt-1.5">Egyedül dolgozol vagy csapattal?</p>
+        </div>
+
+        <div className="space-y-2">
+          <button
+            onClick={() => setWorkMode('individual')}
+            className={`w-full px-4 py-4 rounded-lg border text-left transition-colors ${
+              workMode === 'individual'
+                ? 'border-teal bg-teal/15 text-cream'
+                : 'border-teal/10 bg-surface-800/50 text-steel hover:border-teal/25 hover:text-ash'
+            }`}
+          >
+            <div className="flex items-center gap-3">
+              <UserCheck width={18} height={18} className={workMode === 'individual' ? 'text-teal' : 'text-steel'} />
+              <div>
+                <div className="text-sm font-medium">Egyéni</div>
+                <div className="text-[11px] text-steel mt-0.5">Egyedül dolgozom, időkövetéssel</div>
+              </div>
+            </div>
+          </button>
+          <button
+            onClick={() => setWorkMode('team')}
+            className={`w-full px-4 py-4 rounded-lg border text-left transition-colors ${
+              workMode === 'team'
+                ? 'border-teal bg-teal/15 text-cream'
+                : 'border-teal/10 bg-surface-800/50 text-steel hover:border-teal/25 hover:text-ash'
+            }`}
+          >
+            <div className="flex items-center gap-3">
+              <Users width={18} height={18} className={workMode === 'team' ? 'text-teal' : 'text-steel'} />
+              <div>
+                <div className="text-sm font-medium">Csapat</div>
+                <div className="text-[11px] text-steel mt-0.5">Csapattagok kezelése, projekt-hozzárendelés</div>
+              </div>
+            </div>
+          </button>
+        </div>
+
+        <button
+          onClick={() => animateStep('platform')}
+          className="w-full py-2.5 bg-teal text-cream text-sm font-medium rounded-lg hover:bg-teal/80 flex items-center justify-center gap-2 transition-colors"
+        >
+          Tovább
+          <ArrowRight width={16} height={16} />
+        </button>
+      </div>
+    ),
+
+    // ─── STEP 3: PLATFORM ───
     platform: (
       <div className="space-y-6">
         <div className="text-center">

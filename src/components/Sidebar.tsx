@@ -2,12 +2,13 @@ import { useEffect, useState } from 'react';
 import { version } from '../../package.json';
 import { NavLink } from 'react-router-dom';
 import {
-  Home, Users, Briefcase, Calendar, Plus, Trash2, SquarePen,
+  Home, Users, UsersRound, Briefcase, Calendar, Plus, Trash2, SquarePen,
   X, Settings, ChevronLeft, ChevronRight, Coins, FolderOpen,
 } from 'lucide-react';
 import { SHORTCUT_ICONS, getShortcutIcon, guessIconFromUrl } from '../utils/shortcutIcons';
+import { useAuth } from '../contexts/AuthContext';
 
-const navItems = [
+const baseNavItems = [
   { to: '/', icon: Home, label: 'Dashboard' },
   { to: '/finances', icon: Coins, label: 'Pénzügyek' },
   { to: '/clients', icon: Users, label: 'Ügyfelek' },
@@ -17,6 +18,11 @@ const navItems = [
 ];
 
 export default function Sidebar({ onOpenShortcut, activeShortcutUrl }: { onOpenShortcut: (url: string | null) => void; activeShortcutUrl: string | null }) {
+  const { user } = useAuth();
+  const teamMode = user?.team_mode === 1;
+  const navItems = teamMode
+    ? [...baseNavItems.slice(0, 4), { to: '/team', icon: UsersRound, label: 'Csapat' }, ...baseNavItems.slice(4)]
+    : baseNavItems;
   const [shortcuts, setShortcuts] = useState<Shortcut[]>([]);
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingShortcut, setEditingShortcut] = useState<Shortcut | null>(null);

@@ -24,6 +24,7 @@ import { hu } from 'date-fns/locale';
 import DatePicker from '../components/DatePicker';
 import TimePicker from '../components/TimePicker';
 import { useThemedColor } from '../utils/colors';
+import { useAuth } from '../contexts/AuthContext';
 
 type ViewMode = 'month' | 'week' | 'day';
 
@@ -52,6 +53,8 @@ function eventAccentColor(type?: string): string {
 export default function Calendar() {
   const navigate = useNavigate();
   const tc = useThemedColor();
+  const { user } = useAuth();
+  const teamMode = user?.team_mode === 1;
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [events, setEvents] = useState<CalendarEvent[]>([]);
@@ -698,8 +701,8 @@ export default function Calendar() {
         </div>}
       </div>
 
-      {/* Active Projects Hours Overview */}
-      {activeProjects.length > 0 && (() => {
+      {/* Active Projects Hours Overview — hidden in team mode */}
+      {!teamMode && activeProjects.length > 0 && (() => {
         const ITEMS_PER_PAGE = 10;
         const sorted = [...activeProjects].sort((a, b) => {
           if (!a.deadline && !b.deadline) return 0;
