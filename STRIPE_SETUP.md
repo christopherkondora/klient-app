@@ -19,9 +19,11 @@ Ha a tábla már `stripe_*` oszlopokat használ (újabb setup), ez a lépés kih
 supabase secrets set STRIPE_SECRET_KEY=sk_test_...
 supabase secrets set STRIPE_WEBHOOK_SECRET=whsec_...
 supabase secrets set BILLINGO_API_KEY=ab379f0a-26dc-11f1-8e47-026634090519
+supabase secrets set BILLINGO_ENV=sandbox  # or "production" for live mode
 ```
 
 > A `STRIPE_WEBHOOK_SECRET` értékét a 4. lépésben kapod meg.
+> A `BILLINGO_ENV` alapértelmezett értéke "sandbox" (biztonság miatt). Éles módhoz állítsd "production"-re.
 
 ---
 
@@ -145,8 +147,19 @@ Stripe Dashboard → **Settings** → **Customer emails** → **Domains**
 
 ### 7.5. Billingo éles mód
 
-- Kapcsold ki a sandbox módot a Billingo beállításokban
-- Frissítsd a `BILLINGO_API_KEY`-t az éles kulccsal (ha külön sandbox/live kulcsok vannak)
+```bash
+# Állítsd át production módba (alapértelmezett: sandbox)
+supabase secrets set BILLINGO_ENV=production
+
+# Frissítsd az éles API kulccsal
+supabase secrets set BILLINGO_API_KEY=<éles_billingo_api_kulcs>
+```
+
+**Fontos:**
+- A `BILLINGO_ENV=production` kapcsolja át az API endpoint-ot `api.billingo.hu`-ra
+- Sandbox módban (`BILLINGO_ENV=sandbox`) az endpoint `api.sandbox.billingo.hu`
+- Alapértelmezett érték: `sandbox` (biztonság miatt)
+- Verifikáld a sandbox URL-t a Billingo dokumentációban, ha szükséges
 
 ### 7.6. Éles deploy
 

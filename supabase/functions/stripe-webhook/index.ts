@@ -5,9 +5,21 @@ const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const BILLINGO_API_KEY = Deno.env.get('BILLINGO_API_KEY') || '';
 const STRIPE_ENV = Deno.env.get('STRIPE_ENV') || 'test';
+const BILLINGO_ENV = Deno.env.get('BILLINGO_ENV') || 'sandbox';
 
 // Supabase client with service_role (bypasses RLS)
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+
+// ─── Billingo API base URL selection ───
+function getBillingoBaseUrl(): string {
+  // NOTE: Sandbox URL should be verified with Billingo API documentation
+  // Common patterns: api.sandbox.billingo.hu, sandbox.billingo.hu, etc.
+  if (BILLINGO_ENV === 'production') {
+    return 'https://api.billingo.hu/v3';
+  }
+  // Default to sandbox for safety
+  return 'https://api.sandbox.billingo.hu/v3';
+}
 
 // ─── Stripe signature verification using Web Crypto ───
 async function verifyStripeSignature(payload: string, sigHeader: string): Promise<boolean> {
@@ -48,46 +60,113 @@ async function createBillingoInvoice(params: {
   customerEmail: string;
   plan: string;
   amountHuf: number;
-}) {
+  userId: string;
+}): Promise<{ invoiceId: number; partnerId: number } | null> {
   if (!BILLINGO_API_KEY) {
     console.log('[Billingo] No API key configured, skipping invoice');
-    return;
+    return null;
   }
 
+  const billingoBaseUrl = getBillingoBaseUrl();
+  console.log('[Billingo] Using environment:', {
+    timestamp: new Date().toISOString(),
+    environment: BILLINGO_ENV,
+    baseUrl: billingoBaseUrl,
+    user_id: params.userId,
+    plan: params.plan,
+    amount: params.amountHuf,
+  });
+
   try {
-    // First, create or find the partner
-    const partnerRes = await fetch('https://api.billingo.hu/v3/partners', {
-      method: 'POST',
+    // First, check if partner already exists
+    const searchRes = await fetch(`${billingoBaseUrl}/partners`, {
+      method: 'GET',
       headers: {
         'X-API-KEY': BILLINGO_API_KEY,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        name: params.customerEmail,
-        emails: [params.customerEmail],
-        taxcode: '',
-        address: {
-          country_code: 'HU',
-          post_code: '0000',
-          city: 'N/A',
-          address: 'N/A',
-        },
-      }),
     });
 
     let partnerId: number;
-    if (partnerRes.ok) {
-      const partner = await partnerRes.json();
-      partnerId = partner.id;
-      console.log('[Billingo] Partner created/found:', { partner_id: partnerId, email: params.customerEmail });
+
+    if (searchRes.ok) {
+      const partnersData = await searchRes.json();
+      const partners = partnersData.data || partnersData;
+
+      // Find existing partner by email (case-insensitive)
+      const existing = Array.isArray(partners)
+        ? partners.find((p: any) => {
+            const emails = p.emails || [];
+            return emails.some((email: string) =>
+              email.toLowerCase() === params.customerEmail.toLowerCase()
+            );
+          })
+        : null;
+
+      if (existing) {
+        partnerId = existing.id;
+        console.log('[Billingo] Using existing partner:', {
+          timestamp: new Date().toISOString(),
+          partner_id: partnerId,
+          email: params.customerEmail,
+          user_id: params.userId,
+        });
+      } else {
+        // Create new partner if not found
+        const partnerRes = await fetch(`${billingoBaseUrl}/partners`, {
+          method: 'POST',
+          headers: {
+            'X-API-KEY': BILLINGO_API_KEY,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            name: params.customerEmail,
+            emails: [params.customerEmail],
+            taxcode: '',
+            address: {
+              country_code: 'HU',
+              post_code: '0000',
+              city: 'N/A',
+              address: 'N/A',
+            },
+          }),
+        });
+
+        if (partnerRes.ok) {
+          const partner = await partnerRes.json();
+          partnerId = partner.id;
+          console.log('[Billingo] New partner created:', {
+            timestamp: new Date().toISOString(),
+            partner_id: partnerId,
+            email: params.customerEmail,
+            user_id: params.userId,
+          });
+        } else {
+          const errorText = await partnerRes.text();
+          console.error('[Billingo] Partner creation failed:', {
+            timestamp: new Date().toISOString(),
+            user_id: params.userId,
+            email: params.customerEmail,
+            status: partnerRes.status,
+            status_text: partnerRes.statusText,
+            error_detail: errorText,
+            plan: params.plan,
+            amount: params.amountHuf,
+          });
+          return null;
+        }
+      }
     } else {
-      const errorText = await partnerRes.text();
-      console.error('[Billingo] Partner creation failed:', {
-        status: partnerRes.status,
-        error: errorText,
+      const errorText = await searchRes.text();
+      console.error('[Billingo] Partner search failed:', {
+        timestamp: new Date().toISOString(),
+        user_id: params.userId,
         email: params.customerEmail,
+        status: searchRes.status,
+        status_text: searchRes.statusText,
+        error_detail: errorText,
       });
-      return;
+      return null;
     }
 
     const planNames: Record<string, string> = {
@@ -97,7 +176,7 @@ async function createBillingoInvoice(params: {
     };
 
     // Create the invoice
-    const invoiceRes = await fetch('https://api.billingo.hu/v3/documents', {
+    const invoiceRes = await fetch(`${billingoBaseUrl}/documents`, {
       method: 'POST',
       headers: {
         'X-API-KEY': BILLINGO_API_KEY,
@@ -129,27 +208,41 @@ async function createBillingoInvoice(params: {
     if (invoiceRes.ok) {
       const invoice = await invoiceRes.json();
       console.log('[Billingo] Invoice created successfully:', {
+        timestamp: new Date().toISOString(),
+        user_id: params.userId,
         invoice_id: invoice.id,
         plan: params.plan,
         amount: params.amountHuf,
         partner_id: partnerId,
+        email: params.customerEmail,
       });
+      return { invoiceId: invoice.id, partnerId };
     } else {
       const errorText = await invoiceRes.text();
       console.error('[Billingo] Invoice creation failed:', {
-        status: invoiceRes.status,
-        error: errorText,
+        timestamp: new Date().toISOString(),
+        user_id: params.userId,
         plan: params.plan,
         amount: params.amountHuf,
         partner_id: partnerId,
+        email: params.customerEmail,
+        status: invoiceRes.status,
+        status_text: invoiceRes.statusText,
+        error_detail: errorText,
       });
+      return null;
     }
   } catch (err) {
     console.error('[Billingo] Unexpected error:', {
+      timestamp: new Date().toISOString(),
+      user_id: params.userId,
+      plan: params.plan,
+      amount: params.amountHuf,
+      email: params.customerEmail,
       error: err instanceof Error ? err.message : String(err),
       stack: err instanceof Error ? err.stack : undefined,
-      plan: params.plan,
     });
+    return null;
   }
 }
 
@@ -278,12 +371,45 @@ Deno.serve(async (req) => {
         }
 
         // Create Billingo invoice
-        console.log('[Webhook] Creating Billingo invoice:', { plan, amount: PLAN_AMOUNTS[plan] });
-        await createBillingoInvoice({
+        console.log('[Webhook] Creating Billingo invoice:', {
+          timestamp: new Date().toISOString(),
+          user_id: userId,
+          plan,
+          amount: PLAN_AMOUNTS[plan],
+          email: customerEmail,
+        });
+        const billingoResult = await createBillingoInvoice({
           customerEmail,
           plan,
           amountHuf: PLAN_AMOUNTS[plan] || 0,
+          userId,
         });
+
+        // Store Billingo IDs if invoice was created successfully
+        if (billingoResult && userId) {
+          const { error: billingoUpdateErr } = await supabase
+            .from('subscriptions')
+            .update({
+              billingo_invoice_id: billingoResult.invoiceId.toString(),
+              billingo_partner_id: billingoResult.partnerId,
+            })
+            .eq('user_id', userId);
+
+          if (billingoUpdateErr) {
+            console.error('[Webhook] Failed to store Billingo IDs:', {
+              user_id: userId,
+              invoice_id: billingoResult.invoiceId,
+              partner_id: billingoResult.partnerId,
+              error: billingoUpdateErr,
+            });
+          } else {
+            console.log('[Webhook] Billingo IDs stored successfully:', {
+              user_id: userId,
+              invoice_id: billingoResult.invoiceId,
+              partner_id: billingoResult.partnerId,
+            });
+          }
+        }
 
         break;
       }
