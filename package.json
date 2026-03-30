@@ -1,6 +1,6 @@
 {
   "name": "klient",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "description": "Business management system for marketing agencies and freelancers",
   "main": "dist-electron/main.js",
   "scripts": {
