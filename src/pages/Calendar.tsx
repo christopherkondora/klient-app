@@ -69,6 +69,7 @@ export default function Calendar() {
   const [showFilters, setShowFilters] = useState(false);
   const [completedHoursMap, setCompletedHoursMap] = useState<Record<string, number>>({});
   const [hoursPage, setHoursPage] = useState(0);
+  const [projectAssignments, setProjectAssignments] = useState<Map<string, ProjectAssignment[]>>(new Map());
 
   const activeProjects = allProjects.filter(p => p.status === 'active');
 
@@ -101,6 +102,22 @@ export default function Calendar() {
       const map: Record<string, number> = {};
       for (const row of completedData) map[row.project_id] = row.completed_hours;
       setCompletedHoursMap(map);
+
+      // Load project assignments for all projects
+      const assignmentsMap = new Map<string, ProjectAssignment[]>();
+      await Promise.all(
+        projectsData.map(async (project) => {
+          try {
+            const assignments = await window.electronAPI.getProjectAssignments(project.id);
+            if (assignments.length > 0) {
+              assignmentsMap.set(project.id, assignments);
+            }
+          } catch (err) {
+            console.error(`Failed to load assignments for project ${project.id}:`, err);
+          }
+        })
+      );
+      setProjectAssignments(assignmentsMap);
     } catch (err) {
       console.error('Failed to load calendar data:', err);
     } finally {
@@ -352,16 +369,19 @@ export default function Calendar() {
                         {dayEvents.slice(0, 3).map(event => {
                           const project = allProjects.find(p => p.id === event.project_id);
                           const isCompleted = project?.status === 'completed';
+                          const assignments = event.project_id ? projectAssignments.get(event.project_id) : undefined;
+                          const hasAssignments = assignments && assignments.length > 0;
                           return (
                             <div
                               key={event.id}
                               onClick={(e) => { e.stopPropagation(); handleEventClickInGrid(event); }}
-                              className={`text-[9px] pl-1.5 pr-1 py-0.5 rounded truncate font-medium cursor-pointer hover:opacity-80 ${isCompleted ? 'opacity-40' : ''}`}
+                              className={`text-[9px] pl-1.5 pr-1 py-0.5 rounded truncate font-medium cursor-pointer hover:opacity-80 ${isCompleted ? 'opacity-40' : ''} ${hasAssignments ? 'ring-1 ring-amber-400/40' : ''}`}
                               style={{
                                 backgroundColor: `color-mix(in srgb, ${isCompleted ? 'var(--color-steel)' : (event.color ? tc(event.color) : 'var(--color-teal)')} 25%, transparent)`,
                                 color: isCompleted ? 'var(--color-steel)' : 'var(--color-cream)',
-                                borderLeft: `2px solid ${isCompleted ? 'var(--color-steel)' : eventAccentColor(event.type)}`,
+                                borderLeft: `2px solid ${hasAssignments ? 'var(--color-amber-400)' : isCompleted ? 'var(--color-steel)' : eventAccentColor(event.type)}`,
                               }}
+                              title={hasAssignments ? `Hozzárendelve: ${assignments.map(a => a.member_name).join(', ')}` : undefined}
                             >
                               {event.start_time && <span className="mr-0.5">{event.start_time.slice(0, 5)}</span>}
                               {event.title}
@@ -585,21 +605,24 @@ export default function Calendar() {
                       const project = allProjects.find(p => p.id === event.project_id);
                       const isCompleted = project?.status === 'completed';
                       const dur = event.start_time && event.end_time ? calcDurationFromTimes(event.start_time, event.end_time) : 1;
+                      const assignments = event.project_id ? projectAssignments.get(event.project_id) : undefined;
+                      const hasAssignments = assignments && assignments.length > 0;
                       return (
                         <div
                           key={event.id}
                           onClick={() => handleEventClickInGrid(event)}
                           onDoubleClick={() => openEditEvent(event)}
-                          className={`absolute p-2 rounded-lg cursor-pointer hover:opacity-80 overflow-hidden ${isCompleted ? 'opacity-40' : ''}`}
+                          className={`absolute p-2 rounded-lg cursor-pointer hover:opacity-80 overflow-hidden ${isCompleted ? 'opacity-40' : ''} ${hasAssignments ? 'ring-1 ring-amber-400/40' : ''}`}
                           style={{
                             top,
                             height,
                             left: `${(col / totalCols) * 100}%`,
                             width: `${(1 / totalCols) * 100 - 1}%`,
                             backgroundColor: `color-mix(in srgb, ${isCompleted ? 'var(--color-steel)' : (event.color ? tc(event.color) : 'var(--color-teal)')} 20%, transparent)`,
-                            borderLeft: `3px solid ${isCompleted ? 'var(--color-steel)' : eventAccentColor(event.type)}`,
+                            borderLeft: `3px solid ${hasAssignments ? 'var(--color-amber-400)' : isCompleted ? 'var(--color-steel)' : eventAccentColor(event.type)}`,
                             zIndex: 5,
                           }}
+                          title={hasAssignments ? `Hozzárendelve: ${assignments.map(a => a.member_name).join(', ')}` : undefined}
                         >
                           <div className="flex items-center justify-between">
                             <span className="text-xs font-medium" style={{ color: isCompleted ? 'var(--color-steel)' : 'var(--color-cream)' }}>
@@ -609,6 +632,11 @@ export default function Calendar() {
                           </div>
                           {event.client_name && (
                             <p className="text-[10px] text-steel mt-0.5">{event.client_name}</p>
+                          )}
+                          {hasAssignments && (
+                            <p className="text-[9px] text-amber-400 mt-0.5 font-medium">
+                              {assignments[0].member_name}{assignments.length > 1 && ` +${assignments.length - 1}`}
+                            </p>
                           )}
                         </div>
                       );
@@ -636,10 +664,12 @@ export default function Calendar() {
               {selectedDateEvents.map(event => {
                 const project = allProjects.find(p => p.id === event.project_id);
                 const isCompleted = project?.status === 'completed';
+                const assignments = event.project_id ? projectAssignments.get(event.project_id) : undefined;
+                const hasAssignments = assignments && assignments.length > 0;
                 return (
                   <div
                     key={event.id}
-                    className={`p-3 rounded-lg border border-teal/10 group ${isCompleted ? 'opacity-50' : ''} ${event.project_id ? 'cursor-pointer hover:border-teal/25' : ''}`}
+                    className={`p-3 rounded-lg border group ${isCompleted ? 'opacity-50' : ''} ${event.project_id ? 'cursor-pointer hover:border-teal/25' : ''} ${hasAssignments ? 'border-l-2 border-l-amber-400 border-teal/10' : 'border-teal/10'}`}
                     onDoubleClick={() => openEditEvent(event)}
                   >
                     <div className="flex items-start justify-between">
@@ -649,7 +679,15 @@ export default function Calendar() {
                           style={{ backgroundColor: isCompleted ? 'var(--color-steel)' : (event.color ? tc(event.color) : 'var(--color-teal)') }}
                         />
                         <div>
-                          <h4 className="text-sm font-medium text-cream">{event.title}</h4>
+                          <div className="flex items-center gap-2">
+                            <h4 className="text-sm font-medium text-cream">{event.title}</h4>
+                            {hasAssignments && (
+                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-400/10 text-amber-400 border border-amber-400/20">
+                                {assignments[0].member_name}
+                                {assignments.length > 1 && ` +${assignments.length - 1}`}
+                              </span>
+                            )}
+                          </div>
                           {event.client_name && (
                             <p className="text-[10px] text-steel">{event.client_name} • {event.project_name}</p>
                           )}

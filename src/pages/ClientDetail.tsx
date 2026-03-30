@@ -49,6 +49,7 @@ export default function ClientDetail() {
   const [allProjects, setAllProjects] = useState<Project[]>([]);
   const [showProjectForm, setShowProjectForm] = useState(false);
   const [allClients, setAllClients] = useState<Client[]>([]);
+  const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
 
   // Recording state
   const [isRecording, setIsRecording] = useState(false);
@@ -75,7 +76,7 @@ export default function ClientDetail() {
 
   async function loadData() {
     try {
-      const [clientData, projectsData, notesData, recordingsData, invoicesData, contractsData, clientsData] = await Promise.all([
+      const [clientData, projectsData, notesData, recordingsData, invoicesData, contractsData, clientsData, teamMembersData] = await Promise.all([
         window.electronAPI.getClient(id!),
         window.electronAPI.getProjects(id!),
         window.electronAPI.getNotes(),
@@ -83,6 +84,7 @@ export default function ClientDetail() {
         window.electronAPI.getClientInvoices(id!),
         window.electronAPI.getContracts(id!),
         window.electronAPI.getClients(),
+        window.electronAPI.getTeamMembers(),
       ]);
       setClient(clientData);
       setProjects(projectsData);
@@ -92,6 +94,7 @@ export default function ClientDetail() {
       setInvoices(invoicesData);
       setContracts(contractsData);
       setAllClients(clientsData);
+      setTeamMembers(teamMembersData);
     } catch (err) {
       console.error('Failed to load client data:', err);
     } finally {
@@ -99,7 +102,7 @@ export default function ClientDetail() {
     }
   }
 
-  async function handleCreateProject(data: { project: Partial<Project>; timeSlots: TimeSlot[] }) {
+  async function handleCreateProject(data: { project: Partial<Project>; timeSlots: TimeSlot[]; teamMemberIds?: string[] }) {
     try {
       const created = await window.electronAPI.createProject(data.project);
       for (const slot of data.timeSlots) {
@@ -113,6 +116,12 @@ export default function ClientDetail() {
           type: 'work',
           color: data.project.color || allClients.find(c => c.id === data.project.client_id)?.color,
         });
+      }
+      // Create team member assignments
+      if (data.teamMemberIds && data.teamMemberIds.length > 0) {
+        for (const memberId of data.teamMemberIds) {
+          await window.electronAPI.assignMemberToProject(memberId, created.id);
+        }
       }
       await window.electronAPI.updateProject(created.id, { is_hours_distributed: 1 });
       setShowProjectForm(false);
@@ -393,6 +402,7 @@ export default function ClientDetail() {
           {showProjectForm && (
             <ProjectForm
               clients={allClients}
+              teamMembers={teamMembers}
               defaultClientId={id}
               onSubmit={handleCreateProject}
               onClose={() => setShowProjectForm(false)}

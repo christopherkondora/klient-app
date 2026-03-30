@@ -242,19 +242,13 @@ function TeamMemberForm({ member, onSubmit, onClose }: {
   const [employmentType, setEmploymentType] = useState<TeamMember['employment_type']>(member?.employment_type || 'employee');
   const [notes, setNotes] = useState(member?.notes || '');
 
-  const inputClass = "w-full px-3 py-2 bg-surface-900 border border-teal/10 rounded-lg text-sm text-cream focus:outline-none focus:ring-2 focus:ring-teal/30";
-
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onDoubleClick={onClose}>
-      <div className="bg-surface-800 rounded-xl border border-teal/15 p-6 w-full max-w-md shadow-2xl max-h-[90vh] overflow-y-auto" onDoubleClick={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between mb-5">
-          <h2 className="font-pixel text-[14px] text-cream">
-            {member ? 'Csapattag szerkesztése' : 'Új csapattag'}
-          </h2>
-          <button onClick={onClose} className="p-1 rounded hover:bg-teal/10 text-steel hover:text-cream">
-            <X width={14} height={14} />
-          </button>
-        </div>
+      <div className="bg-surface-800 rounded-2xl border border-teal/15 w-full max-w-sm shadow-2xl overflow-hidden" onDoubleClick={e => e.stopPropagation()}>
+
+        {/* Header accent */}
+        <div className="h-1 bg-gradient-to-r from-teal via-steel to-teal/30" />
+
         <form
           onSubmit={e => {
             e.preventDefault();
@@ -269,34 +263,94 @@ function TeamMemberForm({ member, onSubmit, onClose }: {
               notes: notes.trim() || null,
             });
           }}
-          className="space-y-4"
+          className="p-5"
         >
-          <div>
-            <label className="block text-xs font-medium text-steel mb-1">Név *</label>
-            <input type="text" value={name} onChange={e => setName(e.target.value)} className={inputClass} placeholder="Teljes név" required />
+          <div className="flex items-center justify-between mb-5">
+            <h2 className="font-pixel text-[14px] text-cream">
+              {member ? 'Csapattag szerkesztése' : 'Új csapattag'}
+            </h2>
+            <button type="button" onClick={onClose} className="p-1.5 rounded-lg hover:bg-teal/10 text-steel hover:text-cream cursor-pointer transition-colors duration-150 ease-out">
+              <X width={14} height={14} />
+            </button>
           </div>
-          <div className="grid grid-cols-2 gap-3">
+
+          {/* Name — hero-style input */}
+          <div className="flex items-center gap-3 mb-5">
+            <div className="w-10 h-10 rounded-lg bg-teal/15 border border-teal/20 flex items-center justify-center text-teal font-bold text-sm shrink-0">
+              {name ? name.charAt(0).toUpperCase() : '?'}
+            </div>
+            <input
+              type="text"
+              value={name}
+              onChange={e => setName(e.target.value)}
+              className="flex-1 px-0 py-2 bg-transparent border-b border-teal/15 text-cream text-lg font-medium focus:outline-none focus:border-teal/40 placeholder:text-steel/50 transition-colors"
+              placeholder="Csapattag neve..."
+              required
+              autoFocus
+            />
+          </div>
+
+          {/* Contact row */}
+          <div className="grid grid-cols-2 gap-3 mb-4">
             <div>
-              <label className="block text-xs font-medium text-steel mb-1">Email</label>
-              <input type="email" value={email} onChange={e => setEmail(e.target.value)} className={inputClass} placeholder="email@pelda.hu" />
+              <span className="text-[10px] text-steel tracking-wider uppercase mb-1 block">Email</span>
+              <div className="flex items-center gap-2 border-b border-teal/8 py-1.5">
+                <Mail width={12} height={12} className="text-steel/60 shrink-0" />
+                <input
+                  type="email"
+                  value={email}
+                  onChange={e => setEmail(e.target.value)}
+                  className="flex-1 bg-transparent text-sm text-cream focus:outline-none placeholder:text-steel/40"
+                  placeholder="email@pelda.hu"
+                />
+              </div>
             </div>
             <div>
-              <label className="block text-xs font-medium text-steel mb-1">Telefon</label>
-              <input type="text" value={phone} onChange={e => setPhone(e.target.value)} className={inputClass} placeholder="+36 ..." />
+              <span className="text-[10px] text-steel tracking-wider uppercase mb-1 block">Telefon</span>
+              <div className="flex items-center gap-2 border-b border-teal/8 py-1.5">
+                <Phone width={12} height={12} className="text-steel/60 shrink-0" />
+                <input
+                  type="text"
+                  value={phone}
+                  onChange={e => setPhone(e.target.value)}
+                  className="flex-1 bg-transparent text-sm text-cream focus:outline-none placeholder:text-steel/40"
+                  placeholder="+36 ..."
+                />
+              </div>
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-3">
+
+          {/* Role + Hourly Rate */}
+          <div className="grid grid-cols-2 gap-3 mb-4">
             <div>
-              <label className="block text-xs font-medium text-steel mb-1">Pozíció</label>
-              <input type="text" value={role} onChange={e => setRole(e.target.value)} className={inputClass} placeholder="pl. Designer" />
+              <span className="text-[10px] text-steel tracking-wider uppercase mb-1 block">Pozíció</span>
+              <div className="flex items-center gap-2 border-b border-teal/8 py-1.5">
+                <Briefcase width={12} height={12} className="text-steel/60 shrink-0" />
+                <input
+                  type="text"
+                  value={role}
+                  onChange={e => setRole(e.target.value)}
+                  className="flex-1 bg-transparent text-sm text-cream focus:outline-none placeholder:text-steel/40"
+                  placeholder="pl. Designer"
+                />
+              </div>
             </div>
             <div>
-              <label className="block text-xs font-medium text-steel mb-1">Óradíj (Ft)</label>
-              <input type="number" value={hourlyRate} onChange={e => setHourlyRate(e.target.value)} className={inputClass} placeholder="0" min="0" />
+              <span className="text-[10px] text-steel tracking-wider uppercase mb-1 block">Óradíj (Ft)</span>
+              <input
+                type="number"
+                value={hourlyRate}
+                onChange={e => setHourlyRate(e.target.value)}
+                className="w-full px-0 py-1.5 bg-transparent border-b border-teal/8 text-sm text-cream focus:outline-none focus:border-teal/25 placeholder:text-steel/40 transition-colors"
+                placeholder="0"
+                min="0"
+              />
             </div>
           </div>
-          <div>
-            <label className="block text-xs font-medium text-steel mb-1">Foglalkoztatás típusa</label>
+
+          {/* Employment Type */}
+          <div className="mb-4">
+            <span className="text-[10px] text-steel tracking-wider uppercase mb-1.5 block">Foglalkoztatás típusa</span>
             <div className="flex gap-2">
               {EMPLOYMENT_TYPES.map(t => (
                 <button
@@ -314,20 +368,26 @@ function TeamMemberForm({ member, onSubmit, onClose }: {
               ))}
             </div>
           </div>
-          <div>
-            <label className="block text-xs font-medium text-steel mb-1">Megjegyzés</label>
+
+          {/* Notes */}
+          <div className="mb-4">
+            <span className="text-[10px] text-steel tracking-wider uppercase mb-1 block">Megjegyzés</span>
             <textarea
               value={notes}
               onChange={e => setNotes(e.target.value)}
-              className={`${inputClass} resize-none`}
+              className="w-full px-0 py-1.5 bg-transparent border-b border-teal/8 text-sm text-cream focus:outline-none focus:border-teal/25 placeholder:text-steel/40 transition-colors resize-none"
               rows={2}
               placeholder="Bármilyen megjegyzés..."
             />
           </div>
-          <div className="flex justify-end gap-2 pt-2">
-            <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-steel hover:bg-teal/10 rounded-lg">Mégse</button>
-            <button type="submit" className="px-4 py-2 text-sm bg-teal text-cream rounded-lg hover:bg-teal/80">
-              {member ? 'Mentés' : 'Hozzáadás'}
+
+          {/* Actions */}
+          <div className="flex justify-end gap-2 mt-6">
+            <button type="button" onClick={onClose} className="px-4 py-2 text-xs text-steel hover:text-cream transition-colors duration-150 ease-out cursor-pointer">
+              Mégse
+            </button>
+            <button type="submit" className="px-5 py-2 bg-teal text-cream rounded-lg text-xs font-medium hover:bg-teal/80 transition-colors duration-150 ease-out cursor-pointer">
+              {member ? 'Mentés' : 'Létrehozás'}
             </button>
           </div>
         </form>

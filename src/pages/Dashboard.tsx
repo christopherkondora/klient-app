@@ -40,6 +40,7 @@ export default function Dashboard() {
   const [clockTime, setClockTime] = useState(new Date());
   const [showProjectForm, setShowProjectForm] = useState(false);
   const [showClientForm, setShowClientForm] = useState(false);
+  const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
 
   useEffect(() => {
     loadData();
@@ -56,18 +57,20 @@ export default function Dashboard() {
 
   async function loadData() {
     try {
-      const [statsData, notesData, deadlinesData, clientsData, projectsData] = await Promise.all([
+      const [statsData, notesData, deadlinesData, clientsData, projectsData, teamMembersData] = await Promise.all([
         window.electronAPI.getDashboardStats(),
         window.electronAPI.getNotes(),
         window.electronAPI.getUpcomingDeadlines(),
         window.electronAPI.getClients(),
         window.electronAPI.getProjects(),
+        window.electronAPI.getTeamMembers(),
       ]);
       setStats(statsData);
       setRecentNotes(notesData.slice(0, 2));
       setDeadlines(deadlinesData);
       setClients(clientsData);
       setProjects(projectsData.filter(p => p.status === 'active'));
+      setTeamMembers(teamMembersData);
     } catch (err) {
       console.error('Failed to load dashboard data:', err);
     } finally {
@@ -86,7 +89,7 @@ export default function Dashboard() {
     }
   }
 
-  async function handleCreateProject(data: { project: Partial<Project>; timeSlots: TimeSlot[] }) {
+  async function handleCreateProject(data: { project: Partial<Project>; timeSlots: TimeSlot[]; teamMemberIds?: string[] }) {
     try {
       const created = await window.electronAPI.createProject(data.project);
       for (const slot of data.timeSlots) {
@@ -100,6 +103,12 @@ export default function Dashboard() {
           type: 'work',
           color: data.project.color || clients.find(c => c.id === data.project.client_id)?.color,
         });
+      }
+      // Create team member assignments
+      if (data.teamMemberIds && data.teamMemberIds.length > 0) {
+        for (const memberId of data.teamMemberIds) {
+          await window.electronAPI.assignMemberToProject(memberId, created.id);
+        }
       }
       await window.electronAPI.updateProject(created.id, { is_hours_distributed: 1 });
       setShowProjectForm(false);
@@ -436,6 +445,7 @@ export default function Dashboard() {
       {showProjectForm && (
         <ProjectForm
           clients={clients}
+          teamMembers={teamMembers}
           onSubmit={handleCreateProject}
           onClose={() => setShowProjectForm(false)}
         />

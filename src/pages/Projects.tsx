@@ -30,6 +30,7 @@ export default function Projects() {
   const tc = useThemedColor();
   const [projects, setProjects] = useState<Project[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
+  const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
   const [invoicedProjectIds, setInvoicedProjectIds] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
@@ -43,13 +44,15 @@ export default function Projects() {
 
   async function loadData() {
     try {
-      const [projectsData, clientsData, invoicesData] = await Promise.all([
+      const [projectsData, clientsData, invoicesData, teamMembersData] = await Promise.all([
         window.electronAPI.getProjects(),
         window.electronAPI.getClients(),
         window.electronAPI.getInvoices(),
+        window.electronAPI.getTeamMembers(),
       ]);
       setProjects(projectsData);
       setClients(clientsData);
+      setTeamMembers(teamMembersData);
       setInvoicedProjectIds(new Set(invoicesData.filter(i => i.project_id).map(i => i.project_id!)));
     } catch (err) {
       console.error('Failed to load projects:', err);
@@ -58,7 +61,7 @@ export default function Projects() {
     }
   }
 
-  async function handleCreate(data: { project: Partial<Project>; timeSlots: TimeSlot[] }) {
+  async function handleCreate(data: { project: Partial<Project>; timeSlots: TimeSlot[]; teamMemberIds?: string[] }) {
     try {
       const created = await window.electronAPI.createProject(data.project);
       // Create calendar events for each time slot
@@ -73,6 +76,12 @@ export default function Projects() {
           type: 'work',
           color: data.project.color || clients.find(c => c.id === data.project.client_id)?.color,
         });
+      }
+      // Create team member assignments
+      if (data.teamMemberIds && data.teamMemberIds.length > 0) {
+        for (const memberId of data.teamMemberIds) {
+          await window.electronAPI.assignMemberToProject(memberId, created.id);
+        }
       }
       // Mark hours as distributed
       await window.electronAPI.updateProject(created.id, { is_hours_distributed: 1 });
@@ -279,6 +288,7 @@ export default function Projects() {
       {showForm && (
         <ProjectForm
           clients={clients}
+          teamMembers={teamMembers}
           onSubmit={handleCreate}
           onClose={() => setShowForm(false)}
         />
@@ -295,9 +305,10 @@ export interface TimeSlot {
   duration: number;
 }
 
-export function ProjectForm({ clients, onSubmit, onClose, defaultClientId, editProject }: {
+export function ProjectForm({ clients, teamMembers = [], onSubmit, onClose, defaultClientId, editProject }: {
   clients: Client[];
-  onSubmit: (data: { project: Partial<Project>; timeSlots: TimeSlot[] }) => void;
+  teamMembers?: TeamMember[];
+  onSubmit: (data: { project: Partial<Project>; timeSlots: TimeSlot[]; teamMemberIds?: string[] }) => void;
   onClose: () => void;
   defaultClientId?: string;
   editProject?: Project;
@@ -316,6 +327,7 @@ export function ProjectForm({ clients, onSubmit, onClose, defaultClientId, editP
   const [estimatedHours, setEstimatedHours] = useState(editProject ? String(editProject.estimated_hours) : '');
   const [priority, setPriority] = useState<'low' | 'medium' | 'high' | 'urgent'>(editProject?.priority || 'medium');
   const [projectColor, setProjectColor] = useState(editProject?.color || '');
+  const [selectedTeamMembers, setSelectedTeamMembers] = useState<string[]>([]);
 
   // Auto-generate color when client changes
   const selectedClient = clients.find(c => c.id === clientId);
@@ -353,6 +365,7 @@ export function ProjectForm({ clients, onSubmit, onClose, defaultClientId, editP
           color: projectColor || null,
         },
         timeSlots: [],
+        teamMemberIds: selectedTeamMembers,
       });
     } else {
       setStep(2);
@@ -454,6 +467,44 @@ export function ProjectForm({ clients, onSubmit, onClose, defaultClientId, editP
                   placeholder="Projekt leírása..."
                 />
               </div>
+
+              {/* Team Member Assignment */}
+              {teamMembers.length > 0 && (
+                <div>
+                  <span className="text-[10px] text-steel tracking-wider uppercase mb-1.5 block">Csapattagok</span>
+                  <div className="flex flex-wrap gap-2">
+                    {teamMembers.map(member => {
+                      const isSelected = selectedTeamMembers.includes(member.id);
+                      return (
+                        <button
+                          key={member.id}
+                          type="button"
+                          onClick={() => {
+                            if (isSelected) {
+                              setSelectedTeamMembers(prev => prev.filter(id => id !== member.id));
+                            } else {
+                              setSelectedTeamMembers(prev => [...prev, member.id]);
+                            }
+                          }}
+                          className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-medium transition-all duration-150 ease-out cursor-pointer ${
+                            isSelected
+                              ? 'border-teal bg-teal/15 text-cream'
+                              : 'border-teal/10 text-steel hover:border-teal/25 hover:text-ash'
+                          }`}
+                        >
+                          <div className={`w-1.5 h-1.5 rounded-full ${isSelected ? 'bg-teal' : 'bg-steel/40'}`} />
+                          {member.name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {selectedTeamMembers.length > 0 && (
+                    <p className="text-[10px] text-steel mt-1.5">
+                      {selectedTeamMembers.length} csapattag kiválasztva
+                    </p>
+                  )}
+                </div>
+              )}
 
               {/* Deadline + Estimated hours */}
               <div className="grid grid-cols-2 gap-3">
@@ -582,6 +633,7 @@ export function ProjectForm({ clients, onSubmit, onClose, defaultClientId, editP
                         color: projectColor || null,
                       },
                       timeSlots,
+                      teamMemberIds: selectedTeamMembers,
                     });
                   }}
                   className={`px-5 py-2 text-xs rounded-lg font-medium transition-colors duration-150 ease-out ${
