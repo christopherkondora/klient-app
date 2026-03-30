@@ -36,7 +36,10 @@
     ],
     "win": {
       "icon": "assets/icon.ico",
-      "target": "nsis"
+      "target": "nsis",
+      "certificateSubjectName": "Klient",
+      "signingHashAlgorithms": ["sha256"],
+      "signDlls": false
     },
     "nsis": {
       "oneClick": false,
