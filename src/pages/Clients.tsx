@@ -357,14 +357,169 @@ export function ClientForm({ client, onSubmit, onClose }: { client: Client | nul
   const [phone, setPhone] = useState(client?.phone || '');
   const [company, setCompany] = useState(client?.company || '');
   const [address, setAddress] = useState(client?.address || '');
+  const [postalCode, setPostalCode] = useState(client?.postal_code || '');
+  const [city, setCity] = useState(client?.city || '');
+  const [street, setStreet] = useState(client?.street || '');
+  const [addressLine2, setAddressLine2] = useState(client?.address_line2 || '');
+  const [taxNumber, setTaxNumber] = useState(client?.tax_number || '');
   const [color, setColor] = useState(client?.color || '#598392');
 
   const COLORS = ['#598392', '#AEC3B0', '#124559', '#10b981', '#3b82f6', '#8b5cf6', '#ef4444', '#14b8a6'];
 
+  function formatPhoneNumber(value: string): string {
+    const digits = value.replace(/\D/g, '');
+    if (digits.length === 0) return '';
+
+    let formatted = '';
+    if (digits.startsWith('36')) {
+      formatted = '+36';
+      const rest = digits.slice(2);
+      if (rest.length > 0) formatted += ' ' + rest.slice(0, 2);
+      if (rest.length > 2) formatted += ' ' + rest.slice(2, 5);
+      if (rest.length > 5) formatted += ' ' + rest.slice(5, 9);
+    } else if (digits.startsWith('06')) {
+      formatted = '+36';
+      const rest = digits.slice(2);
+      if (rest.length > 0) formatted += ' ' + rest.slice(0, 2);
+      if (rest.length > 2) formatted += ' ' + rest.slice(2, 5);
+      if (rest.length > 5) formatted += ' ' + rest.slice(5, 9);
+    } else {
+      formatted = '+36 ' + digits.slice(0, 2);
+      if (digits.length > 2) formatted += ' ' + digits.slice(2, 5);
+      if (digits.length > 5) formatted += ' ' + digits.slice(5, 9);
+    }
+    return formatted;
+  }
+
+  function handlePhoneChange(value: string) {
+    const formatted = formatPhoneNumber(value);
+    setPhone(formatted);
+  }
+
+  function getCityFromPostalCode(postalCode: string): string {
+    const code = postalCode.trim();
+    if (code.length !== 4 || !/^\d{4}$/.test(code)) return '';
+
+    const firstDigit = code[0];
+    const firstTwo = code.slice(0, 2);
+
+    // Budapest districts (1xxx)
+    if (firstDigit === '1') return 'Budapest';
+
+    // Major cities by postal code prefix
+    const cityMap: { [key: string]: string } = {
+      '20': 'Szentendre',
+      '21': 'Budakalász',
+      '22': 'Érd',
+      '23': 'Szigetszentmiklós',
+      '24': 'Dunaharaszti',
+      '25': 'Dunakeszi',
+      '26': 'Szentendre',
+      '27': 'Vác',
+      '28': 'Gödöllő',
+      '29': 'Monor',
+      '30': 'Cegléd',
+      '31': 'Albertirsa',
+      '32': 'Jászberény',
+      '33': 'Szolnok',
+      '34': 'Törökszentmiklós',
+      '35': 'Jászapáti',
+      '36': 'Eger',
+      '37': 'Gyöngyös',
+      '38': 'Hatvan',
+      '39': 'Salgótarján',
+      '40': 'Tiszafüred',
+      '41': 'Mezőkövesd',
+      '42': 'Tiszaújváros',
+      '43': 'Miskolc',
+      '44': 'Ózd',
+      '45': 'Sátoraljaújhely',
+      '46': 'Miskolc',
+      '47': 'Nyíregyháza',
+      '48': 'Nyírbátor',
+      '49': 'Kisvárda',
+      '50': 'Tokaj',
+      '52': 'Debrecen',
+      '53': 'Hajdúböszörmény',
+      '54': 'Hajdúnánás',
+      '55': 'Berettyóújfalu',
+      '56': 'Szeghalom',
+      '57': 'Gyula',
+      '58': 'Orosháza',
+      '59': 'Szarvas',
+      '60': 'Kecskemét',
+      '61': 'Kiskunfélegyháza',
+      '62': 'Szeged',
+      '63': 'Hódmezővásárhely',
+      '64': 'Makó',
+      '65': 'Békéscsaba',
+      '66': 'Szentes',
+      '67': 'Csongrád',
+      '68': 'Baja',
+      '69': 'Mohács',
+      '70': 'Pécs',
+      '71': 'Pécs',
+      '72': 'Szekszárd',
+      '73': 'Bonyhád',
+      '74': 'Kalocsa',
+      '75': 'Dunaföldvár',
+      '76': 'Paks',
+      '77': 'Dombóvár',
+      '78': 'Siófok',
+      '79': 'Kaposvár',
+      '80': 'Zalaegerszeg',
+      '81': 'Nagykanizsa',
+      '82': 'Letenye',
+      '83': 'Keszthely',
+      '84': 'Veszprém',
+      '85': 'Tapolca',
+      '86': 'Pápa',
+      '87': 'Győr',
+      '88': 'Szombathely',
+      '89': 'Sárvár',
+      '90': 'Sopron',
+      '91': 'Mosonmagyaróvár',
+      '92': 'Csorna',
+      '93': 'Kapuvár',
+      '94': 'Kőszeg',
+      '95': 'Szombathely',
+      '96': 'Pápa',
+      '97': 'Tatabánya',
+      '98': 'Komárom',
+      '99': 'Balatonalmádi',
+    };
+
+    return cityMap[firstTwo] || '';
+  }
+
+  function handlePostalCodeChange(value: string) {
+    const cleaned = value.replace(/\D/g, '').slice(0, 4);
+    setPostalCode(cleaned);
+
+    if (cleaned.length === 4 && !city) {
+      const detectedCity = getCityFromPostalCode(cleaned);
+      if (detectedCity) {
+        setCity(detectedCity);
+      }
+    }
+  }
+
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!name.trim()) return;
-    onSubmit({ name: name.trim(), email, phone, company, address, color });
+    onSubmit({
+      name: name.trim(),
+      email,
+      phone,
+      company,
+      address,
+      postal_code: postalCode,
+      city,
+      street,
+      address_line2: addressLine2,
+      tax_number: taxNumber,
+      color
+    });
   }
 
   return (
@@ -425,15 +580,16 @@ export function ClientForm({ client, onSubmit, onClose }: { client: Client | nul
                 <input
                   type="text"
                   value={phone}
-                  onChange={e => setPhone(e.target.value)}
+                  onChange={e => handlePhoneChange(e.target.value)}
                   className="flex-1 bg-transparent text-sm text-cream focus:outline-none placeholder:text-steel/40"
-                  placeholder="+36 ..."
+                  placeholder="+36 12 345 6789"
+                  maxLength={16}
                 />
               </div>
             </div>
           </div>
 
-          {/* Company + Address */}
+          {/* Company + Tax Number */}
           <div className="mt-4 space-y-3">
             <div>
               <span className="text-[10px] text-steel tracking-wider uppercase mb-1 block">Cég</span>
@@ -449,13 +605,60 @@ export function ClientForm({ client, onSubmit, onClose }: { client: Client | nul
               </div>
             </div>
             <div>
-              <span className="text-[10px] text-steel tracking-wider uppercase mb-1 block">Cím</span>
+              <span className="text-[10px] text-steel tracking-wider uppercase mb-1 block">Adószám</span>
               <input
                 type="text"
-                value={address}
-                onChange={e => setAddress(e.target.value)}
+                value={taxNumber}
+                onChange={e => setTaxNumber(e.target.value)}
                 className="w-full px-0 py-1.5 bg-transparent border-b border-teal/8 text-sm text-cream focus:outline-none focus:border-teal/25 placeholder:text-steel/40 transition-colors"
-                placeholder="Cím (opcionális)"
+                placeholder="12345678-1-23"
+              />
+            </div>
+          </div>
+
+          {/* Structured Address */}
+          <div className="mt-4 space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <span className="text-[10px] text-steel tracking-wider uppercase mb-1 block">Irányítószám</span>
+                <input
+                  type="text"
+                  value={postalCode}
+                  onChange={e => handlePostalCodeChange(e.target.value)}
+                  className="w-full px-0 py-1.5 bg-transparent border-b border-teal/8 text-sm text-cream focus:outline-none focus:border-teal/25 placeholder:text-steel/40 transition-colors"
+                  placeholder="1234"
+                  maxLength={4}
+                />
+              </div>
+              <div>
+                <span className="text-[10px] text-steel tracking-wider uppercase mb-1 block">Helység</span>
+                <input
+                  type="text"
+                  value={city}
+                  onChange={e => setCity(e.target.value)}
+                  className="w-full px-0 py-1.5 bg-transparent border-b border-teal/8 text-sm text-cream focus:outline-none focus:border-teal/25 placeholder:text-steel/40 transition-colors"
+                  placeholder="Budapest"
+                />
+              </div>
+            </div>
+            <div>
+              <span className="text-[10px] text-steel tracking-wider uppercase mb-1 block">Utca és házszám</span>
+              <input
+                type="text"
+                value={street}
+                onChange={e => setStreet(e.target.value)}
+                className="w-full px-0 py-1.5 bg-transparent border-b border-teal/8 text-sm text-cream focus:outline-none focus:border-teal/25 placeholder:text-steel/40 transition-colors"
+                placeholder="Fő utca 123"
+              />
+            </div>
+            <div>
+              <span className="text-[10px] text-steel tracking-wider uppercase mb-1 block">Emelet, ajtó (opcionális)</span>
+              <input
+                type="text"
+                value={addressLine2}
+                onChange={e => setAddressLine2(e.target.value)}
+                className="w-full px-0 py-1.5 bg-transparent border-b border-teal/8 text-sm text-cream focus:outline-none focus:border-teal/25 placeholder:text-steel/40 transition-colors"
+                placeholder="2. emelet, 3. ajtó"
               />
             </div>
           </div>

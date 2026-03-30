@@ -136,6 +136,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
   filesSelectFolder: () => ipcRenderer.invoke('files:selectFolder'),
   getFilePathForDrop: (file: File) => webUtils.getPathForFile(file),
 
+  // Team members
+  getTeamMembers: () => ipcRenderer.invoke('db:team:getAll'),
+  getTeamMember: (id: string) => ipcRenderer.invoke('db:team:get', id),
+  createTeamMember: (data: unknown) => ipcRenderer.invoke('db:team:create', data),
+  updateTeamMember: (id: string, data: unknown) => ipcRenderer.invoke('db:team:update', id, data),
+  deleteTeamMember: (id: string) => ipcRenderer.invoke('db:team:delete', id),
+
+  // Project assignments
+  getProjectAssignments: (projectId: string) => ipcRenderer.invoke('db:team:getProjectAssignments', projectId),
+  getMemberAssignments: (teamMemberId: string) => ipcRenderer.invoke('db:team:getMemberAssignments', teamMemberId),
+  assignToProject: (projectId: string, teamMemberId: string, notes?: string) => ipcRenderer.invoke('db:team:assignToProject', projectId, teamMemberId, notes),
+  unassignFromProject: (projectId: string, teamMemberId: string) => ipcRenderer.invoke('db:team:unassignFromProject', projectId, teamMemberId),
+
   // Speech recognition (Deepgram streaming)
   startDeepgramStream: () => ipcRenderer.invoke('speech:startStream'),
   sendAudioChunk: (audioBase64: string) => ipcRenderer.send('speech:sendAudio', audioBase64),

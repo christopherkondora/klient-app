@@ -172,6 +172,30 @@ function createTables() {
       notes TEXT,
       created_at TEXT DEFAULT (datetime('now'))
     );
+
+    CREATE TABLE IF NOT EXISTS team_members (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      email TEXT,
+      phone TEXT,
+      role TEXT,
+      hourly_rate REAL,
+      employment_type TEXT DEFAULT 'employee' CHECK(employment_type IN ('employee', 'contractor', 'freelancer')),
+      notes TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS project_assignments (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL,
+      team_member_id TEXT NOT NULL,
+      assigned_at TEXT DEFAULT (datetime('now')),
+      notes TEXT,
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+      FOREIGN KEY (team_member_id) REFERENCES team_members(id) ON DELETE CASCADE,
+      UNIQUE(project_id, team_member_id)
+    );
   `);
 }
 
@@ -345,6 +369,9 @@ function runMigrations() {
   if (!userColNames.includes('bank_account')) {
     db.run("ALTER TABLE user_settings ADD COLUMN bank_account TEXT DEFAULT ''");
   }
+  if (!userColNames.includes('team_mode')) {
+    db.run("ALTER TABLE user_settings ADD COLUMN team_mode INTEGER DEFAULT 0");
+  }
 
   // Client fields for contracts
   const clientCols = db.exec("PRAGMA table_info(clients)");
@@ -354,5 +381,19 @@ function runMigrations() {
   }
   if (!clientColNames.includes('representative_name')) {
     db.run("ALTER TABLE clients ADD COLUMN representative_name TEXT DEFAULT ''");
+  }
+
+  // Structured address fields for invoicing
+  if (!clientColNames.includes('postal_code')) {
+    db.run("ALTER TABLE clients ADD COLUMN postal_code TEXT DEFAULT ''");
+  }
+  if (!clientColNames.includes('city')) {
+    db.run("ALTER TABLE clients ADD COLUMN city TEXT DEFAULT ''");
+  }
+  if (!clientColNames.includes('street')) {
+    db.run("ALTER TABLE clients ADD COLUMN street TEXT DEFAULT ''");
+  }
+  if (!clientColNames.includes('address_line2')) {
+    db.run("ALTER TABLE clients ADD COLUMN address_line2 TEXT DEFAULT ''");
   }
 }

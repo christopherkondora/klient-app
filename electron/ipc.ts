@@ -14,7 +14,7 @@ function getFilesRoot(): string {
   return path.join(app.getPath('userData'), 'Files');
 }
 
-const USER_FIELDS = 'id, name, email, invoice_platform, onboarding_complete, pomodoro_project_tracking, revenue_goal_yearly, company_name, tax_number, address, bank_account, created_at';
+const USER_FIELDS = 'id, name, email, invoice_platform, onboarding_complete, pomodoro_project_tracking, revenue_goal_yearly, company_name, tax_number, address, bank_account, team_mode, created_at';
 
 /** Ensure a local user_settings row exists for a Supabase user, return it */
 function ensureLocalUser(supabaseId: string, email: string, name?: string): Record<string, unknown> {
@@ -774,8 +774,19 @@ export function registerIpcHandlers() {
       throw new Error('A szerződés generálásához kérjük, töltse ki céges adatait (cégnév, cím) a Beállítások menüben.');
     }
 
+    // Build client address from structured fields or use legacy address
+    let clientAddress = client.address || '';
+    if (client.postal_code || client.city || client.street) {
+      const parts = [];
+      if (client.postal_code) parts.push(client.postal_code);
+      if (client.city) parts.push(client.city);
+      if (client.street) parts.push(client.street);
+      if (client.address_line2) parts.push(client.address_line2);
+      clientAddress = parts.join(', ');
+    }
+
     // Validate client has required information for contracts
-    if (!client.address) {
+    if (!clientAddress) {
       throw new Error('A szerződés generálásához az ügyfél címe kötelező. Kérjük, egészítse ki az ügyfél adatait.');
     }
 
@@ -791,7 +802,7 @@ export function registerIpcHandlers() {
       userEmail: user.email || '',
       clientName: client.name || '',
       clientCompany: client.company || '',
-      clientAddress: client.address || '',
+      clientAddress: clientAddress,
       clientTaxNumber: client.tax_number || '',
       clientRepresentative: client.representative_name || '',
       clientEmail: client.email || '',
@@ -1347,5 +1358,89 @@ export function registerIpcHandlers() {
       : await dialog.showOpenDialog({ properties: ['openDirectory'] });
     if (result.canceled) return [];
     return result.filePaths;
+  });
+
+  // ============ TEAM MEMBERS ============
+
+  ipcMain.handle('db:team:getAll', () => {
+    return queryAll('SELECT * FROM team_members ORDER BY name ASC');
+  });
+
+  ipcMain.handle('db:team:get', (_event, id: string) => {
+    return queryOne('SELECT * FROM team_members WHERE id = ?', [id]);
+  });
+
+  ipcMain.handle('db:team:create', (_event, data: Record<string, unknown>) => {
+    const id = uuidv4();
+    execute(
+      `INSERT INTO team_members (id, name, email, phone, role, hourly_rate, employment_type, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [id, data.name, data.email || null, data.phone || null, data.role || null, data.hourly_rate || null, data.employment_type || 'employee', data.notes || null]
+    );
+    return queryOne('SELECT * FROM team_members WHERE id = ?', [id]);
+  });
+
+  ipcMain.handle('db:team:update', (_event, id: string, data: Record<string, unknown>) => {
+    const allowedFields = ['name', 'email', 'phone', 'role', 'hourly_rate', 'employment_type', 'notes'];
+    const filteredData: Record<string, unknown> = {};
+    for (const key of allowedFields) {
+      if (key in data) filteredData[key] = data[key];
+    }
+    const fields = Object.keys(filteredData).map(k => `${k} = ?`).join(', ');
+    const values = Object.values(filteredData);
+    if (fields) {
+      execute(`UPDATE team_members SET ${fields}, updated_at = datetime('now') WHERE id = ?`, [...values, id]);
+    }
+    return queryOne('SELECT * FROM team_members WHERE id = ?', [id]);
+  });
+
+  ipcMain.handle('db:team:delete', (_event, id: string) => {
+    execute('DELETE FROM team_members WHERE id = ?', [id]);
+    return { success: true };
+  });
+
+  // ============ PROJECT ASSIGNMENTS ============
+
+  ipcMain.handle('db:team:getProjectAssignments', (_event, projectId: string) => {
+    return queryAll(
+      `SELECT pa.*, tm.name as member_name, tm.email as member_email, tm.role as member_role
+       FROM project_assignments pa
+       JOIN team_members tm ON pa.team_member_id = tm.id
+       WHERE pa.project_id = ?
+       ORDER BY tm.name ASC`,
+      [projectId]
+    );
+  });
+
+  ipcMain.handle('db:team:getMemberAssignments', (_event, teamMemberId: string) => {
+    return queryAll(
+      `SELECT pa.*, p.name as project_name, p.status as project_status
+       FROM project_assignments pa
+       JOIN projects p ON pa.project_id = p.id
+       WHERE pa.team_member_id = ?
+       ORDER BY p.name ASC`,
+      [teamMemberId]
+    );
+  });
+
+  ipcMain.handle('db:team:assignToProject', (_event, projectId: string, teamMemberId: string, notes?: string) => {
+    const existing = queryOne(
+      'SELECT id FROM project_assignments WHERE project_id = ? AND team_member_id = ?',
+      [projectId, teamMemberId]
+    );
+    if (existing) return existing;
+    const id = uuidv4();
+    execute(
+      'INSERT INTO project_assignments (id, project_id, team_member_id, notes) VALUES (?, ?, ?, ?)',
+      [id, projectId, teamMemberId, notes || null]
+    );
+    return queryOne('SELECT * FROM project_assignments WHERE id = ?', [id]);
+  });
+
+  ipcMain.handle('db:team:unassignFromProject', (_event, projectId: string, teamMemberId: string) => {
+    execute(
+      'DELETE FROM project_assignments WHERE project_id = ? AND team_member_id = ?',
+      [projectId, teamMemberId]
+    );
+    return { success: true };
   });
 }

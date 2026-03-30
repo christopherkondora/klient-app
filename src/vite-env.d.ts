@@ -128,6 +128,19 @@ interface ElectronAPI {
   filesSelectFolder: () => Promise<string[]>;
   getFilePathForDrop: (file: File) => string;
 
+  // Team members
+  getTeamMembers: () => Promise<TeamMember[]>;
+  getTeamMember: (id: string) => Promise<TeamMember>;
+  createTeamMember: (data: Partial<TeamMember>) => Promise<TeamMember>;
+  updateTeamMember: (id: string, data: Partial<TeamMember>) => Promise<TeamMember>;
+  deleteTeamMember: (id: string) => Promise<{ success: boolean }>;
+
+  // Project assignments
+  getProjectAssignments: (projectId: string) => Promise<ProjectAssignment[]>;
+  getMemberAssignments: (teamMemberId: string) => Promise<MemberAssignment[]>;
+  assignToProject: (projectId: string, teamMemberId: string, notes?: string) => Promise<ProjectAssignment>;
+  unassignFromProject: (projectId: string, teamMemberId: string) => Promise<{ success: boolean }>;
+
   // Speech recognition (Deepgram streaming)
   startDeepgramStream: () => Promise<{ ok: boolean; error?: string }>;
   sendAudioChunk: (audioBase64: string) => void;
@@ -150,6 +163,10 @@ interface Client {
   phone: string;
   company: string;
   address: string;
+  postal_code: string;
+  city: string;
+  street: string;
+  address_line2: string;
   tax_number: string;
   representative_name: string;
   notes: string;
@@ -350,6 +367,40 @@ interface DashboardStats {
   thisYearRevenue: number;
 }
 
+interface TeamMember {
+  id: string;
+  name: string;
+  email: string | null;
+  phone: string | null;
+  role: string | null;
+  hourly_rate: number | null;
+  employment_type: 'employee' | 'contractor' | 'freelancer';
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface ProjectAssignment {
+  id: string;
+  project_id: string;
+  team_member_id: string;
+  assigned_at: string;
+  notes: string | null;
+  member_name?: string;
+  member_email?: string;
+  member_role?: string;
+}
+
+interface MemberAssignment {
+  id: string;
+  project_id: string;
+  team_member_id: string;
+  assigned_at: string;
+  notes: string | null;
+  project_name?: string;
+  project_status?: string;
+}
+
 interface UserSettings {
   id: string;
   name: string;
@@ -362,6 +413,7 @@ interface UserSettings {
   tax_number: string;
   address: string;
   bank_account: string;
+  team_mode: number;
   created_at: string;
 }
 

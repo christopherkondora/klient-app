@@ -309,9 +309,19 @@ export default function ClientDetail() {
                   <Phone width={14} height={14} /> {client.phone}
                 </span>
               )}
-              {client.address && (
+              {(client.street || client.city || client.address) && (
                 <span className="flex items-center gap-1.5 text-sm text-steel">
-                  <MapPin width={14} height={14} /> {client.address}
+                  <MapPin width={14} height={14} />
+                  {client.street || client.city ? (
+                    <>
+                      {client.postal_code && `${client.postal_code} `}
+                      {client.city && `${client.city}, `}
+                      {client.street}
+                      {client.address_line2 && `, ${client.address_line2}`}
+                    </>
+                  ) : (
+                    client.address
+                  )}
                 </span>
               )}
             </div>
