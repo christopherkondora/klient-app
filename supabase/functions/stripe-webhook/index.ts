@@ -184,7 +184,7 @@ async function createBillingoInvoice(params: {
       },
       body: JSON.stringify({
         partner_id: partnerId,
-        block_id: 314533,
+        block_id: 315117,
         type: 'invoice',
         fulfillment_date: new Date().toISOString().split('T')[0],
         due_date: new Date().toISOString().split('T')[0],
