@@ -298,11 +298,13 @@ Deno.serve(async (req) => {
         const mode = obj.mode as string;
         const metadata = obj.metadata as Record<string, string> || {};
         const plan = metadata.plan || 'monthly';
+        const paymentStatus = obj.payment_status as string;
 
         console.log('[Webhook] Checkout completed:', {
           user_id: userId,
           mode,
           plan,
+          payment_status: paymentStatus,
           customer_id: stripeCustomerId,
           email: customerEmail,
         });
@@ -312,6 +314,20 @@ Deno.serve(async (req) => {
             session_id: obj.id,
             metadata,
             client_reference_id: obj.client_reference_id,
+          });
+          break;
+        }
+
+        // CRITICAL: Only process successful payments
+        // checkout.session.completed fires on form submission, NOT on payment success
+        // payment_status can be: 'paid', 'unpaid', or 'no_payment_required'
+        if (paymentStatus !== 'paid' && paymentStatus !== 'no_payment_required') {
+          console.log('[Webhook] Checkout completed but payment not successful:', {
+            user_id: userId,
+            payment_status: paymentStatus,
+            session_id: obj.id,
+            plan,
+            mode,
           });
           break;
         }
