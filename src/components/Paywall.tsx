@@ -52,6 +52,8 @@ export default function Paywall({ overlay, onClose }: { overlay?: boolean; onClo
   const minTimeRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const postCheckoutTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const successHandled = useRef(false);
+  const webviewRef = useRef<HTMLWebViewElement | null>(null);
+  const webviewListenersAttached = useRef(false);
 
   const isPaidActive = subscription?.status === 'active' && subscription?.plan !== 'trial';
 
@@ -83,6 +85,8 @@ export default function Paywall({ overlay, onClose }: { overlay?: boolean; onClo
   const closeCheckout = () => {
     stopPolling();
     setCheckoutUrl(null);
+    webviewRef.current = null;
+    webviewListenersAttached.current = false;
     // Enter post-checkout mode: poll aggressively for 45s
     setPostCheckout(true);
     refresh();
@@ -277,7 +281,12 @@ export default function Paywall({ overlay, onClose }: { overlay?: boolean; onClo
                 // @ts-expect-error webview events
                 onDidFinishLoad={() => setWebviewLoading(false)}
                 ref={(el: HTMLWebViewElement | null) => {
-                  if (el) {
+                  if (el && el !== webviewRef.current) {
+                    webviewRef.current = el;
+                    webviewListenersAttached.current = false;
+                  }
+                  if (el && !webviewListenersAttached.current) {
+                    webviewListenersAttached.current = true;
                     el.addEventListener('did-finish-load', () => setWebviewLoading(false));
                     el.addEventListener('did-fail-load', () => setWebviewLoading(false));
                     el.addEventListener('did-navigate', (e: any) => {

@@ -33,6 +33,7 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [celebratingPayment, setCelebratingPaymentRaw] = useState(false);
   const initialLoadDone = useRef(false);
+  const prevSubRef = useRef<Subscription | null>(null);
 
   // Safety: auto-clear celebration after 6s no matter what
   const celebrationTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -54,18 +55,19 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
     }
     try {
       const sub = await window.electronAPI.getSubscription();
-      setSubscription(prev => {
-        const next = sub ?? prev;
-        // Only detect transition after initial subscription load (not on app startup)
-        if (initialLoadDone.current) {
-          const wasPaid = prev?.status === 'active' && prev?.plan !== 'trial';
-          const isPaid = next?.status === 'active' && next?.plan !== 'trial';
-          if (!wasPaid && isPaid) {
-            setCelebratingPayment(true);
-          }
+      const next = sub ?? prevSubRef.current;
+
+      // Detect trial/expired → paid transition (outside state updater to avoid side-effect race)
+      if (initialLoadDone.current && next) {
+        const wasPaid = prevSubRef.current?.status === 'active' && prevSubRef.current?.plan !== 'trial';
+        const isPaid = next.status === 'active' && next.plan !== 'trial';
+        if (!wasPaid && isPaid) {
+          setCelebratingPayment(true);
         }
-        return next;
-      });
+      }
+
+      prevSubRef.current = next;
+      setSubscription(next);
     } catch {
       // Don't overwrite existing subscription on transient errors
     } finally {
