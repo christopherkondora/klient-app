@@ -15,10 +15,10 @@ export default function Layout({ paywalled }: { paywalled?: boolean } = {}) {
   return (
     <div className="flex flex-col h-screen bg-ink text-cream">
       <TitleBar />
-      <UpdateBanner />
+      {!paywalled && <UpdateBanner />}
       {!paywalled && <TrialBanner />}
       <div className="flex flex-1 overflow-hidden">
-        <Sidebar onOpenShortcut={setActiveShortcutUrl} activeShortcutUrl={activeShortcutUrl} />
+        {!paywalled && <Sidebar onOpenShortcut={setActiveShortcutUrl} activeShortcutUrl={activeShortcutUrl} />}
         <main className={`flex-1 bg-surface-900 relative ${paywalled ? 'overflow-hidden' : 'overflow-auto'}`}>
           {/* Normal page content — always rendered so state is preserved */}
           <div className={`${paywalled ? 'h-full' : 'p-8 h-full overflow-auto'} ${activeShortcutUrl ? 'hidden' : ''}`}>
@@ -49,15 +49,19 @@ export default function Layout({ paywalled }: { paywalled?: boolean } = {}) {
           )}
         </main>
       </div>
-      <NotesPanel open={notesPanelOpen} onClose={() => setNotesPanelOpen(false)} />
-      <PomodoroTimer />
-      <button
-        onClick={() => setNotesPanelOpen(true)}
-        className="fixed bottom-6 right-6 w-14 h-14 rounded-full bg-teal text-cream shadow-lg shadow-teal/25 hover:bg-teal/80 hover:scale-105 transition-all flex items-center justify-center z-30"
-        title="Jegyzetek"
-      >
-        <StickyNote size={22} />
-      </button>
+      {!paywalled && (
+        <>
+          <NotesPanel open={notesPanelOpen} onClose={() => setNotesPanelOpen(false)} />
+          <PomodoroTimer />
+          <button
+            onClick={() => setNotesPanelOpen(true)}
+            className="fixed bottom-6 right-6 w-14 h-14 rounded-full bg-teal text-cream shadow-lg shadow-teal/25 hover:bg-teal/80 hover:scale-105 transition-all flex items-center justify-center z-30"
+            title="Jegyzetek"
+          >
+            <StickyNote size={22} />
+          </button>
+        </>
+      )}
     </div>
   );
 }
