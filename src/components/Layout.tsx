@@ -9,7 +9,7 @@ import UpdateBanner from './UpdateBanner';
 import { ArrowLeft, StickyNote } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 
-export default function Layout() {
+export default function Layout({ paywalled }: { paywalled?: boolean } = {}) {
   const { user } = useAuth();
   const teamMode = user?.team_mode === 1;
   const [activeShortcutUrl, setActiveShortcutUrl] = useState<string | null>(null);
@@ -19,16 +19,16 @@ export default function Layout() {
     <div className="flex flex-col h-screen bg-ink text-cream">
       <TitleBar />
       <UpdateBanner />
-      <TrialBanner />
+      {!paywalled && <TrialBanner />}
       <div className="flex flex-1 overflow-hidden">
         <Sidebar onOpenShortcut={setActiveShortcutUrl} activeShortcutUrl={activeShortcutUrl} />
-        <main className="flex-1 overflow-auto bg-surface-900 relative">
+        <main className={`flex-1 bg-surface-900 relative ${paywalled ? 'overflow-hidden' : 'overflow-auto'}`}>
           {/* Normal page content — always rendered so state is preserved */}
-          <div className={`p-8 h-full overflow-auto ${activeShortcutUrl ? 'hidden' : ''}`}>
+          <div className={`${paywalled ? 'h-full' : 'p-8 h-full overflow-auto'} ${activeShortcutUrl ? 'hidden' : ''}`}>
             <Outlet context={{ openNotesPanel: () => setNotesPanelOpen(true) }} />
           </div>
           {/* Webview overlay */}
-          {activeShortcutUrl && (
+          {!paywalled && activeShortcutUrl && (
             <div className="absolute inset-0 flex flex-col z-10">
               <div className="flex items-center gap-2 px-4 py-2 bg-surface-900 border-b border-teal/10 shrink-0">
                 <button
@@ -52,15 +52,17 @@ export default function Layout() {
           )}
         </main>
       </div>
-      <NotesPanel open={notesPanelOpen} onClose={() => setNotesPanelOpen(false)} />
-      {!teamMode && <PomodoroTimer />}
-      <button
-        onClick={() => setNotesPanelOpen(true)}
-        className="fixed bottom-6 right-6 w-14 h-14 rounded-full bg-teal text-cream shadow-lg shadow-teal/25 hover:bg-teal/80 hover:scale-105 transition-all flex items-center justify-center z-30"
-        title="Jegyzetek"
-      >
-        <StickyNote size={22} />
-      </button>
+      {!paywalled && <NotesPanel open={notesPanelOpen} onClose={() => setNotesPanelOpen(false)} />}
+      {!paywalled && !teamMode && <PomodoroTimer />}
+      {!paywalled && (
+        <button
+          onClick={() => setNotesPanelOpen(true)}
+          className="fixed bottom-6 right-6 w-14 h-14 rounded-full bg-teal text-cream shadow-lg shadow-teal/25 hover:bg-teal/80 hover:scale-105 transition-all flex items-center justify-center z-30"
+          title="Jegyzetek"
+        >
+          <StickyNote size={22} />
+        </button>
+      )}
     </div>
   );
 }

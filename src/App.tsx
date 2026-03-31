@@ -48,27 +48,29 @@ export default function App() {
     return <Onboarding />;
   }
 
-  if (showPaywall) {
-    return <Paywall />;
-  }
-
   return (
     <Routes>
       {/* Stripe redirect pages (no layout, standalone) */}
       <Route path="/success" element={<PaymentSuccess />} />
       <Route path="/cancel" element={<PaymentCancel />} />
 
-      <Route element={<Layout />}>
-        <Route path="/" element={<Dashboard />} />
-        <Route path="/finances" element={<Finances />} />
-        <Route path="/clients" element={<Clients />} />
-        <Route path="/clients/:id" element={<ClientDetail />} />
-        <Route path="/projects" element={<Projects />} />
-        <Route path="/projects/:id" element={<ProjectDetail />} />
-        <Route path="/calendar" element={<Calendar />} />
-        <Route path="/team" element={<Team />} />
-        <Route path="/files" element={<Files />} />
-        <Route path="/settings" element={<Settings />} />
+      <Route element={<Layout paywalled={showPaywall} />}>
+        {showPaywall ? (
+          <Route path="*" element={<Paywall />} />
+        ) : (
+          <>
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/finances" element={<Finances />} />
+            <Route path="/clients" element={<Clients />} />
+            <Route path="/clients/:id" element={<ClientDetail />} />
+            <Route path="/projects" element={<Projects />} />
+            <Route path="/projects/:id" element={<ProjectDetail />} />
+            <Route path="/calendar" element={<Calendar />} />
+            <Route path="/team" element={<Team />} />
+            <Route path="/files" element={<Files />} />
+            <Route path="/settings" element={<Settings />} />
+          </>
+        )}
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

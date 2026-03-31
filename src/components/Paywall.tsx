@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
 import { useSubscription } from '../contexts/SubscriptionContext';
-import { useAuth } from '../contexts/AuthContext';
 import { Crown, Zap, Check, Loader2, Sparkles, X, CreditCard } from 'lucide-react';
 
 const PLANS = [
@@ -43,7 +42,6 @@ const CONFETTI_PARTICLES = Array.from({ length: 40 }, (_, i) => ({
 
 export default function Paywall({ overlay, onClose }: { overlay?: boolean; onClose?: () => void } = {}) {
   const { subscription, openCheckout, refresh, isActive, setCelebratingPayment } = useSubscription();
-  const { logout } = useAuth();
   const [error, setError] = useState('');
   const [checkingOut, setCheckingOut] = useState<string | null>(null);
   const [checkoutUrl, setCheckoutUrl] = useState<string | null>(null);
@@ -141,10 +139,7 @@ export default function Paywall({ overlay, onClose }: { overlay?: boolean; onClo
   const isTrialExpired = subscription?.status === 'expired' && subscription?.plan === 'trial';
 
   return (
-    <div className="min-h-screen bg-ink flex flex-col">
-      {/* Custom title bar area — only in standalone mode */}
-      {!overlay && <div className="h-8 bg-ink [-webkit-app-region:drag] flex-shrink-0" />}
-
+    <div className="h-full flex flex-col">
       {/* Close button for overlay mode */}
       {overlay && onClose && (
         <div className="flex justify-end px-4 pt-3 shrink-0">
@@ -157,7 +152,7 @@ export default function Paywall({ overlay, onClose }: { overlay?: boolean; onClo
         </div>
       )}
 
-      <div className="flex-1 flex flex-col items-center justify-center px-6 py-10 overflow-y-auto">
+      <div className="flex-1 flex flex-col items-center justify-center px-6">
         {/* Header */}
         <div className="text-center mb-10">
           <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-teal/20 mb-4">
@@ -249,15 +244,6 @@ export default function Paywall({ overlay, onClose }: { overlay?: boolean; onClo
           Már fizettél? Kattints az állapot frissítéséhez
         </button>
 
-        {/* Logout — only in standalone mode */}
-        {!overlay && (
-          <button
-            onClick={logout}
-            className="mt-6 text-steel/60 text-xs hover:text-steel transition-colors"
-          >
-            Kijelentkezés
-          </button>
-        )}
       </div>
 
       {/* Stripe Checkout webview modal */}
