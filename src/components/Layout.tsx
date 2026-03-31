@@ -52,17 +52,15 @@ export default function Layout({ paywalled }: { paywalled?: boolean } = {}) {
           )}
         </main>
       </div>
-      {!paywalled && <NotesPanel open={notesPanelOpen} onClose={() => setNotesPanelOpen(false)} />}
-      {!paywalled && !teamMode && <PomodoroTimer />}
-      {!paywalled && (
-        <button
-          onClick={() => setNotesPanelOpen(true)}
-          className="fixed bottom-6 right-6 w-14 h-14 rounded-full bg-teal text-cream shadow-lg shadow-teal/25 hover:bg-teal/80 hover:scale-105 transition-all flex items-center justify-center z-30"
-          title="Jegyzetek"
-        >
-          <StickyNote size={22} />
-        </button>
-      )}
+      <NotesPanel open={notesPanelOpen} onClose={() => setNotesPanelOpen(false)} />
+      {!teamMode && <PomodoroTimer />}
+      <button
+        onClick={() => setNotesPanelOpen(true)}
+        className="fixed bottom-6 right-6 w-14 h-14 rounded-full bg-teal text-cream shadow-lg shadow-teal/25 hover:bg-teal/80 hover:scale-105 transition-all flex items-center justify-center z-30"
+        title="Jegyzetek"
+      >
+        <StickyNote size={22} />
+      </button>
     </div>
   );
 }
