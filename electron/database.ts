@@ -3,21 +3,47 @@ import path from 'path';
 import fs from 'fs';
 import { app } from 'electron';
 
-let db: SqlJsDatabase;
-let dbPath: string;
+let db: SqlJsDatabase | null = null;
+let dbPath: string | null = null;
+let currentUserId: string | null = null;
 
 export function getDb(): SqlJsDatabase {
+  if (!db) {
+    throw new Error('Database not initialized. User must be logged in.');
+  }
   return db;
 }
 
 export function saveDb() {
+  if (!db || !dbPath) {
+    throw new Error('Database not initialized. User must be logged in.');
+  }
   const data = db.export();
   const buffer = Buffer.from(data);
   fs.writeFileSync(dbPath, buffer);
 }
 
-export async function initDatabase() {
-  dbPath = path.join(app.getPath('userData'), 'klient.db');
+export function getCurrentUserId(): string | null {
+  return currentUserId;
+}
+
+export async function initDatabase(userId: string) {
+  // Close any existing database first
+  if (db) {
+    closeDatabase();
+  }
+
+  // Check for legacy klient.db and migrate it to user-scoped file
+  const legacyDbPath = path.join(app.getPath('userData'), 'klient.db');
+  const userDbPath = path.join(app.getPath('userData'), `klient-${userId}.db`);
+
+  if (fs.existsSync(legacyDbPath) && !fs.existsSync(userDbPath)) {
+    console.log(`[Database] Migrating legacy klient.db to klient-${userId}.db`);
+    fs.renameSync(legacyDbPath, userDbPath);
+  }
+
+  dbPath = userDbPath;
+  currentUserId = userId;
 
   const SQL = await initSqlJs();
 
@@ -32,9 +58,32 @@ export async function initDatabase() {
   createTables();
   runMigrations();
   saveDb();
+
+  console.log(`[Database] Initialized database for user ${userId}`);
+}
+
+export async function switchDatabase(userId: string) {
+  console.log(`[Database] Switching to database for user ${userId}`);
+  await initDatabase(userId);
+}
+
+export function closeDatabase() {
+  if (db) {
+    try {
+      saveDb();
+      db.close();
+      console.log(`[Database] Closed database for user ${currentUserId}`);
+    } catch (err) {
+      console.error('[Database] Error closing database:', err);
+    }
+    db = null;
+    dbPath = null;
+    currentUserId = null;
+  }
 }
 
 function createTables() {
+  if (!db) throw new Error('Database not initialized');
   db.exec(`
     CREATE TABLE IF NOT EXISTS clients (
       id TEXT PRIMARY KEY,
@@ -196,10 +245,71 @@ function createTables() {
       FOREIGN KEY (team_member_id) REFERENCES team_members(id) ON DELETE CASCADE,
       UNIQUE(project_id, team_member_id)
     );
+
+    CREATE TABLE IF NOT EXISTS tax_business_types (
+      id TEXT PRIMARY KEY,
+      code TEXT NOT NULL UNIQUE,
+      name_hu TEXT NOT NULL,
+      description TEXT,
+      sort_order INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS tax_rules (
+      id TEXT PRIMARY KEY,
+      business_type TEXT NOT NULL,
+      year INTEGER NOT NULL,
+      rate_percent REAL NOT NULL,
+      rate_label TEXT,
+      notes TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now')),
+      UNIQUE (business_type, year, rate_label),
+      FOREIGN KEY (business_type) REFERENCES tax_business_types(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS tax_eligibility_criteria (
+      id TEXT PRIMARY KEY,
+      business_type TEXT NOT NULL,
+      year INTEGER NOT NULL,
+      max_revenue_huf INTEGER,
+      max_employees INTEGER,
+      conditions_json TEXT DEFAULT '{}',
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now')),
+      UNIQUE (business_type, year),
+      FOREIGN KEY (business_type) REFERENCES tax_business_types(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS tax_calculations (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      business_type TEXT NOT NULL,
+      year INTEGER NOT NULL,
+      revenue REAL NOT NULL,
+      expenses REAL DEFAULT 0,
+      tax_amount REAL NOT NULL,
+      calculation_json TEXT DEFAULT '{}',
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (business_type) REFERENCES tax_business_types(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS user_tax_settings (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      business_type TEXT NOT NULL,
+      year INTEGER NOT NULL,
+      is_active INTEGER DEFAULT 1,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now')),
+      UNIQUE (user_id, year),
+      FOREIGN KEY (business_type) REFERENCES tax_business_types(id)
+    );
   `);
 }
 
 function runMigrations() {
+  if (!db) throw new Error('Database not initialized');
   // Add color column to projects if it doesn't exist
   const cols = db.exec("PRAGMA table_info(projects)");
   const colNames = cols[0]?.values.map(row => row[1]) || [];
@@ -372,6 +482,35 @@ function runMigrations() {
   if (!userColNames.includes('team_mode')) {
     db.run("ALTER TABLE user_settings ADD COLUMN team_mode INTEGER DEFAULT 0");
   }
+
+  // Seed tax business types and 2026 rules (idempotent via INSERT OR IGNORE)
+  db.exec(`
+    INSERT OR IGNORE INTO tax_business_types (id, code, name_hu, description, sort_order) VALUES
+      ('kiva',          'KIVA',          'Kisvállalati Adó',              'Kisvállalati adó - kis- és középvállalkozásoknak',        1),
+      ('afa',           'AFA',           'Általános Forgalmi Adó',        'ÁFA - 27%-os általános forgalmi adó',                    2),
+      ('aam',           'AAM',           'Alanyi Adómentesség',           'Alanyi adómentesség - ÁFA-mentes működés',               3),
+      ('atalanyadozas', 'ATALANYADOZAS', 'Átalányadózás',                 'Egyszerűsített SZJA egyéni vállalkozóknak',               4),
+      ('kft_tao',       'KFT_TAO',       'Kft (TAO)',                     'Korlátolt felelősségű társaság - társasági adó',          5),
+      ('kata',          'KATA',          'Kisadózó Vállalkozások Tételes Adója', 'Tételes adó egyéni vállalkozóknak (korlátozott)', 6);
+
+    INSERT OR IGNORE INTO tax_rules (id, business_type, year, rate_percent, rate_label, notes) VALUES
+      ('tr-kiva-2026',       'kiva',          2026, 11.0,   'base',                'Speciális adóalap: béralapú számítás'),
+      ('tr-afa-std-2026',    'afa',           2026, 27.0,   'standard',            'EU egyik legmagasabb ÁFA kulcsa'),
+      ('tr-afa-red-2026',    'afa',           2026, 18.0,   'reduced',             'Csökkentett kulcs (pl. egyes élelmiszerek)'),
+      ('tr-afa-sred-2026',   'afa',           2026,  5.0,   'super_reduced',       'Szuper csökkentett kulcs (pl. könyvek)'),
+      ('tr-aam-2026',        'aam',           2026,  0.0,   'exempt',              'ÁFA-mentes - 20M Ft bevételi határ'),
+      ('tr-atal-gen-2026',   'atalanyadozas', 2026, 40.0,   'deemed_cost_general', 'Általános vélelmezett költséghányad'),
+      ('tr-atal-ret-2026',   'atalanyadozas', 2026, 80.0,   'deemed_cost_retail',  'Kiskereskedelmi vélelmezett költséghányad'),
+      ('tr-tao-2026',        'kft_tao',       2026,  9.0,   'base',                'Társasági adó alapkulcs'),
+      ('tr-kata-2026',       'kata',          2026, 50000,  'monthly_flat',        'Havi tételes adó (Ft, nem százalék)');
+
+    INSERT OR IGNORE INTO tax_eligibility_criteria (id, business_type, year, max_revenue_huf, max_employees, conditions_json) VALUES
+      ('te-kiva-2026',  'kiva',          2026, 12000000000, 200, '{"replaces":["tao","szocho","szakkepzesi_hozzajarulas"]}'),
+      ('te-aam-2026',   'aam',           2026, 20000000,    NULL, '{"progressive_increase":{"2027":22000000,"2028":24000000}}'),
+      ('te-atal-2026',  'atalanyadozas', 2026, NULL,        NULL, '{"entity_type":"egyeni_vallalkozo","simplified_szja":true}'),
+      ('te-kata-2026',  'kata',          2026, NULL,        NULL, '{"entity_type":"egyeni_vallalkozo","restricted_since":2022}'),
+      ('te-kft-2026',   'kft_tao',       2026, NULL,        NULL, '{"entity_type":"kft","alternative":"kiva"}');
+  `);
 
   // Client fields for contracts
   const clientCols = db.exec("PRAGMA table_info(clients)");
