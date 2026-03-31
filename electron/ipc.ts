@@ -5,6 +5,7 @@ import fs from 'fs';
 import path from 'path';
 import { app } from 'electron';
 import { getSupabase } from './supabase';
+import { switchDatabase, closeDatabase, getCurrentUserId } from './database';
 
 function sanitizeFolderName(name: string): string {
   return name.replace(/[<>:"/\\|?*]/g, '_').trim();
@@ -40,9 +41,17 @@ export function registerIpcHandlers() {
       const sb = getSupabase();
       const { data: { session } } = await sb.auth.getSession();
       if (!session?.user) return null;
+
+      // Ensure database is initialized for this user
+      const currentDbUser = getCurrentUserId();
+      if (currentDbUser !== session.user.id) {
+        await switchDatabase(session.user.id);
+      }
+
       const local = ensureLocalUser(session.user.id, session.user.email ?? '');
       return local;
-    } catch {
+    } catch (err) {
+      console.error('[Auth] Error getting user:', err);
       return null;
     }
   });
@@ -67,6 +76,9 @@ export function registerIpcHandlers() {
       await sb.auth.resend({ type: 'signup', email, options: { emailRedirectTo: 'https://klient.work/confirmed' } });
     }
 
+    // Initialize user-specific database
+    await switchDatabase(authData.user.id);
+
     const local = ensureLocalUser(authData.user.id, authData.user.email ?? '', data.name as string);
     return local;
   });
@@ -81,6 +93,9 @@ export function registerIpcHandlers() {
     if (error) { console.error('[Auth] Login error:', error.message); throw new Error(error.message); }
     if (!authData.user) throw new Error('Bejelentkezés sikertelen');
 
+    // Switch to user-specific database
+    await switchDatabase(authData.user.id);
+
     const local = ensureLocalUser(authData.user.id, authData.user.email ?? '', authData.user.user_metadata?.name as string);
     return local;
   });
@@ -88,9 +103,14 @@ export function registerIpcHandlers() {
   // Logout
   ipcMain.handle('db:user:logout', async () => {
     try {
+      // Close database first
+      closeDatabase();
+
       const sb = getSupabase();
       await sb.auth.signOut();
-    } catch { /* ignore */ }
+    } catch (err) {
+      console.error('[Auth] Logout error:', err);
+    }
     return { success: true };
   });
 
@@ -137,7 +157,11 @@ export function registerIpcHandlers() {
       throw new Error(error.message);
     }
     if (!authData.user) return { confirmed: false };
+
     // Login succeeded → email is confirmed, session is now active
+    // Switch to user-specific database
+    await switchDatabase(authData.user.id);
+
     const local = ensureLocalUser(authData.user.id, authData.user.email ?? '', authData.user.user_metadata?.name as string);
     return { confirmed: true, user: local };
   });
@@ -206,6 +230,9 @@ export function registerIpcHandlers() {
           } else {
             throw new Error('Nem érkezett token a Google-tól');
           }
+
+          // Switch to user-specific database
+          await switchDatabase(userId!);
 
           const local = ensureLocalUser(userId!, userEmail ?? '', userName);
           authWindow.close();
@@ -283,10 +310,8 @@ export function registerIpcHandlers() {
       if (data.status === 'trial' && data.trial_ends_at) {
         const trialEnd = new Date(data.trial_ends_at);
         if (trialEnd < new Date()) {
-          // Trial expired — update status in Supabase
-          await sb.from('subscriptions')
-            .update({ status: 'expired' })
-            .eq('user_id', session.user.id);
+          // Trial expired — use RPC function (bypasses RLS which has no UPDATE policy)
+          await sb.rpc('expire_subscription', { p_user_id: session.user.id });
           data.status = 'expired';
         }
       }
@@ -295,9 +320,7 @@ export function registerIpcHandlers() {
       if ((data.status === 'active' || data.status === 'cancelled') && data.current_period_end && data.plan !== 'lifetime') {
         const periodEnd = new Date(data.current_period_end);
         if (periodEnd < new Date()) {
-          await sb.from('subscriptions')
-            .update({ status: 'expired' })
-            .eq('user_id', session.user.id);
+          await sb.rpc('expire_subscription', { p_user_id: session.user.id });
           data.status = 'expired';
         }
       }

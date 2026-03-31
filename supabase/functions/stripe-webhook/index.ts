@@ -353,6 +353,45 @@ Deno.serve(async (req) => {
               .insert({ user_id: userId, ...subPayload });
             if (insErr) console.error('[Webhook] Insert error:', insErr);
           }
+
+          // Cancel any dangling Stripe subscriptions for this customer
+          // to prevent subscription events from overwriting the lifetime plan
+          if (stripeCustomerId) {
+            try {
+              const STRIPE_SECRET_KEY = Deno.env.get('STRIPE_SECRET_KEY') || '';
+              const listRes = await fetch(
+                `https://api.stripe.com/v1/subscriptions?customer=${stripeCustomerId}&status=all`,
+                {
+                  headers: { 'Authorization': `Bearer ${STRIPE_SECRET_KEY}` },
+                }
+              );
+              if (listRes.ok) {
+                const listData = await listRes.json();
+                for (const sub of (listData.data || [])) {
+                  if (sub.status === 'incomplete' || sub.status === 'active' || sub.status === 'past_due') {
+                    const cancelRes = await fetch(
+                      `https://api.stripe.com/v1/subscriptions/${sub.id}`,
+                      {
+                        method: 'DELETE',
+                        headers: { 'Authorization': `Bearer ${STRIPE_SECRET_KEY}` },
+                      }
+                    );
+                    console.log('[Webhook] Cancelled dangling subscription after lifetime purchase:', {
+                      subscription_id: sub.id,
+                      status: sub.status,
+                      user_id: userId,
+                      cancel_success: cancelRes.ok,
+                    });
+                  }
+                }
+              }
+            } catch (cleanupErr) {
+              console.error('[Webhook] Failed to cleanup old subscriptions:', {
+                user_id: userId,
+                error: cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr),
+              });
+            }
+          }
         } else if (mode === 'subscription') {
           // Subscription purchase
           const stripeSubId = obj.subscription as string || null;
@@ -456,16 +495,47 @@ Deno.serve(async (req) => {
           break;
         }
 
+        // Guard: never overwrite a lifetime plan with subscription events
+        const { data: currentSub } = await supabase.from('subscriptions')
+          .select('plan').eq('user_id', userId).maybeSingle();
+        if (currentSub?.plan === 'lifetime') {
+          console.log('[Webhook] Skipping subscription event — user has lifetime plan:', {
+            user_id: userId,
+            subscription_id: stripeSubId,
+            incoming_status: status,
+          });
+          break;
+        }
+
+        // Skip incomplete subscriptions — payment hasn't succeeded yet
+        if (status === 'incomplete' || status === 'incomplete_expired') {
+          console.log('[Webhook] Skipping incomplete subscription:', {
+            user_id: userId,
+            subscription_id: stripeSubId,
+            status,
+          });
+          break;
+        }
+
         // Map Stripe status to our status
+        const cancelAtPeriodEnd = !!(obj.cancel_at_period_end);
         let appStatus: string;
-        if (status === 'active' || status === 'trialing') {
+        if (cancelAtPeriodEnd) {
+          appStatus = 'cancelled';
+        } else if (status === 'active' || status === 'trialing') {
           appStatus = 'active';
         } else if (status === 'past_due') {
           appStatus = 'past_due';
         } else if (status === 'canceled' || status === 'unpaid') {
           appStatus = 'expired';
         } else {
-          appStatus = 'active';
+          // Unknown status — log and skip rather than defaulting to active
+          console.warn('[Webhook] Unknown Stripe subscription status, skipping:', {
+            user_id: userId,
+            subscription_id: stripeSubId,
+            status,
+          });
+          break;
         }
 
         // Determine plan from metadata or interval
@@ -514,6 +584,17 @@ Deno.serve(async (req) => {
           console.error('[Webhook] CRITICAL: No user_id in subscription metadata', {
             subscription_id: obj.id,
             metadata,
+          });
+          break;
+        }
+
+        // Guard: never expire a lifetime plan due to a subscription deletion event
+        const { data: currentSubDel } = await supabase.from('subscriptions')
+          .select('plan').eq('user_id', userId).maybeSingle();
+        if (currentSubDel?.plan === 'lifetime') {
+          console.log('[Webhook] Skipping subscription.deleted — user has lifetime plan:', {
+            user_id: userId,
+            subscription_id: obj.id,
           });
           break;
         }
