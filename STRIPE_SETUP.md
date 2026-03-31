@@ -20,10 +20,12 @@ supabase secrets set STRIPE_SECRET_KEY=sk_test_...
 supabase secrets set STRIPE_WEBHOOK_SECRET=whsec_...
 supabase secrets set BILLINGO_API_KEY=ab379f0a-26dc-11f1-8e47-026634090519
 supabase secrets set BILLINGO_ENV=sandbox  # or "production" for live mode
+supabase secrets set BILLINGO_BLOCK_ID=315117  # your Billingo block ID
 ```
 
 > A `STRIPE_WEBHOOK_SECRET` értékét a 4. lépésben kapod meg.
 > A `BILLINGO_ENV` alapértelmezett értéke "sandbox" (biztonság miatt). Éles módhoz állítsd "production"-re.
+> A `BILLINGO_BLOCK_ID` alapértelmezett értéke 315117. Ha más számlázási blokkot használsz, állítsd be a megfelelő ID-t.
 
 ---
 
@@ -153,6 +155,9 @@ supabase secrets set BILLINGO_ENV=production
 
 # Frissítsd az éles API kulccsal
 supabase secrets set BILLINGO_API_KEY=<éles_billingo_api_kulcs>
+
+# Állítsd be az éles számlázási blokk ID-t (ha eltér a teszt módtól)
+supabase secrets set BILLINGO_BLOCK_ID=<éles_block_id>
 ```
 
 **Fontos:**

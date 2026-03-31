@@ -6,6 +6,7 @@ const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const BILLINGO_API_KEY = Deno.env.get('BILLINGO_API_KEY') || '';
 const STRIPE_ENV = Deno.env.get('STRIPE_ENV') || 'test';
 const BILLINGO_ENV = Deno.env.get('BILLINGO_ENV') || 'sandbox';
+const BILLINGO_BLOCK_ID = parseInt(Deno.env.get('BILLINGO_BLOCK_ID') || '315117', 10);
 
 // Supabase client with service_role (bypasses RLS)
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
@@ -184,7 +185,7 @@ async function createBillingoInvoice(params: {
       },
       body: JSON.stringify({
         partner_id: partnerId,
-        block_id: 315117,
+        block_id: BILLINGO_BLOCK_ID,
         type: 'invoice',
         fulfillment_date: new Date().toISOString().split('T')[0],
         due_date: new Date().toISOString().split('T')[0],
