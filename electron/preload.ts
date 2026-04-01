@@ -158,4 +158,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('speech:transcript', handler);
     return () => { ipcRenderer.removeListener('speech:transcript', handler); };
   },
+
+  // Tax
+  getTaxBusinessTypes: () => ipcRenderer.invoke('db:tax:getBusinessTypes'),
+  getTaxRules: (businessType: string, year: number) => ipcRenderer.invoke('db:tax:getRules', businessType, year),
+  checkTaxEligibility: (businessType: string, revenue: number, employeeCount?: number, year?: number) => ipcRenderer.invoke('db:tax:checkEligibility', businessType, revenue, employeeCount, year),
+  calculateTax: (input: { businessType: string; year: number; revenue: number; expenses?: number; employeeCount?: number }) => ipcRenderer.invoke('db:tax:calculate', input),
+  getAvailableTaxTypes: (revenue: number, employeeCount?: number, year?: number) => ipcRenderer.invoke('db:tax:getAvailableTypes', revenue, employeeCount, year),
+  getUserTaxSettings: (year?: number) => ipcRenderer.invoke('db:tax:getUserSettings', year),
+  setUserTaxSettings: (businessType: string, year?: number) => ipcRenderer.invoke('db:tax:setUserSettings', businessType, year),
+  getTaxCalculationHistory: (limit?: number) => ipcRenderer.invoke('db:tax:getCalculationHistory', limit),
 });

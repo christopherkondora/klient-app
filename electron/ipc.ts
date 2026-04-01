@@ -6,6 +6,7 @@ import path from 'path';
 import { app } from 'electron';
 import { getSupabase } from './supabase';
 import { switchDatabase, closeDatabase, getCurrentUserId } from './database';
+import * as taxService from './tax-service';
 
 function sanitizeFolderName(name: string): string {
   return name.replace(/[<>:"/\\|?*]/g, '_').trim();
@@ -1465,5 +1466,40 @@ export function registerIpcHandlers() {
       [projectId, teamMemberId]
     );
     return { success: true };
+  });
+
+  // ============ TAX ============
+
+  ipcMain.handle('db:tax:getBusinessTypes', () => {
+    return taxService.getAllBusinessTypes();
+  });
+
+  ipcMain.handle('db:tax:getRules', (_event, businessType: string, year: number) => {
+    return taxService.resolveTaxRules(businessType, year);
+  });
+
+  ipcMain.handle('db:tax:checkEligibility', (_event, businessType: string, revenue: number, employeeCount?: number, year?: number) => {
+    return taxService.checkEligibility(businessType, revenue, employeeCount, year);
+  });
+
+  ipcMain.handle('db:tax:calculate', (_event, input: taxService.TaxCalcInput) => {
+    return taxService.calculateTax(input);
+  });
+
+  ipcMain.handle('db:tax:getAvailableTypes', (_event, revenue: number, employeeCount?: number, year?: number) => {
+    return taxService.getAvailableTaxTypes(revenue, employeeCount, year);
+  });
+
+  ipcMain.handle('db:tax:getUserSettings', (_event, year?: number) => {
+    return taxService.getUserTaxSettings(year);
+  });
+
+  ipcMain.handle('db:tax:setUserSettings', (_event, businessType: string, year?: number) => {
+    taxService.setUserTaxSettings(businessType, year);
+    return { success: true };
+  });
+
+  ipcMain.handle('db:tax:getCalculationHistory', (_event, limit?: number) => {
+    return taxService.getTaxCalculationHistory(limit);
   });
 }

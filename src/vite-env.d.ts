@@ -146,6 +146,16 @@ interface ElectronAPI {
   sendAudioChunk: (audioBase64: string) => void;
   stopDeepgramStream: () => Promise<{ ok: boolean }>;
   onTranscript: (callback: (data: { text: string; isFinal: boolean }) => void) => () => void;
+
+  // Tax
+  getTaxBusinessTypes: () => Promise<TaxBusinessTypeRow[]>;
+  getTaxRules: (businessType: string, year: number) => Promise<TaxRuleRow[]>;
+  checkTaxEligibility: (businessType: string, revenue: number, employeeCount?: number, year?: number) => Promise<{ eligible: boolean; reasons: string[] }>;
+  calculateTax: (input: TaxCalcInput) => Promise<TaxCalcResult>;
+  getAvailableTaxTypes: (revenue: number, employeeCount?: number, year?: number) => Promise<string[]>;
+  getUserTaxSettings: (year?: number) => Promise<UserTaxSettingsRow | null>;
+  setUserTaxSettings: (businessType: string, year?: number) => Promise<{ success: boolean }>;
+  getTaxCalculationHistory: (limit?: number) => Promise<TaxCalculationRow[]>;
 }
 
 interface FileEntry {
@@ -429,6 +439,70 @@ interface Subscription {
   stripe_subscription_id: string | null;
   created_at: string;
   updated_at: string;
+}
+
+interface TaxBusinessTypeRow {
+  id: string;
+  code: string;
+  name_hu: string;
+  description: string | null;
+  sort_order: number;
+  created_at: string;
+}
+
+interface TaxRuleRow {
+  id: string;
+  business_type: string;
+  year: number;
+  rate_percent: number;
+  rate_label: string;
+  notes: string | null;
+}
+
+interface TaxCalcInput {
+  businessType: string;
+  year: number;
+  revenue: number;
+  expenses?: number;
+  employeeCount?: number;
+}
+
+interface TaxCalcResult {
+  businessType: string;
+  year: number;
+  taxAmount: number;
+  effectiveRate: number;
+  eligible: boolean;
+  warnings: string[];
+  breakdown: {
+    revenue: number;
+    deductibleExpenses: number;
+    taxableBase: number;
+    appliedRate: number;
+    appliedRateLabel: string;
+  };
+}
+
+interface UserTaxSettingsRow {
+  id: string;
+  user_id: string;
+  business_type: string;
+  year: number;
+  is_active: number;
+  created_at: string;
+  updated_at: string;
+}
+
+interface TaxCalculationRow {
+  id: string;
+  user_id: string;
+  business_type: string;
+  year: number;
+  revenue: number;
+  expenses: number;
+  tax_amount: number;
+  calculation_json: string;
+  created_at: string;
 }
 
 interface Window {
