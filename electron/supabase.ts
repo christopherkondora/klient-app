@@ -7,7 +7,7 @@ let supabase: SupabaseClient | null = null;
 
 // Hardcoded fallbacks for production builds (anon key is safe to embed — it's a public key)
 const SUPABASE_URL_DEFAULT = 'https://arbhhltbjovuxwvfcnni.supabase.co';
-const SUPABASE_ANON_KEY_DEFAULT = 'sb_publishable_8jpr7_RwHz-ED2Nojx3zhw_eYepiTEm';
+const SUPABASE_ANON_KEY_DEFAULT = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFyYmhobHRiam92dXh3dmZjbm5pIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQwNDY3MTksImV4cCI6MjA4OTYyMjcxOX0.DQlIdlYCQazFGOLTB3AYws74akm9Higmr407cRnMCdc';
 
 // File-based storage adapter for Electron main process (no localStorage available)
 function createFileStorage() {
