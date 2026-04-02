@@ -107,6 +107,11 @@ Deno.serve(async (req) => {
     if (!isLifetime) {
       params.append('subscription_data[metadata][user_id]', user.id);
       params.append('subscription_data[metadata][plan]', plan);
+    } else {
+      // For lifetime (one-time payment), also add metadata to the payment_intent
+      // This ensures payment_intent.succeeded events can activate the subscription
+      params.append('payment_intent_data[metadata][user_id]', user.id);
+      params.append('payment_intent_data[metadata][plan]', plan);
     }
 
     const stripeRes = await fetch('https://api.stripe.com/v1/checkout/sessions', {

@@ -347,11 +347,27 @@ Deno.serve(async (req) => {
           if (existing) {
             const { error: updErr } = await supabase.from('subscriptions')
               .update(subPayload).eq('user_id', userId);
-            if (updErr) console.error('[Webhook] Update error:', updErr);
+            if (updErr) {
+              console.error('[Webhook] CRITICAL: Failed to activate lifetime subscription:', {
+                user_id: userId,
+                session_id: obj.id,
+                error: updErr,
+              });
+              throw new Error(`Failed to update lifetime subscription: ${updErr.message}`);
+            }
+            console.log('[Webhook] Lifetime subscription activated (updated):', { user_id: userId });
           } else {
             const { error: insErr } = await supabase.from('subscriptions')
               .insert({ user_id: userId, ...subPayload });
-            if (insErr) console.error('[Webhook] Insert error:', insErr);
+            if (insErr) {
+              console.error('[Webhook] CRITICAL: Failed to create lifetime subscription:', {
+                user_id: userId,
+                session_id: obj.id,
+                error: insErr,
+              });
+              throw new Error(`Failed to insert lifetime subscription: ${insErr.message}`);
+            }
+            console.log('[Webhook] Lifetime subscription activated (created):', { user_id: userId });
           }
 
           // Cancel any dangling Stripe subscriptions for this customer
@@ -411,7 +427,8 @@ Deno.serve(async (req) => {
             const { error: updErr } = await supabase.from('subscriptions')
               .update(subPayload).eq('user_id', userId);
             if (updErr) {
-              console.error('[Webhook] Subscription update failed:', { user_id: userId, plan, error: updErr });
+              console.error('[Webhook] CRITICAL: Subscription update failed:', { user_id: userId, plan, error: updErr });
+              throw new Error(`Failed to update subscription: ${updErr.message}`);
             } else {
               console.log('[Webhook] Subscription activated:', { user_id: userId, plan, subscription_id: stripeSubId });
             }
@@ -419,7 +436,8 @@ Deno.serve(async (req) => {
             const { error: insErr } = await supabase.from('subscriptions')
               .insert({ user_id: userId, ...subPayload });
             if (insErr) {
-              console.error('[Webhook] Subscription insert failed:', { user_id: userId, plan, error: insErr });
+              console.error('[Webhook] CRITICAL: Subscription insert failed:', { user_id: userId, plan, error: insErr });
+              throw new Error(`Failed to insert subscription: ${insErr.message}`);
             } else {
               console.log('[Webhook] Subscription created:', { user_id: userId, plan, subscription_id: stripeSubId });
             }
@@ -653,6 +671,77 @@ Deno.serve(async (req) => {
           }
         } else {
           console.error('[Webhook] Subscription not found in database:', { subscription_id: subscriptionId });
+        }
+
+        break;
+      }
+
+      // ── Payment Intent Succeeded (backup for one-time lifetime payments) ──
+      case 'payment_intent.succeeded': {
+        const metadata = obj.metadata as Record<string, string> || {};
+        const userId = metadata.user_id;
+        const plan = metadata.plan;
+
+        // Only handle if this is a lifetime purchase (one-time payment)
+        if (!userId || plan !== 'lifetime') {
+          console.log('[Webhook] payment_intent.succeeded (not lifetime, skipping):', {
+            user_id: userId,
+            plan,
+            payment_intent_id: obj.id,
+          });
+          break;
+        }
+
+        console.log('[Webhook] Processing lifetime payment_intent.succeeded:', {
+          user_id: userId,
+          payment_intent_id: obj.id,
+        });
+
+        // Check if already activated (via checkout.session.completed)
+        const { data: currentSub } = await supabase.from('subscriptions')
+          .select('status, plan').eq('user_id', userId).maybeSingle();
+
+        if (currentSub?.plan === 'lifetime' && currentSub?.status === 'active') {
+          console.log('[Webhook] Lifetime already activated, skipping payment_intent:', {
+            user_id: userId,
+            payment_intent_id: obj.id,
+          });
+          break;
+        }
+
+        // Activate lifetime subscription as backup
+        const subPayload = {
+          status: 'active',
+          plan: 'lifetime',
+          current_period_start: new Date().toISOString(),
+          current_period_end: null,
+          stripe_customer_id: obj.customer as string || '',
+        };
+
+        if (currentSub) {
+          const { error: updErr } = await supabase.from('subscriptions')
+            .update(subPayload).eq('user_id', userId);
+          if (updErr) {
+            console.error('[Webhook] CRITICAL: Failed to activate lifetime via payment_intent (update):', {
+              user_id: userId,
+              payment_intent_id: obj.id,
+              error: updErr,
+            });
+            throw new Error(`Failed to update lifetime via payment_intent: ${updErr.message}`);
+          }
+          console.log('[Webhook] Lifetime activated via payment_intent (updated):', { user_id: userId });
+        } else {
+          const { error: insErr } = await supabase.from('subscriptions')
+            .insert({ user_id: userId, ...subPayload });
+          if (insErr) {
+            console.error('[Webhook] CRITICAL: Failed to activate lifetime via payment_intent (insert):', {
+              user_id: userId,
+              payment_intent_id: obj.id,
+              error: insErr,
+            });
+            throw new Error(`Failed to insert lifetime via payment_intent: ${insErr.message}`);
+          }
+          console.log('[Webhook] Lifetime activated via payment_intent (created):', { user_id: userId });
         }
 
         break;

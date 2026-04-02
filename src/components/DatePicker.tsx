@@ -71,7 +71,7 @@ export default function DatePicker({ value, onChange, placeholder = 'V√°lassz d√
       </button>
 
       {open && (
-        <div className="absolute top-full left-0 mt-1 w-64 bg-surface-800 border border-teal/15 rounded-lg shadow-xl z-50 p-3">
+        <div className="absolute top-full left-0 mt-1 w-64 bg-surface-800 border border-teal/15 rounded-lg shadow-xl z-[100] p-3">
           {/* Month navigation */}
           <div className="flex items-center justify-between mb-2">
             <button type="button" onClick={() => setViewMonth(subMonths(viewMonth, 1))} className="p-1 hover:bg-teal/10 rounded text-steel hover:text-cream">

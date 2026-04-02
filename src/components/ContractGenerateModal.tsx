@@ -86,7 +86,7 @@ export default function ContractGenerateModal({ clientId, clientName, projects, 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onDoubleClick={onClose}>
       <div
-        className="bg-surface-800 rounded-2xl border border-teal/15 w-full max-w-lg shadow-2xl max-h-[85vh] flex flex-col overflow-hidden"
+        className="bg-surface-800 rounded-2xl border border-teal/15 w-full max-w-lg shadow-2xl max-h-[85vh] flex flex-col"
         onDoubleClick={e => e.stopPropagation()}
       >
         {/* Header accent */}
@@ -118,7 +118,7 @@ export default function ContractGenerateModal({ clientId, clientName, projects, 
 
           {/* Step 1: Template selection */}
           {step === 'select' && (
-            <div className="space-y-4 overflow-auto px-1 -mx-1">
+            <div className="space-y-4 overflow-y-auto px-1 -mx-1">
               <div>
                 <span className="text-[10px] text-steel tracking-wider uppercase mb-1 block">Ügyfél</span>
                 <div className="flex items-center gap-2 border-b border-teal/8 py-1.5">
@@ -157,7 +157,7 @@ export default function ContractGenerateModal({ clientId, clientName, projects, 
 
           {/* Step 2: Fill fields — template-specific layout */}
           {step === 'fill' && selectedTemplate && (
-            <div className="space-y-4 overflow-auto px-1 -mx-1 flex-1">
+            <div className="space-y-4 overflow-y-auto px-1 -mx-1 flex-1">
               {/* Common: date + project */}
               <div className="grid grid-cols-2 gap-3">
                 <div>

@@ -1,0 +1,14 @@
+import { defineConfig } from 'vitest/config';
+
+export default defineConfig({
+  test: {
+    globals: true,
+    environment: 'node',
+    include: ['electron/**/*.test.ts'],
+    coverage: {
+      provider: 'v8',
+      include: ['electron/tax-service.ts'],
+      reporter: ['text', 'text-summary'],
+    },
+  },
+});

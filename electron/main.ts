@@ -63,7 +63,7 @@ function createTray() {
 }
 
 app.whenReady().then(async () => {
-  await initDatabase();
+  // Database will be initialized after user login
   registerIpcHandlers();
 
   // Allow microphone / speech recognition permissions

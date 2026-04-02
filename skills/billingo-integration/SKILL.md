@@ -123,7 +123,7 @@ createBillingoInvoice()
 
 **Block ID:** `315117` (production Block API ID, configured in `stripe-webhook/index.ts`)
 
-**Environment:** `production` (via `BILLINGO_ENV` secret)
+**Environment:** `sandbox` (via `BILLINGO_ENV` secret — switched back from production for testing per KLIAA-42)
 
 **Plan Names (Hungarian):**
 - Monthly: "Klient Havi előfizetés" (3,990 HUF)
@@ -144,13 +144,13 @@ createBillingoInvoice()
 
 ### Current State
 
-**Status:** ✅ **PRODUCTION MODE ACTIVE**
+**Status:** 🧪 **SANDBOX MODE ACTIVE** (reverted from production per KLIAA-42 — keep in sandbox until all payment flows are validated)
 
 **API Endpoints:**
-- Sandbox: `https://api.sandbox.billingo.hu/v3/`
-- Production: `https://api.billingo.hu/v3/` (currently active)
+- Sandbox: `https://api.sandbox.billingo.hu/v3/` (currently active)
+- Production: `https://api.billingo.hu/v3/`
 
-**Environment Variable:** `BILLINGO_ENV` = `production`
+**Environment Variable:** `BILLINGO_ENV` = `sandbox`
 
 **Implementation:** `getBillingoBaseUrl()` function in `stripe-webhook/index.ts:14-22`
 
