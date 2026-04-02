@@ -6,20 +6,17 @@ const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const BILLINGO_API_KEY = Deno.env.get('BILLINGO_API_KEY') || '';
 const STRIPE_ENV = Deno.env.get('STRIPE_ENV') || 'test';
 const BILLINGO_ENV = Deno.env.get('BILLINGO_ENV') || 'sandbox';
-const BILLINGO_BLOCK_ID = parseInt(Deno.env.get('BILLINGO_BLOCK_ID') || '314533', 10);
+const BILLINGO_BLOCK_ID = parseInt(Deno.env.get('BILLINGO_BLOCK_ID') || '315117', 10);
 
 // Supabase client with service_role (bypasses RLS)
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
 // ─── Billingo API base URL selection ───
 function getBillingoBaseUrl(): string {
-  // NOTE: Sandbox URL should be verified with Billingo API documentation
-  // Common patterns: api.sandbox.billingo.hu, sandbox.billingo.hu, etc.
-  if (BILLINGO_ENV === 'production') {
-    return 'https://api.billingo.hu/v3';
-  }
-  // Default to sandbox for safety
-  return 'https://api.sandbox.billingo.hu/v3';
+  // Billingo does not have a separate sandbox URL (api.sandbox.billingo.hu does not exist).
+  // Test vs production is determined by which API key and Block ID you use.
+  // Always use the production API endpoint.
+  return 'https://api.billingo.hu/v3';
 }
 
 // ─── Stripe signature verification using Web Crypto ───

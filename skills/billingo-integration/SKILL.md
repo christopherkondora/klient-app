@@ -85,7 +85,7 @@ createBillingoInvoice()
 ```json
 {
   "partner_id": 12345,
-  "block_id": 314533,
+  "block_id": 315117,
   "type": "invoice",
   "fulfillment_date": "2026-03-28",
   "due_date": "2026-03-28",
