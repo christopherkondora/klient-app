@@ -1,12 +1,28 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Check } from 'lucide-react';
 
 export default function PaymentSuccess() {
+  const [countdown, setCountdown] = useState(3);
+
   useEffect(() => {
     // Signal to parent window/webview that payment was successful
     if (window.opener) {
       window.opener.postMessage({ type: 'payment_success' }, '*');
     }
+
+    // Auto-close after 3 seconds with countdown
+    const countdownInterval = setInterval(() => {
+      setCountdown((prev) => {
+        if (prev <= 1) {
+          clearInterval(countdownInterval);
+          window.close();
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(countdownInterval);
   }, []);
 
   return (
@@ -24,7 +40,7 @@ export default function PaymentSuccess() {
           </p>
         </div>
         <div className="text-xs text-steel/60">
-          Ez az ablak automatikusan bezáródik...
+          Az ablak {countdown} másodperc múlva automatikusan bezáródik...
         </div>
       </div>
     </div>
