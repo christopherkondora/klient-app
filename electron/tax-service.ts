@@ -81,12 +81,17 @@ export function checkEligibility(
 
   const conditions = JSON.parse(row.conditions_json || '{}');
   if (conditions.entity_type === 'egyeni_vallalkozo') {
-    // Can't validate entity type here — just note it
+    // Can't validate entity type here — just note it as informational
     reasons.push('Csak egyéni vállalkozóknak elérhető');
   }
 
+  // Eligibility is determined only by hard disqualifiers (revenue/employee limits).
+  // "Csak" (entity type) notes are informational — they can't be validated here
+  // since we don't have the entity type as input, but they are NOT exemptions.
+  const hardDisqualifiers = reasons.filter(r => !r.startsWith('Csak'));
+
   return {
-    eligible: reasons.length === 0 || reasons.every(r => r.startsWith('Csak')),
+    eligible: hardDisqualifiers.length === 0,
     reasons,
   };
 }
@@ -94,6 +99,23 @@ export function checkEligibility(
 /** Calculate tax for a given input */
 export function calculateTax(input: TaxCalcInput): TaxCalcResult {
   const { businessType, year, revenue, expenses = 0, employeeCount } = input;
+
+  if (!businessType || typeof businessType !== 'string') {
+    throw new Error('Érvénytelen adótípus');
+  }
+  if (typeof revenue !== 'number' || revenue < 0) {
+    throw new Error('A bevétel nem lehet negatív');
+  }
+  if (typeof expenses !== 'number' || expenses < 0) {
+    throw new Error('A kiadások nem lehetnek negatívak');
+  }
+  if (typeof year !== 'number' || year < 2020 || year > 2100) {
+    throw new Error('Érvénytelen év');
+  }
+  if (employeeCount !== undefined && (typeof employeeCount !== 'number' || employeeCount < 0 || !Number.isInteger(employeeCount))) {
+    throw new Error('Az alkalmazottak száma nem negatív egész szám kell legyen');
+  }
+
   const rules = resolveTaxRules(businessType, year);
   const eligibility = checkEligibility(businessType, revenue, employeeCount, year);
 
@@ -139,12 +161,13 @@ export function calculateTax(input: TaxCalcInput): TaxCalcResult {
     }
 
     case 'atalanyadozas': {
-      // Flat-rate: deemed cost percentage deducted from revenue, then 15% SZJA on remainder
+      // Flat-rate: deemed cost percentage deducted from revenue, then SZJA on remainder
       const generalRule = rules.find(r => r.rate_label === 'deemed_cost_general');
+      const szjaRule = rules.find(r => r.rate_label === 'szja_rate');
       const deemedCostPct = generalRule?.rate_percent ?? 40;
       const deemedCost = revenue * (deemedCostPct / 100);
       taxableBase = revenue - deemedCost;
-      appliedRate = 15; // SZJA rate
+      appliedRate = szjaRule?.rate_percent ?? 15;
       taxAmount = taxableBase * (appliedRate / 100);
       appliedRateLabel = 'deemed_cost_general';
       break;
