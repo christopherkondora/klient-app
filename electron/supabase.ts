@@ -50,6 +50,9 @@ export function getSupabase(): SupabaseClient {
     );
   }
 
+  // Clear stale auth storage if anon key changed (sessions become invalid)
+  clearStaleAuthStorage(anonKey);
+
   supabase = createClient(url, anonKey, {
     auth: {
       autoRefreshToken: true,
@@ -60,4 +63,44 @@ export function getSupabase(): SupabaseClient {
   });
 
   return supabase;
+}
+
+/**
+ * Clear auth storage if the anon key has changed.
+ * When the key changes, old sessions are invalid and cause auth errors.
+ */
+function clearStaleAuthStorage(currentKey: string) {
+  const storageDir = path.join(app.getPath('userData'), 'supabase');
+  const authFile = path.join(storageDir, 'auth-storage.json');
+  const keyFile = path.join(storageDir, 'anon-key.txt');
+
+  try {
+    // Check if key has changed
+    let needsClear = false;
+    if (fs.existsSync(keyFile)) {
+      const savedKey = fs.readFileSync(keyFile, 'utf-8').trim();
+      if (savedKey !== currentKey) {
+        console.log('[Supabase] Anon key changed - clearing stale auth sessions');
+        needsClear = true;
+      }
+    } else if (fs.existsSync(authFile)) {
+      // First time checking, but auth file exists - might be stale
+      console.log('[Supabase] No key record found - clearing potentially stale auth');
+      needsClear = true;
+    }
+
+    if (needsClear) {
+      // Clear auth storage
+      if (fs.existsSync(authFile)) {
+        fs.unlinkSync(authFile);
+      }
+      // Save current key
+      if (!fs.existsSync(storageDir)) {
+        fs.mkdirSync(storageDir, { recursive: true });
+      }
+      fs.writeFileSync(keyFile, currentKey);
+    }
+  } catch (err) {
+    console.error('[Supabase] Error checking/clearing stale auth:', err);
+  }
 }
