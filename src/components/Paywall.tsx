@@ -289,11 +289,13 @@ export default function Paywall({ overlay, onClose }: { overlay?: boolean; onClo
                     webviewListenersAttached.current = true;
                     el.addEventListener('did-finish-load', () => setWebviewLoading(false));
                     el.addEventListener('did-fail-load', () => setWebviewLoading(false));
+                    // Don't auto-close immediately on /success navigation
+                    // Let the success page render and auto-close after its countdown (3s)
                     el.addEventListener('did-navigate', (e: any) => {
-                      if (e.url?.includes('/success')) closeCheckout();
-                    });
-                    el.addEventListener('will-navigate', (e: any) => {
-                      if (e.url?.includes('/success')) closeCheckout();
+                      if (e.url?.includes('/success')) {
+                        // Give the success page time to render and show its message
+                        setTimeout(() => closeCheckout(), 3500);
+                      }
                     });
                   }
                 }}
