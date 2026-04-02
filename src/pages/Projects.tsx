@@ -80,7 +80,7 @@ export default function Projects() {
       // Create team member assignments
       if (data.teamMemberIds && data.teamMemberIds.length > 0) {
         for (const memberId of data.teamMemberIds) {
-          await window.electronAPI.assignMemberToProject(memberId, created.id);
+          await window.electronAPI.assignToProject(created.id, memberId);
         }
       }
       // Mark hours as distributed

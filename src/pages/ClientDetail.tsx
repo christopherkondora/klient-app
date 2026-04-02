@@ -120,7 +120,7 @@ export default function ClientDetail() {
       // Create team member assignments
       if (data.teamMemberIds && data.teamMemberIds.length > 0) {
         for (const memberId of data.teamMemberIds) {
-          await window.electronAPI.assignMemberToProject(memberId, created.id);
+          await window.electronAPI.assignToProject(created.id, memberId);
         }
       }
       await window.electronAPI.updateProject(created.id, { is_hours_distributed: 1 });
