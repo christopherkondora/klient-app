@@ -339,8 +339,20 @@ export function registerIpcHandlers() {
     const { data: { session } } = await sb.auth.getSession();
     if (!session?.user) throw new Error('Nincs bejelentkezve');
 
+    console.log('[Checkout] User session:', {
+      userId: session.user.id,
+      email: session.user.email,
+      hasAccessToken: !!session.access_token,
+    });
+
     const res = await sb.functions.invoke('create-checkout', {
       body: { plan: data.plan },
+    });
+
+    console.log('[Checkout] Edge function response:', {
+      error: res.error,
+      data: res.data,
+      status: (res as any).status,
     });
 
     if (res.error) throw new Error(res.error.message || 'Checkout hiba');
