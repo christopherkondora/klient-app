@@ -6,7 +6,7 @@ const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const BILLINGO_API_KEY = Deno.env.get('BILLINGO_API_KEY') || '';
 const STRIPE_ENV = Deno.env.get('STRIPE_ENV') || 'test';
 const BILLINGO_ENV = Deno.env.get('BILLINGO_ENV') || 'sandbox';
-const BILLINGO_BLOCK_ID = parseInt(Deno.env.get('BILLINGO_BLOCK_ID') || '315117', 10);
+const BILLINGO_BLOCK_ID = parseInt(Deno.env.get('BILLINGO_BLOCK_ID') || '314533', 10);
 
 // Supabase client with service_role (bypasses RLS)
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);

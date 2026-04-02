@@ -289,11 +289,31 @@ export default function Paywall({ overlay, onClose }: { overlay?: boolean; onClo
                     webviewListenersAttached.current = true;
                     el.addEventListener('did-finish-load', () => setWebviewLoading(false));
                     el.addEventListener('did-fail-load', () => setWebviewLoading(false));
-                    // Don't auto-close immediately on /success navigation
-                    // Let the success page render and auto-close after its countdown (3s)
+                    // When Stripe redirects to /success, inject a thank-you page into the webview
                     el.addEventListener('did-navigate', (e: any) => {
                       if (e.url?.includes('/success')) {
-                        // Give the success page time to render and show its message
+                        // Inject success page content directly into the webview
+                        (el as any).executeJavaScript(`
+                          document.documentElement.innerHTML = \`
+                            <head><style>
+                              * { margin:0; padding:0; box-sizing:border-box; }
+                              body { background:#0a0e14; display:flex; align-items:center; justify-content:center; min-height:100vh; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; }
+                              .wrap { text-align:center; max-width:400px; padding:2rem; }
+                              .icon { width:80px; height:80px; border-radius:50%; background:rgba(16,185,129,0.15); border:2px solid rgba(16,185,129,0.4); display:flex; align-items:center; justify-content:center; margin:0 auto 1.5rem; }
+                              .icon svg { width:40px; height:40px; color:#34d399; }
+                              h1 { color:#f0e6d3; font-size:1.5rem; margin-bottom:0.5rem; }
+                              p { color:#8a9bb5; font-size:0.95rem; line-height:1.5; }
+                              .countdown { color:rgba(138,155,181,0.5); font-size:0.75rem; margin-top:1.5rem; }
+                            </style></head>
+                            <body><div class="wrap">
+                              <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></div>
+                              <h1>Köszönjük, hogy előfizettél!</h1>
+                              <p>Az előfizetésed hamarosan aktív lesz.</p>
+                              <div class="countdown" id="cd">Az ablak 3 másodperc múlva bezáródik...</div>
+                            </div></body>\`;
+                          let s=3; setInterval(()=>{ s--; if(s>0) document.getElementById('cd').textContent='Az ablak '+s+' másodperc múlva bezáródik...'; },1000);
+                        `).catch(() => {});
+                        // Close after showing the success message
                         setTimeout(() => closeCheckout(), 3500);
                       }
                     });
