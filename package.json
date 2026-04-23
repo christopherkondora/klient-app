@@ -72,7 +72,6 @@
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.2.1",
-    "@types/node-cron": "^3.0.11",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@types/sql.js": "^1.4.9",
@@ -110,9 +109,7 @@
     "dotenv": "^17.3.1",
     "electron-updater": "^6.8.3",
     "framer-motion": "^12.38.0",
-    "google-ads-api": "^23.0.0",
     "lucide-react": "^0.577.0",
-    "node-cron": "^4.2.1",
     "pdf-lib": "^1.17.1",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",

@@ -7,17 +7,13 @@ import NotesPanel from './NotesPanel';
 import PomodoroTimer from './PomodoroTimer';
 import TrialBanner from './TrialBanner';
 import UpdateBanner from './UpdateBanner';
-import { ArrowLeft, ChevronLeft, StickyNote, Megaphone, X } from 'lucide-react';
-import { useSubscription } from '../contexts/SubscriptionContext';
-import { useAppMode } from '../contexts/AppModeContext';
+import { ArrowLeft, ChevronLeft, StickyNote, X } from 'lucide-react';
 import { useTheme } from '../contexts/ThemeContext';
 
 export default function Layout({ paywalled }: { paywalled?: boolean } = {}) {
   const [activeShortcutUrl, setActiveShortcutUrl] = useState<string | null>(null);
   const [notesPanelOpen, setNotesPanelOpen] = useState(false);
   const [quickBarOpen, setQuickBarOpen] = useState(true);
-  const { hasAdsModule } = useSubscription();
-  const { setMode } = useAppMode();
   const { theme } = useTheme();
   const isLight = theme === 'light' || theme === 'ash-soft';
   const location = useLocation();
@@ -117,22 +113,6 @@ export default function Layout({ paywalled }: { paywalled?: boolean } = {}) {
                   <X size={10} />
                 </button>
 
-                {hasAdsModule && (
-                  <>
-                    <button
-                      onClick={() => setMode('ads')}
-                      className={`w-12 h-12 rounded-full transition-colors flex items-center justify-center ${
-                        isLight
-                          ? 'bg-emerald-400 text-white hover:bg-emerald-500'
-                          : 'bg-cyan-600 text-white hover:bg-cyan-500'
-                      }`}
-                      title="Klient Ads"
-                    >
-                      <Megaphone size={20} />
-                    </button>
-                    <div className="h-8 w-px bg-teal/15 mx-1" />
-                  </>
-                )}
                 <PomodoroTimer />
                 <button
                   onClick={() => setNotesPanelOpen(true)}

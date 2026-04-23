@@ -15,13 +15,6 @@ import Onboarding from './pages/Onboarding';
 import Paywall from './components/Paywall';
 import PaymentSuccess from './pages/PaymentSuccess';
 import PaymentCancel from './pages/PaymentCancel';
-import AdsLayout from './components/AdsLayout';
-import AdsOverview from './pages/AdsOverview';
-import AdsCampaigns from './pages/AdsCampaigns';
-import AdsCampaignDetail from './pages/AdsCampaignDetail';
-import AdsAlerts from './pages/AdsAlerts';
-import AdsAiPage from './pages/AdsAiPage';
-import AdsSettings from './pages/AdsSettings';
 import { useAuth } from './contexts/AuthContext';
 import { useSubscription } from './contexts/SubscriptionContext';
 
@@ -60,17 +53,6 @@ export default function App() {
       {/* Stripe redirect pages (no layout, standalone) */}
       <Route path="/success" element={<PaymentSuccess />} />
       <Route path="/cancel" element={<PaymentCancel />} />
-
-      {/* Ads environment (separate layout) */}
-      <Route element={<AdsLayout />}>
-        <Route path="/ads/overview" element={<AdsOverview />} />
-        <Route path="/ads/campaigns" element={<AdsCampaigns />} />
-        <Route path="/ads/campaigns/:id" element={<AdsCampaignDetail />} />
-        <Route path="/ads/alerts" element={<AdsAlerts />} />
-        <Route path="/ads/ai" element={<AdsAiPage />} />
-        <Route path="/ads/settings" element={<AdsSettings />} />
-        <Route path="/ads" element={<Navigate to="/ads/overview" replace />} />
-      </Route>
 
       <Route element={<Layout paywalled={showPaywall} />}>
         {showPaywall ? (

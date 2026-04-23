@@ -55,71 +55,7 @@ const ALL_TABS: { id: Tab; label: string; icon: typeof User; businessOnly?: bool
 type BillingPlatform = 'billingo' | 'szamlazz' | 'egyeb' | 'none';
 type ConnectionStatus = 'idle' | 'testing' | 'connected' | 'error';
 
-const ADS_PLANS = [
-  {
-    id: 'monthly' as const,
-    name: 'Havi',
-    price: '4 990 Ft',
-    period: '/hó',
-  },
-  {
-    id: 'yearly' as const,
-    name: 'Éves',
-    price: '49 900 Ft',
-    period: '/év',
-    badge: '2 hónap ingyen',
-  },
-];
-
 function AdsSubscriptionTab() {
-  const { subscription, hasAdsModule, adsStatus, openCheckout, cancelSubscription, reactivateSubscription, refresh } = useSubscription();
-  const [checkoutLoading, setCheckoutLoading] = useState<string | null>(null);
-  const [cancelLoading, setCancelLoading] = useState(false);
-  const [reactivateLoading, setReactivateLoading] = useState(false);
-  const [error, setError] = useState('');
-  const [checkoutUrl, setCheckoutUrl] = useState<string | null>(null);
-  const [webviewLoading, setWebviewLoading] = useState(true);
-
-  const adsActive = adsStatus === 'active';
-  const adsCancelled = adsStatus === 'cancelled';
-
-  const handleSubscribe = async (plan: 'monthly' | 'yearly') => {
-    setCheckoutLoading(plan);
-    setError('');
-    try {
-      const url = await openCheckout(plan, 'ads');
-      setCheckoutUrl(url);
-    } catch (err: any) {
-      setError(err.message || 'Nem sikerült megnyitni a fizetési oldalt');
-    } finally {
-      setCheckoutLoading(null);
-    }
-  };
-
-  const handleCancel = async () => {
-    setCancelLoading(true);
-    setError('');
-    try {
-      await cancelSubscription('ads');
-    } catch (err: any) {
-      setError(err.message || 'Hiba történt a lemondás során');
-    } finally {
-      setCancelLoading(false);
-    }
-  };
-
-  const handleReactivate = async () => {
-    setReactivateLoading(true);
-    setError('');
-    try {
-      await reactivateSubscription('ads');
-    } catch (err: any) {
-      setError(err.message || 'Hiba történt az újraaktiválás során');
-    } finally {
-      setReactivateLoading(false);
-    }
-  };
-
   return (
     <div className="space-y-6">
       <div>
@@ -127,7 +63,7 @@ function AdsSubscriptionTab() {
         <p className="text-xs text-steel mt-1">Google Ads kampánykezelő és AI elemző modul</p>
       </div>
 
-      {/* Feature highlights */}
+      {/* Feature highlights (teaser) */}
       <div className="bg-surface-800/50 rounded-lg border border-teal/10 p-6">
         <div className="flex items-center gap-3 mb-4">
           <div className="w-10 h-10 bg-teal/10 rounded-xl flex items-center justify-center">
@@ -155,118 +91,16 @@ function AdsSubscriptionTab() {
         </div>
       </div>
 
-      {/* Current status */}
-      {hasAdsModule ? (
-        <div className="bg-surface-800/50 rounded-lg border border-teal/10 p-6 space-y-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <h3 className="text-sm font-semibold text-cream">Aktív előfizetés</h3>
-              <p className="text-xs text-steel mt-0.5">
-                Csomag: <span className="text-cream font-medium">{subscription?.ads_plan === 'monthly' ? 'Havi' : 'Éves'}</span>
-                {adsCancelled && <span className="text-amber-400 ml-2">(lemondva — a periódus végéig aktív)</span>}
-              </p>
-            </div>
-            <span className={`px-2 py-0.5 rounded text-[11px] font-medium ${adsActive ? 'bg-emerald-400/10 text-emerald-400' : 'bg-amber-400/10 text-amber-400'}`}>
-              {adsActive ? 'Aktív' : 'Lemondva'}
-            </span>
-          </div>
-          {subscription?.ads_current_period_end && (
-            <p className="text-xs text-steel/60">
-              {adsCancelled ? 'Lejárat' : 'Következő számlázás'}: {new Date(subscription.ads_current_period_end).toLocaleDateString('hu-HU')}
-            </p>
-          )}
-          {error && <p className="text-xs text-red-400">{error}</p>}
-          {adsCancelled ? (
-            <button
-              onClick={handleReactivate}
-              disabled={reactivateLoading}
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-medium bg-teal/15 text-cream hover:bg-teal/25 transition-colors disabled:opacity-50"
-            >
-              {reactivateLoading && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-              Újraaktiválás
-            </button>
-          ) : (
-            <button
-              onClick={handleCancel}
-              disabled={cancelLoading}
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-medium border border-red-500/30 text-red-400 hover:bg-red-500/10 transition-colors disabled:opacity-50"
-            >
-              {cancelLoading && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-              Előfizetés lemondása
-            </button>
-          )}
-        </div>
-      ) : (
-        /* Plan selection */
-        <div className="grid grid-cols-2 gap-4">
-          {ADS_PLANS.map(plan => (
-            <div key={plan.id} className="bg-surface-800/50 rounded-lg border border-teal/10 p-6 flex flex-col">
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-sm font-semibold text-cream">{plan.name}</h3>
-                {plan.badge && (
-                  <span className="text-[10px] bg-teal/15 text-teal px-2 py-0.5 rounded-full font-medium">{plan.badge}</span>
-                )}
-              </div>
-              <p className="text-2xl font-bold text-cream mb-1">
-                {plan.price}
-                <span className="text-sm font-normal text-steel">{plan.period}</span>
-              </p>
-              <div className="flex-1" />
-              <button
-                onClick={() => handleSubscribe(plan.id)}
-                disabled={checkoutLoading !== null}
-                className="mt-4 w-full py-2.5 rounded-lg text-sm font-medium bg-teal text-cream hover:bg-teal/80 transition-colors disabled:opacity-50"
-              >
-                {checkoutLoading === plan.id ? <Loader2 className="w-4 h-4 animate-spin mx-auto" /> : 'Előfizetés'}
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {error && !hasAdsModule && <p className="text-xs text-red-400">{error}</p>}
-
-      {/* Checkout webview */}
-      {checkoutUrl && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onDoubleClick={() => { setCheckoutUrl(null); refresh(); }}>
-          <div className="bg-surface-800 rounded-xl border border-teal/15 shadow-2xl w-[90vw] h-[85vh] flex flex-col overflow-hidden" onDoubleClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between px-4 py-2 border-b border-teal/10 shrink-0">
-              <div className="flex items-center gap-2">
-                <CreditCard width={14} height={14} className="text-steel" />
-                <span className="text-sm text-cream font-medium">Klient Ads — Fizetés</span>
-              </div>
-              <button onClick={() => { setCheckoutUrl(null); refresh(); }} className="p-1.5 rounded-lg hover:bg-teal/10 text-steel hover:text-cream transition-colors">
-                <X width={16} height={16} />
-              </button>
-            </div>
-            <div className="flex-1 relative">
-              {webviewLoading && (
-                <div className="absolute inset-0 flex flex-col items-center justify-center bg-surface-800 z-10">
-                  <Loader2 className="w-8 h-8 text-teal animate-spin mb-3" />
-                  <p className="text-steel text-sm">Fizetési oldal betöltése...</p>
-                </div>
-              )}
-              <webview
-                src={checkoutUrl}
-                partition="persist:checkout"
-                className="w-full h-full"
-                ref={(el: HTMLWebViewElement | null) => {
-                  if (el) {
-                    el.addEventListener('did-finish-load', () => setWebviewLoading(false));
-                    el.addEventListener('did-fail-load', () => setWebviewLoading(false));
-                    el.addEventListener('did-navigate', (e: any) => {
-                      if (e.url?.includes('/success')) { setCheckoutUrl(null); refresh(); }
-                    });
-                    el.addEventListener('will-navigate', (e: any) => {
-                      if (e.url?.includes('/success')) { setCheckoutUrl(null); refresh(); }
-                    });
-                  }
-                }}
-              />
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Coming soon */}
+      <div className="bg-surface-800/30 rounded-lg border border-dashed border-teal/20 p-8 text-center">
+        <span className="inline-block text-[10px] tracking-[0.2em] uppercase bg-teal/15 text-teal px-2.5 py-1 rounded-full mb-3">
+          Hamarosan
+        </span>
+        <h3 className="text-sm font-semibold text-cream mb-1.5">A modul fejlesztés alatt áll</h3>
+        <p className="text-xs text-steel max-w-md mx-auto leading-relaxed">
+          A Klient Ads modul a következő verziókban válik elérhetővé. Addig is a fenti funkciók előre tervezettek — értesítünk, amint élesbe kerül.
+        </p>
+      </div>
     </div>
   );
 }
@@ -326,6 +160,7 @@ export default function Settings() {
   const [billingPlatform, setBillingPlatform] = useState<BillingPlatform>('none');
   const [billingApiKey, setBillingApiKey] = useState('');
   const [billingUrl, setBillingUrl] = useState('');
+  const [savedBillingUrl, setSavedBillingUrl] = useState('');
   const [showBillingKey, setShowBillingKey] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('idle');
   const [connectionError, setConnectionError] = useState('');
@@ -348,11 +183,13 @@ export default function Settings() {
         } catch { /* ignore */ }
         setBillingPlatform(normalizedProfilePlatform);
         setBillingUrl('');
+        setSavedBillingUrl('');
         setBillingApiKey('');
         setConnectionStatus('idle');
       } else {
         setBillingPlatform((cfg.platform as BillingPlatform) || 'none');
         setBillingUrl(cfg.url || '');
+        setSavedBillingUrl(cfg.url || '');
         if (cfg.hasApiKey) {
           setBillingApiKey('••••••••••••••••');
           setConnectionStatus('connected');
@@ -378,6 +215,9 @@ export default function Settings() {
       if ((billingPlatform === 'billingo' || billingPlatform === 'szamlazz') && billingApiKey && !isPlaceholder) {
         await handleTestConnection();
       }
+      if (billingPlatform === 'egyeb') {
+        setSavedBillingUrl(billingUrl);
+      }
     } finally {
       setBillingSaving(false);
     }
@@ -399,6 +239,7 @@ export default function Settings() {
     await window.electronAPI.clearBillingConfig();
     setBillingApiKey('');
     setBillingUrl('');
+    setSavedBillingUrl('');
     setConnectionStatus('idle');
     setConnectionError('');
   };
@@ -1118,10 +959,10 @@ export default function Settings() {
 
                 <button
                   onClick={handleSaveBillingConfig}
-                  disabled={billingSaving || !billingUrl}
-                  className="px-4 py-2 text-sm font-medium bg-teal text-ink rounded-lg hover:bg-teal/80 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                  disabled={billingSaving || !billingUrl || (!!billingUrl && billingUrl === savedBillingUrl)}
+                  className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors disabled:cursor-not-allowed flex items-center gap-2 ${billingUrl && billingUrl === savedBillingUrl ? 'bg-emerald-500/20 text-emerald-400 disabled:opacity-100' : 'bg-teal text-ink hover:bg-teal/80 disabled:opacity-40'}`}
                 >
-                  {billingSaving ? 'Mentés...' : 'Mentés'}
+                  {billingSaving ? 'Mentés...' : (billingUrl && billingUrl === savedBillingUrl) ? (<><Check className="w-3.5 h-3.5" /> Mentve</>) : 'Mentés'}
                 </button>
               </div>
             )}

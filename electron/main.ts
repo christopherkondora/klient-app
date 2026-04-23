@@ -1,10 +1,8 @@
-import { app, BrowserWindow, ipcMain, protocol, Tray, Menu, nativeImage, session, powerMonitor } from 'electron';
+import { app, BrowserWindow, ipcMain, protocol, Tray, Menu, nativeImage, session } from 'electron';
 import path from 'path';
 import { autoUpdater } from 'electron-updater';
-import cron from 'node-cron';
 import { initDatabase } from './database';
 import { registerIpcHandlers } from './ipc';
-import { syncAllAccounts } from './ads-sync';
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -81,18 +79,6 @@ app.whenReady().then(async () => {
 
   createWindow();
   createTray();
-
-  // Google Ads sync — every 6 hours
-  cron.schedule('0 */6 * * *', () => {
-    console.log('[AdsSync] Scheduled sync started');
-    syncAllAccounts('incremental').catch((err) => console.error('[AdsSync] Scheduled sync failed:', err));
-  });
-
-  // Catch-up sync after resume from sleep
-  powerMonitor.on('resume', () => {
-    console.log('[AdsSync] Catch-up sync after resume');
-    syncAllAccounts('catchup').catch((err) => console.error('[AdsSync] Catch-up sync failed:', err));
-  });
 
   // Auto-updater (only in production)
   if (!isDev) {

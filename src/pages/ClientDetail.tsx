@@ -4,7 +4,7 @@ import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   ArrowLeft, Mail, Phone, Building2, MapPin, Briefcase,
   Mic, Receipt, Plus, Play, Pause, Square, Trash2, Clock, FileText, X, ExternalLink,
-  ChevronDown, ChevronUp, Loader2, Sparkles, ScrollText, FolderOpen, Ban, SquarePen, Megaphone, Link2, Unlink2,
+  ChevronDown, ChevronUp, Loader2, Sparkles, ScrollText, FolderOpen, Ban, SquarePen,
 } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
 import { hu } from 'date-fns/locale';
@@ -16,8 +16,6 @@ import ContractGenerateModal from '../components/ContractGenerateModal';
 import ContractPdfViewer from '../components/ContractPdfViewer';
 import { ClientForm } from './Clients';
 import { useThemedColor } from '../utils/colors';
-import { useSubscription } from '../contexts/SubscriptionContext';
-import ClientAdsTab from '../components/ClientAdsTab';
 
 const PLATFORM_URLS: Record<string, { label: string; url: string }> = {
   szamlazz: { label: 'Számlázz.hu', url: 'https://www.szamlazz.hu' },
@@ -30,20 +28,16 @@ export default function ClientDetail() {
   const navigate = useNavigate();
   const { user } = useAuth();
   const tc = useThemedColor();
-  const { hasAdsModule } = useSubscription();
   const [searchParams] = useSearchParams();
-  const initialTab = (['projects', 'recordings', 'invoices', 'contracts', 'ads'] as const).includes(searchParams.get('tab') as any)
-    ? (searchParams.get('tab') as 'projects' | 'recordings' | 'invoices' | 'contracts' | 'ads')
+  const initialTab = (['projects', 'recordings', 'invoices', 'contracts'] as const).includes(searchParams.get('tab') as any)
+    ? (searchParams.get('tab') as 'projects' | 'recordings' | 'invoices' | 'contracts')
     : 'projects';
   const [client, setClient] = useState<Client | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [recordings, setRecordings] = useState<Recording[]>([]);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [contracts, setContracts] = useState<Contract[]>([]);
-  const [activeTab, setActiveTab] = useState<'projects' | 'recordings' | 'invoices' | 'contracts' | 'ads'>(initialTab);
-  const [hasLinkedAds, setHasLinkedAds] = useState(false);
-  const [adsAccounts, setAdsAccounts] = useState<AdsAccountRow[]>([]);
-  const [adsLinking, setAdsLinking] = useState(false);
+  const [activeTab, setActiveTab] = useState<'projects' | 'recordings' | 'invoices' | 'contracts'>(initialTab);
   const [showContractModal, setShowContractModal] = useState(false);
   const [deleteContractId, setDeleteContractId] = useState<string | null>(null);
   const [viewingContract, setViewingContract] = useState<Contract | null>(null);
@@ -100,16 +94,6 @@ export default function ClientDetail() {
       setContracts(contractsData);
       setAllClients(clientsData);
       setTeamMembers(teamMembersData);
-
-      // Check if client has linked Ads accounts
-      if (hasAdsModule) {
-        try {
-          const adsSummary = await window.electronAPI.adsGetClientAdsSummary(id!);
-          setHasLinkedAds(adsSummary.success && !!adsSummary.data);
-          const accs = await window.electronAPI.adsGetAccounts();
-          if (accs.success && accs.data) setAdsAccounts(accs.data);
-        } catch { /* ignore */ }
-      }
     } catch (err) {
       console.error('Failed to load client data:', err);
     } finally {
@@ -273,7 +257,6 @@ export default function ClientDetail() {
     { key: 'recordings' as const, label: 'Felvételek', icon: Mic, count: recordings.length },
     { key: 'invoices' as const, label: 'Számlák', icon: Receipt, count: invoices.length },
     { key: 'contracts' as const, label: 'Szerződések', icon: ScrollText, count: contracts.length },
-    ...(hasAdsModule ? [{ key: 'ads' as const, label: 'Google Ads', icon: Megaphone, count: 0 }] : []),
   ];
 
   return (
@@ -378,7 +361,7 @@ export default function ClientDetail() {
           >
             <tab.icon width={15} height={15} />
             {tab.label}
-            {tab.key !== 'ads' && <span className="text-xs bg-teal/10 text-steel px-1.5 py-0.5 rounded-full">{tab.count}</span>}
+            {<span className="text-xs bg-teal/10 text-steel px-1.5 py-0.5 rounded-full">{tab.count}</span>}
           </button>
         ))}
       </div>
@@ -775,51 +758,6 @@ export default function ClientDetail() {
             ))
           )}
         </div>
-      )}
-
-      {/* Tab Content: Google Ads */}
-      {activeTab === 'ads' && hasAdsModule && (
-        hasLinkedAds ? (
-          <ClientAdsTab clientId={id!} onUnlink={async () => { setHasLinkedAds(false); await loadData(); }} />
-        ) : (
-          <div className="space-y-4">
-            <div className="bg-surface-800/50 rounded-xl border border-teal/10 p-6 text-center">
-              <Megaphone className="w-10 h-10 text-steel/20 mx-auto mb-3" />
-              <p className="text-sm text-cream font-medium mb-1">Nincs hozzárendelt Google Ads fiók</p>
-              <p className="text-xs text-steel/50 mb-5">Válassz egy meglévő Ads fiókot az összekapcsoláshoz</p>
-              {adsAccounts.filter(a => !a.client_id).length === 0 ? (
-                <p className="text-xs text-steel/40 italic">Nincs szabad (hozzá nem rendelt) Ads fiók. Először adj hozzá egyet az Ads Beállításokban.</p>
-              ) : (
-                <div className="max-w-sm mx-auto space-y-1.5">
-                  {adsAccounts.filter(a => !a.client_id).map(acc => (
-                    <button
-                      key={acc.id}
-                      disabled={adsLinking}
-                      onClick={async () => {
-                        setAdsLinking(true);
-                        try {
-                          await window.electronAPI.adsLinkAccount(acc.id, id!);
-                          setHasLinkedAds(true);
-                          await loadData();
-                        } finally {
-                          setAdsLinking(false);
-                        }
-                      }}
-                      className="w-full flex items-center gap-3 px-4 py-3 rounded-lg border border-teal/10 bg-surface-900/40 hover:bg-teal/8 hover:border-teal/25 transition-colors text-left group"
-                    >
-                      <Link2 className="w-4 h-4 text-steel/30 group-hover:text-teal transition-colors" />
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm text-cream font-medium truncate">{acc.name}</p>
-                        <p className="text-[10px] text-steel/40">{acc.customer_id}</p>
-                      </div>
-                      {adsLinking && <Loader2 className="w-3.5 h-3.5 animate-spin text-steel/40" />}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        )
       )}
 
       {/* Contract PDF Viewer */}
