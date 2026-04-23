@@ -1015,6 +1015,8 @@ interface UserSettings {
   vat_rate_default: number;
   /** Közösségi adószám (opcionális) */
   vat_number: string;
+  /** 1 = vállalkozó (alapértelmezett), 0 = magánszemélyként használja az appot */
+  is_business: number;
   created_at: string;
 }
 

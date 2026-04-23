@@ -3,7 +3,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { ArrowRight, ArrowLeft, Check, Loader2, Receipt, Target, Palette, BarChart3, Calendar, FolderOpen, FileText, Mic, Eye, EyeOff, Mail, RefreshCw, Percent, Building2, User as UserIcon, Briefcase } from 'lucide-react';
 
-type Step = 'auth' | 'confirm-email' | 'platform' | 'tax_profile' | 'company_data' | 'goal' | 'theme' | 'done';
+type Step = 'auth' | 'confirm-email' | 'user_type' | 'platform' | 'tax_profile' | 'company_data' | 'goal' | 'theme' | 'done';
 type AuthMode = 'login' | 'register' | 'reset';
 type BizType = 'EV' | 'Kft' | 'Bt' | 'Kkt';
 type TaxForm = 'atalany' | 'vszja' | 'TAO' | 'KIVA';
@@ -52,7 +52,7 @@ export default function Onboarding() {
   const { theme, setTheme } = useTheme();
 
   // If user is logged in but hasn't completed onboarding, start at setup steps
-  const [step, setStep] = useState<Step>(user ? 'platform' : 'auth');
+  const [step, setStep] = useState<Step>(user ? 'user_type' : 'auth');
   const [authMode, setAuthMode] = useState<AuthMode>('register');
   const [error, setError] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
@@ -74,6 +74,7 @@ export default function Onboarding() {
   const [bizType, setBizType] = useState<BizType>('EV');
   const [taxForm, setTaxForm] = useState<TaxForm>('atalany');
   const [foglalkozas, setFoglalkozas] = useState<'fofoglalkozasu' | 'mellekfoglalkozasu'>('fofoglalkozasu');
+  const [isBusiness, setIsBusiness] = useState<boolean>(true);
   // Company data
   const [companyName, setCompanyName] = useState('');
   const [taxNumber, setTaxNumber] = useState('');
@@ -132,7 +133,7 @@ export default function Onboarding() {
       }
       // login success → move to setup steps
       setSubmitting(false);
-      animateStep('platform');
+      animateStep('user_type');
     } catch {
       setError(
         authMode === 'login'
@@ -152,7 +153,7 @@ export default function Onboarding() {
     try {
       await googleLogin();
       setSubmitting(false);
-      animateStep('platform');
+      animateStep('user_type');
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Google bejelentkezés sikertelen';
       if (msg !== 'Google bejelentkezés megszakítva') {
@@ -166,36 +167,50 @@ export default function Onboarding() {
     setSubmitting(true);
     try {
       const userPayload: Partial<UserSettings> = {
-        invoice_platform: platform,
+        is_business: isBusiness ? 1 : 0,
         revenue_goal_yearly: revenueGoal,
-        vat_status: vatStatus,
-        vat_rate_default: vatRateDefault,
         onboarding_complete: 1,
       };
-      if (companyName.trim()) userPayload.company_name = companyName.trim();
-      if (taxNumber.trim()) userPayload.tax_number = taxNumber.trim();
-      if (companyAddress.trim()) userPayload.address = companyAddress.trim();
-      if (bankAccount.trim()) userPayload.bank_account = bankAccount.trim();
+      if (isBusiness) {
+        userPayload.invoice_platform = platform;
+        userPayload.vat_status = vatStatus;
+        userPayload.vat_rate_default = vatRateDefault;
+        if (companyName.trim()) userPayload.company_name = companyName.trim();
+        if (taxNumber.trim()) userPayload.tax_number = taxNumber.trim();
+        if (companyAddress.trim()) userPayload.address = companyAddress.trim();
+        if (bankAccount.trim()) userPayload.bank_account = bankAccount.trim();
+      } else {
+        userPayload.invoice_platform = 'none';
+      }
       await updateUser(userPayload);
 
-      // Save tax profile (business type + tax form + AAM choice)
+      // Sync billing-config with chosen platform (live-app alignment)
       try {
-        await window.electronAPI.saveTaxProfile({
-          userId: '',
-          vallalkozasTipus: bizType,
-          adozasForma: taxForm,
-          foglalkozas: bizType === 'EV' ? foglalkozas : 'fofoglalkozasu',
-          koltseghanyad: taxForm === 'atalany' ? 0.40 : 0,
-          szakkepzettseg: false,
-          aamValasztott: vatStatus === 'exempt',
-          afaBevallas: 'negyedeves',
-          hipaKulcs: 0,
-          hipaTelepules: '',
-          hipaEgyszeru: false,
-          adoev: new Date().getFullYear(),
-          beallitva: true,
+        await window.electronAPI.setBillingConfig({
+          platform: isBusiness ? platform : 'none',
         });
-      } catch { /* tax profile save optional */ }
+      } catch { /* optional */ }
+
+      // Save tax profile only for business users
+      if (isBusiness) {
+        try {
+          await window.electronAPI.saveTaxProfile({
+            userId: '',
+            vallalkozasTipus: bizType,
+            adozasForma: taxForm,
+            foglalkozas: bizType === 'EV' ? foglalkozas : 'fofoglalkozasu',
+            koltseghanyad: taxForm === 'atalany' ? 0.40 : 0,
+            szakkepzettseg: false,
+            aamValasztott: vatStatus === 'exempt',
+            afaBevallas: 'negyedeves',
+            hipaKulcs: 0,
+            hipaTelepules: '',
+            hipaEgyszeru: false,
+            adoev: new Date().getFullYear(),
+            beallitva: true,
+          });
+        } catch { /* tax profile save optional */ }
+      }
     } catch { /* continue anyway */ }
     setSubmitting(false);
     animateStep('done');
@@ -223,7 +238,9 @@ export default function Onboarding() {
   };
 
   // Steps that show in step dots (only setup steps, not auth or done)
-  const setupSteps: Step[] = ['platform', 'tax_profile', 'company_data', 'goal', 'theme'];
+  const setupSteps: Step[] = isBusiness
+    ? ['user_type', 'platform', 'tax_profile', 'company_data', 'goal', 'theme']
+    : ['user_type', 'goal', 'theme'];
 
   const stepContent: Record<Step, React.ReactNode> = {
     // ─── STEP 1: AUTH ───
@@ -492,7 +509,7 @@ export default function Onboarding() {
             try {
               const confirmed = await checkEmailConfirmed(email, password);
               if (confirmed) {
-                animateStep('platform');
+                animateStep('user_type');
               } else {
                 setError('Az email cím még nincs megerősítve. Ellenőrizd a postaládád!');
               }
@@ -519,6 +536,58 @@ export default function Onboarding() {
         <p className="text-[11px] text-steel/40">
           Nem kaptad meg? Nézd meg a spam mappát is.
         </p>
+      </div>
+    ),
+
+    // ─── STEP 1.7: USER TYPE ───
+    user_type: (
+      <div className="space-y-6">
+        <div className="text-center">
+          <div className="w-10 h-10 rounded-xl bg-teal/15 border border-teal/20 flex items-center justify-center mx-auto mb-3">
+            <UserIcon width={20} height={20} className="text-teal" />
+          </div>
+          <h2 className="font-pixel text-base text-cream">Hogyan használod?</h2>
+          <p className="text-steel text-sm mt-1.5">Ez meghatározza, hogy milyen funkciók jelennek meg.</p>
+        </div>
+
+        <div className="space-y-2">
+          <button
+            onClick={() => setIsBusiness(true)}
+            className={`w-full text-left px-4 py-3 rounded-lg border transition-colors ${
+              isBusiness
+                ? 'border-teal bg-teal/15'
+                : 'border-teal/10 bg-surface-800/50 hover:border-teal/25'
+            }`}
+          >
+            <div className="flex items-center justify-between mb-0.5">
+              <span className={`text-sm font-medium ${isBusiness ? 'text-cream' : 'text-steel'}`}>Vállalkozóként</span>
+              {isBusiness && <Check width={14} height={14} className="text-teal" />}
+            </div>
+            <p className="text-xs text-steel/60">Számlázás, adózási modul, pénzügyi kimutatások aktívak.</p>
+          </button>
+          <button
+            onClick={() => setIsBusiness(false)}
+            className={`w-full text-left px-4 py-3 rounded-lg border transition-colors ${
+              !isBusiness
+                ? 'border-teal bg-teal/15'
+                : 'border-teal/10 bg-surface-800/50 hover:border-teal/25'
+            }`}
+          >
+            <div className="flex items-center justify-between mb-0.5">
+              <span className={`text-sm font-medium ${!isBusiness ? 'text-cream' : 'text-steel'}`}>Magánszemélyként (még)</span>
+              {!isBusiness && <Check width={14} height={14} className="text-teal" />}
+            </div>
+            <p className="text-xs text-steel/60">Csak projektkezelés, naptár, fájlok – számlázás és adózás nélkül. Később beállításokban átállítható.</p>
+          </button>
+        </div>
+
+        <button
+          onClick={() => animateStep(isBusiness ? 'platform' : 'goal')}
+          className="w-full py-2.5 bg-teal text-cream text-sm font-medium rounded-lg hover:bg-teal/80 flex items-center justify-center gap-2 transition-colors"
+        >
+          Tovább
+          <ArrowRight width={16} height={16} />
+        </button>
       </div>
     ),
 
@@ -550,13 +619,21 @@ export default function Onboarding() {
           ))}
         </div>
 
-        <button
-          onClick={() => animateStep('tax_profile')}
-          className="w-full py-2.5 bg-teal text-cream text-sm font-medium rounded-lg hover:bg-teal/80 flex items-center justify-center gap-2 transition-colors"
-        >
-          Tovább
-          <ArrowRight width={16} height={16} />
-        </button>
+        <div className="flex gap-3">
+          <button
+            onClick={() => animateStep('user_type')}
+            className="px-4 py-2.5 text-sm text-steel hover:text-cream transition-colors"
+          >
+            <ArrowLeft width={16} height={16} />
+          </button>
+          <button
+            onClick={() => animateStep('tax_profile')}
+            className="flex-1 py-2.5 bg-teal text-cream text-sm font-medium rounded-lg hover:bg-teal/80 flex items-center justify-center gap-2 transition-colors"
+          >
+            Tovább
+            <ArrowRight width={16} height={16} />
+          </button>
+        </div>
       </div>
     ),
 
@@ -608,7 +685,7 @@ export default function Onboarding() {
 
         <div className="flex gap-3">
           <button
-            onClick={() => animateStep('company_data')}
+            onClick={() => animateStep(isBusiness ? 'company_data' : 'user_type')}
             className="px-4 py-2.5 text-sm text-steel hover:text-cream transition-colors"
           >
             <ArrowLeft width={16} height={16} />

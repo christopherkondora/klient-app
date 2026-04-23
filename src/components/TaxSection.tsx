@@ -401,54 +401,10 @@ interface VatPanelProps {
   onChanged?: () => void;
 }
 
-function VatPanel({ vatStatus, yearlyRevenue, yearlyNetRevenue, vatPayable = 0, vatDeductible = 0, vatBalance = 0, animateIn, onChanged }: VatPanelProps) {
-  const { user, updateUser } = useAuth();
-  const [saving, setSaving] = useState(false);
-  const [rate, setRate] = useState<number>(27);
-  const [vatNumber, setVatNumber] = useState<string>('');
-  const [loaded, setLoaded] = useState(false);
-
-  useEffect(() => {
-    if (user) {
-      setRate(typeof user.vat_rate_default === 'number' ? user.vat_rate_default : 27);
-      setVatNumber(user.vat_number ?? '');
-      setLoaded(true);
-    }
-  }, [user]);
-
-  const updateVatStatus = async (next: 'exempt' | 'standard') => {
-    if (next === vatStatus || saving) return;
-    setSaving(true);
-    try {
-      await updateUser({ vat_status: next });
-      onChanged?.();
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const updateRate = async (next: number) => {
-    if (next === rate || saving) return;
-    setRate(next);
-    setSaving(true);
-    try {
-      await updateUser({ vat_rate_default: next });
-      onChanged?.();
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const saveVatNumber = async () => {
-    if (saving) return;
-    setSaving(true);
-    try {
-      await updateUser({ vat_number: vatNumber });
-      onChanged?.();
-    } finally {
-      setSaving(false);
-    }
-  };
+function VatPanel({ vatStatus, yearlyRevenue, yearlyNetRevenue, vatPayable = 0, vatDeductible = 0, vatBalance = 0, animateIn }: VatPanelProps) {
+  const { user } = useAuth();
+  const rate = typeof user?.vat_rate_default === 'number' ? user.vat_rate_default : 27;
+  const vatNumber = user?.vat_number ?? '';
 
   // AAM 12M Ft limit
   const aamLimit = 12_000_000;
@@ -457,40 +413,11 @@ function VatPanel({ vatStatus, yearlyRevenue, yearlyNetRevenue, vatPayable = 0, 
 
   return (
     <div className="space-y-3" style={animateIn ? { animation: 'taxFadeSlide 300ms ease-out both', animationDelay: '75ms' } : undefined}>
-      <p className="text-[10px] text-steel tracking-[0.1em] uppercase">ÁFA</p>
-
-      {/* Státusz választó */}
-      <div className="grid grid-cols-2 gap-2">
-        <button
-          onClick={() => updateVatStatus('exempt')}
-          disabled={saving}
-          className={`text-left px-3 py-2.5 rounded-lg border transition-all cursor-pointer ${
-            vatStatus === 'exempt'
-              ? 'bg-teal/10 border-teal/30'
-              : 'bg-surface-900/30 border-transparent hover:border-teal/10'
-          }`}
-        >
-          <div className="flex items-center justify-between mb-0.5">
-            <span className={`text-xs font-medium ${vatStatus === 'exempt' ? 'text-cream' : 'text-steel'}`}>Alanyi mentes (AAM)</span>
-            {vatStatus === 'exempt' && <Check width={12} height={12} className="text-teal" />}
-          </div>
-          <p className="text-[10px] text-steel/60">Nem számlázol áfát, nem is vonhatsz le. Éves limit: 12M Ft.</p>
-        </button>
-        <button
-          onClick={() => updateVatStatus('standard')}
-          disabled={saving}
-          className={`text-left px-3 py-2.5 rounded-lg border transition-all cursor-pointer ${
-            vatStatus === 'standard'
-              ? 'bg-teal/10 border-teal/30'
-              : 'bg-surface-900/30 border-transparent hover:border-teal/10'
-          }`}
-        >
-          <div className="flex items-center justify-between mb-0.5">
-            <span className={`text-xs font-medium ${vatStatus === 'standard' ? 'text-cream' : 'text-steel'}`}>Áfakörös</span>
-            {vatStatus === 'standard' && <Check width={12} height={12} className="text-teal" />}
-          </div>
-          <p className="text-[10px] text-steel/60">Áfát számlázol, a beszerzésekből visszaigényelhetsz.</p>
-        </button>
+      <div className="flex items-center justify-between">
+        <p className="text-[10px] text-steel tracking-[0.1em] uppercase">ÁFA</p>
+        <span className={`text-[10px] px-2 py-0.5 rounded-full ${vatStatus === 'exempt' ? 'bg-teal/15 text-teal' : 'bg-amber-500/15 text-amber-400'}`}>
+          {vatStatus === 'exempt' ? 'Alanyi mentes (AAM)' : `Áfakörös · ${rate}%`}
+        </span>
       </div>
 
       {/* AAM limit figyelmeztetés */}
@@ -503,44 +430,9 @@ function VatPanel({ vatStatus, yearlyRevenue, yearlyNetRevenue, vatPayable = 0, 
         </div>
       )}
 
-      {/* Áfakörös részletek */}
+      {/* Áfakörös mérleg – csak adat */}
       {vatStatus === 'standard' && (
         <div className="space-y-3">
-          {/* Alapértelmezett kulcs */}
-          <div>
-            <p className="text-[10px] text-steel mb-1.5">Alapértelmezett áfa kulcs</p>
-            <div className="flex gap-2">
-              {[27, 18, 5, 0].map(r => (
-                <button
-                  key={r}
-                  onClick={() => updateRate(r)}
-                  disabled={saving}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
-                    rate === r ? 'bg-teal text-surface-900' : 'bg-surface-900/40 text-steel hover:text-cream'
-                  }`}
-                >
-                  {r}%
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Adószám */}
-          {loaded && (
-            <div>
-              <p className="text-[10px] text-steel mb-1.5">ÁFA adószám / közösségi adószám</p>
-              <input
-                type="text"
-                value={vatNumber}
-                onChange={e => setVatNumber(e.target.value)}
-                onBlur={saveVatNumber}
-                placeholder="HU12345678"
-                className="w-full px-3 py-1.5 rounded-lg bg-surface-900/40 text-cream text-xs placeholder:text-steel/40 outline-none focus:ring-1 focus:ring-teal/40"
-              />
-            </div>
-          )}
-
-          {/* Áfa mérleg */}
           <div className="bg-surface-900/40 rounded-lg p-3 grid grid-cols-3 gap-3">
             <div>
               <p className="text-[10px] text-steel tracking-[0.1em] uppercase mb-1">Fizetendő</p>
@@ -559,6 +451,12 @@ function VatPanel({ vatStatus, yearlyRevenue, yearlyNetRevenue, vatPayable = 0, 
             </div>
           </div>
 
+          {vatNumber && (
+            <p className="text-[10px] text-steel/50">
+              ÁFA adószám: <span className="text-steel">{vatNumber}</span>
+            </p>
+          )}
+
           {typeof yearlyNetRevenue === 'number' && (
             <p className="text-[10px] text-steel/50 leading-relaxed">
               Éves nettó árbevétel: <span className="text-steel">{formatCurrency(yearlyNetRevenue)}</span> · Bruttó: <span className="text-steel">{formatCurrency(yearlyRevenue)}</span>. Az áfa bevallás negyedévente vagy havonta esedékes a vállalkozás forgalmától függően.
@@ -566,6 +464,10 @@ function VatPanel({ vatStatus, yearlyRevenue, yearlyNetRevenue, vatPayable = 0, 
           )}
         </div>
       )}
+
+      <p className="text-[10px] text-steel/50">
+        Az ÁFA státuszt és a kulcsot a beállításokban módosíthatod.
+      </p>
     </div>
   );
 }

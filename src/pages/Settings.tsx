@@ -4,8 +4,9 @@ import { useAuth } from '../contexts/AuthContext';
 import { useSubscription } from '../contexts/SubscriptionContext';
 import Paywall from '../components/Paywall';
 import PageHeader from '../components/PageHeader';
-import { Crown, Check, Zap, User, Palette, SlidersHorizontal, Info, LogOut, KeyRound, Eye, EyeOff, XCircle, RotateCcw, CreditCard, X, Loader2, Receipt, CheckCircle, AlertCircle, Link as LinkIcon, Trash2, Megaphone } from 'lucide-react';
+import { Crown, Check, Zap, User, Palette, SlidersHorizontal, Info, LogOut, KeyRound, Eye, EyeOff, XCircle, RotateCcw, CreditCard, X, Loader2, Receipt, CheckCircle, AlertCircle, Link as LinkIcon, Trash2, Megaphone, Calculator } from 'lucide-react';
 import { version } from '../../package.json';
+import TaxProfileWizard from '../components/TaxProfileWizard';
 
 // Platform selection now handled in the Számlázás tab
 // const INVOICE_PLATFORMS = [
@@ -38,14 +39,15 @@ const PLANS = [
   },
 ];
 
-type Tab = 'fiok' | 'elofizetes' | 'megjelenes' | 'szamlazas' | 'altalanos' | 'alkalmazas' | 'ads';
+type Tab = 'fiok' | 'elofizetes' | 'megjelenes' | 'szamlazas' | 'adozas' | 'altalanos' | 'alkalmazas' | 'ads';
 
-const TABS: { id: Tab; label: string; icon: typeof User }[] = [
+const ALL_TABS: { id: Tab; label: string; icon: typeof User; businessOnly?: boolean }[] = [
   { id: 'fiok', label: 'Fiók', icon: User },
   { id: 'elofizetes', label: 'Előfizetés', icon: Crown },
   { id: 'ads', label: 'Klient Ads', icon: Megaphone },
   { id: 'megjelenes', label: 'Megjelenés', icon: Palette },
-  { id: 'szamlazas', label: 'Számlázás', icon: Receipt },
+  { id: 'szamlazas', label: 'Számlázás', icon: Receipt, businessOnly: true },
+  { id: 'adozas', label: 'Adózás', icon: Calculator, businessOnly: true },
   { id: 'altalanos', label: 'Általános', icon: SlidersHorizontal },
   { id: 'alkalmazas', label: 'Alkalmazás', icon: Info },
 ];
@@ -305,6 +307,16 @@ export default function Settings() {
   const [checkoutLoading, setCheckoutLoading] = useState<string | null>(null);
   const [webviewLoading, setWebviewLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<Tab>('fiok');
+  const [showTaxWizard, setShowTaxWizard] = useState(false);
+  const [taxProfile, setTaxProfile] = useState<BusinessProfileRow | null>(null);
+
+  const loadTaxProfile = async () => {
+    try {
+      const p = await window.electronAPI.getTaxProfile();
+      setTaxProfile(p);
+    } catch { setTaxProfile(null); }
+  };
+  useEffect(() => { if (user?.is_business !== 0) loadTaxProfile(); }, [user?.id, user?.is_business]);
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
   const [cancelLoading, setCancelLoading] = useState(false);
   const [reactivateLoading, setReactivateLoading] = useState(false);
@@ -322,16 +334,33 @@ export default function Settings() {
 
   // Load billing config on mount
   useEffect(() => {
-    window.electronAPI.getBillingConfig().then((cfg) => {
-      setBillingPlatform((cfg.platform as BillingPlatform) || 'none');
-      setBillingUrl(cfg.url || '');
-      if (cfg.hasApiKey) {
-        setBillingApiKey('••••••••••••••••');
-        setConnectionStatus('connected');
+    window.electronAPI.getBillingConfig().then(async (cfg) => {
+      // If the user profile has a different invoice_platform than the local billing-store,
+      // prefer the user profile (source of truth) so that Settings never shows a stale platform
+      // from a previous session/user.
+      const profilePlatform = (user?.invoice_platform || 'none') as BillingPlatform;
+      const validPlatforms: BillingPlatform[] = ['billingo', 'szamlazz', 'egyeb', 'none'];
+      const normalizedProfilePlatform: BillingPlatform = validPlatforms.includes(profilePlatform) ? profilePlatform : 'none';
+
+      if (cfg.platform !== normalizedProfilePlatform) {
+        try {
+          await window.electronAPI.setBillingConfig({ platform: normalizedProfilePlatform });
+        } catch { /* ignore */ }
+        setBillingPlatform(normalizedProfilePlatform);
+        setBillingUrl('');
+        setBillingApiKey('');
+        setConnectionStatus('idle');
+      } else {
+        setBillingPlatform((cfg.platform as BillingPlatform) || 'none');
+        setBillingUrl(cfg.url || '');
+        if (cfg.hasApiKey) {
+          setBillingApiKey('••••••••••••••••');
+          setConnectionStatus('connected');
+        }
       }
       setBillingLoaded(true);
     });
-  }, []);
+  }, [user?.invoice_platform]);
 
   const handleSaveBillingConfig = async () => {
     setBillingSaving(true);
@@ -342,6 +371,10 @@ export default function Settings() {
         apiKey: isPlaceholder ? undefined : billingApiKey || undefined,
         url: billingPlatform === 'egyeb' ? billingUrl : undefined,
       });
+      // Keep user profile in sync so onboarding/sidebar reflect the same platform
+      if (user?.invoice_platform !== billingPlatform) {
+        try { await updateUser({ invoice_platform: billingPlatform }); } catch { /* ignore */ }
+      }
       if ((billingPlatform === 'billingo' || billingPlatform === 'szamlazz') && billingApiKey && !isPlaceholder) {
         await handleTestConnection();
       }
@@ -445,7 +478,7 @@ export default function Settings() {
       {/* Tab navigation */}
       <nav className="w-56 shrink-0 py-2">
         <div className="space-y-1">
-          {TABS.map((tab) => {
+          {ALL_TABS.filter(t => !t.businessOnly || user?.is_business !== 0).map((tab) => {
             const Icon = tab.icon;
             const isActive = activeTab === tab.id;
             return (
@@ -483,6 +516,27 @@ export default function Settings() {
                     <label className="block text-xs font-medium text-steel mb-1.5">E-mail cím</label>
                     <div className="flex items-center gap-3 px-3 py-2.5 rounded-lg bg-surface-800 border border-teal/10">
                       <span className="text-sm text-cream">{user.email}</span>
+                    </div>
+                  </div>
+
+                  {/* Business / private mode toggle */}
+                  <div className="pt-3 border-t border-teal/10">
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <p className="text-sm font-medium text-cream mb-0.5">Vállalkozói mód</p>
+                        <p className="text-xs text-steel">
+                          {user.is_business !== 0
+                            ? 'Vállalkozóként használod az appot – a számlázás és az adózási modul aktív.'
+                            : 'Magánszemélyként használod az appot – a számlázás és az adózás ki van kapcsolva.'}
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => updateUser({ is_business: user.is_business === 0 ? 1 : 0 })}
+                        className={`shrink-0 relative w-11 h-6 rounded-full transition-colors cursor-pointer ${user.is_business !== 0 ? 'bg-teal' : 'bg-steel/30'}`}
+                        aria-label="Vállalkozói mód"
+                      >
+                        <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-cream transition-transform ${user.is_business !== 0 ? 'translate-x-5' : ''}`} />
+                      </button>
                     </div>
                   </div>
 
@@ -1070,6 +1124,64 @@ export default function Settings() {
                   {billingSaving ? 'Mentés...' : 'Mentés'}
                 </button>
               </div>
+            )}
+          </div>
+        )}
+
+        {/* ── Adózás ── */}
+        {activeTab === 'adozas' && (
+          <div className="space-y-6">
+            <div>
+              <h2 className="font-pixel text-[15px] text-cream">Adózás</h2>
+              <p className="text-xs text-steel mt-1">Adózási profil és ÁFA beállítások</p>
+            </div>
+
+            <div className="bg-surface-800/50 rounded-xl p-5 space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <p className="text-[10px] text-steel tracking-[0.1em] uppercase mb-1">Vállalkozás típusa</p>
+                  <p className="text-sm text-cream">{taxProfile?.vallalkozasTipus === 'EV' ? 'Egyéni vállalkozó' : taxProfile?.vallalkozasTipus || '—'}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] text-steel tracking-[0.1em] uppercase mb-1">Adózási forma</p>
+                  <p className="text-sm text-cream">{taxProfile?.adozasForma === 'atalany' ? 'Átalányadózás' : taxProfile?.adozasForma === 'vszja' ? 'VSZJA' : taxProfile?.adozasForma === 'TAO' ? 'TAO' : taxProfile?.adozasForma === 'KIVA' ? 'KIVA' : '—'}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] text-steel tracking-[0.1em] uppercase mb-1">ÁFA státusz</p>
+                  <p className="text-sm text-cream">{user?.vat_status === 'exempt' ? 'Alanyi mentes (AAM)' : user?.vat_status === 'standard' ? `Áfakörös · ${user?.vat_rate_default ?? 27}%` : '—'}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] text-steel tracking-[0.1em] uppercase mb-1">ÁFA adószám</p>
+                  <p className="text-sm text-cream">{user?.vat_number || '—'}</p>
+                </div>
+                {taxProfile?.vallalkozasTipus === 'EV' && (
+                  <div>
+                    <p className="text-[10px] text-steel tracking-[0.1em] uppercase mb-1">Foglalkoztatás</p>
+                    <p className="text-sm text-cream">{taxProfile?.foglalkozas === 'fofoglalkozasu' ? 'Főfoglalkozású' : taxProfile?.foglalkozas === 'mellekfoglalkozasu' ? 'Mellékfoglalkozású' : '—'}</p>
+                  </div>
+                )}
+                <div>
+                  <p className="text-[10px] text-steel tracking-[0.1em] uppercase mb-1">HIPA kulcs</p>
+                  <p className="text-sm text-cream">{typeof taxProfile?.hipaKulcs === 'number' ? `${taxProfile.hipaKulcs}%` : '—'}</p>
+                </div>
+              </div>
+
+              <div className="pt-3 border-t border-teal/10 flex items-center justify-between gap-4">
+                <p className="text-xs text-steel">Az adózási profilod módosításához nyisd meg a varázslót.</p>
+                <button
+                  onClick={() => setShowTaxWizard(true)}
+                  className="px-4 py-2 text-sm font-medium bg-teal text-ink rounded-lg hover:bg-teal/80 transition-colors cursor-pointer whitespace-nowrap"
+                >
+                  Adózási profil szerkesztése
+                </button>
+              </div>
+            </div>
+
+            {showTaxWizard && (
+              <TaxProfileWizard
+                onClose={() => setShowTaxWizard(false)}
+                onSaved={() => { setShowTaxWizard(false); loadTaxProfile(); }}
+              />
             )}
           </div>
         )}

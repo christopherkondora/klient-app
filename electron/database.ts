@@ -782,6 +782,9 @@ function runMigrations() {
   if (!userColNames.includes('vat_number')) {
     db.run("ALTER TABLE user_settings ADD COLUMN vat_number TEXT DEFAULT ''");
   }
+  if (!userColNames.includes('is_business')) {
+    db.run("ALTER TABLE user_settings ADD COLUMN is_business INTEGER DEFAULT 1");
+  }
 
   // Add VAT columns to invoices (amount marad bruttó, visszamenőleges kompatibilitás)
   const invColsVat = db.exec("PRAGMA table_info(invoices)");

@@ -20,9 +20,11 @@ const baseNavItems = [
 export default function Sidebar({ onOpenShortcut, activeShortcutUrl }: { onOpenShortcut: (url: string | null) => void; activeShortcutUrl: string | null }) {
   const { user } = useAuth();
   const teamMode = user?.team_mode === 1;
+  const isBusiness = user?.is_business !== 0;
+  const filteredBase = isBusiness ? baseNavItems : baseNavItems.filter(n => n.to !== '/finances');
   const navItems = teamMode
-    ? [...baseNavItems.slice(0, 5), { to: '/team', icon: UsersRound, label: 'Csapat' }, ...baseNavItems.slice(5)]
-    : baseNavItems;
+    ? [...filteredBase.slice(0, Math.min(5, filteredBase.length)), { to: '/team', icon: UsersRound, label: 'Csapat' }, ...filteredBase.slice(Math.min(5, filteredBase.length))]
+    : filteredBase;
   const [shortcuts, setShortcuts] = useState<Shortcut[]>([]);
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingShortcut, setEditingShortcut] = useState<Shortcut | null>(null);

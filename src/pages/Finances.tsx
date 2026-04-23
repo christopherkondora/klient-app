@@ -43,6 +43,7 @@ export default function Finances() {
   const { user } = useAuth();
   const tc = useThemedColor();
   const hasInvoicing = user?.invoice_platform && user.invoice_platform !== 'none';
+  const isBusiness = user?.is_business !== 0;
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -211,6 +212,21 @@ export default function Finances() {
     return (
       <div className="flex items-center justify-center h-full">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-steel"></div>
+      </div>
+    );
+  }
+
+  if (!isBusiness) {
+    return (
+      <div className="max-w-7xl mx-auto">
+        <PageHeader title="Pénzügyek" subtitle="Magánszemély mód – a számlázás és adózás ki van kapcsolva" />
+        <div className="mt-8 bg-surface-800/50 border border-dashed border-teal/20 rounded-xl p-8 text-center">
+          <Coins width={32} height={32} className="mx-auto mb-3 text-teal" />
+          <h2 className="font-pixel text-[15px] text-cream mb-2">Pénzügyi modul kikapcsolva</h2>
+          <p className="text-sm text-steel max-w-md mx-auto">
+            Magánszemélyként regisztráltál. Ha vállalkozóvá válsz, kapcsold be a vállalkozói módot a Beállítások → Fiók menüpontban, és utána elérhetővé válik a számlázás és az adózás is.
+          </p>
+        </div>
       </div>
     );
   }
