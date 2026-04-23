@@ -1,8 +1,10 @@
-import { app, BrowserWindow, ipcMain, protocol, Tray, Menu, nativeImage, session } from 'electron';
+import { app, BrowserWindow, ipcMain, protocol, Tray, Menu, nativeImage, session, powerMonitor } from 'electron';
 import path from 'path';
 import { autoUpdater } from 'electron-updater';
+import cron from 'node-cron';
 import { initDatabase } from './database';
 import { registerIpcHandlers } from './ipc';
+import { syncAllAccounts } from './ads-sync';
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -30,7 +32,9 @@ function createWindow() {
 
   if (isDev) {
     mainWindow.loadURL('http://localhost:5173');
-    mainWindow.webContents.openDevTools();
+    if (process.env.ELECTRON_OPEN_DEVTOOLS === '1') {
+      mainWindow.webContents.openDevTools({ mode: 'detach' });
+    }
   } else {
     mainWindow.loadFile(path.join(__dirname, '../dist-react/index.html'));
   }
@@ -77,6 +81,18 @@ app.whenReady().then(async () => {
 
   createWindow();
   createTray();
+
+  // Google Ads sync — every 6 hours
+  cron.schedule('0 */6 * * *', () => {
+    console.log('[AdsSync] Scheduled sync started');
+    syncAllAccounts('incremental').catch((err) => console.error('[AdsSync] Scheduled sync failed:', err));
+  });
+
+  // Catch-up sync after resume from sleep
+  powerMonitor.on('resume', () => {
+    console.log('[AdsSync] Catch-up sync after resume');
+    syncAllAccounts('catchup').catch((err) => console.error('[AdsSync] Catch-up sync failed:', err));
+  });
 
   // Auto-updater (only in production)
   if (!isDev) {
@@ -300,5 +316,42 @@ ipcMain.handle('invoices:extract', async (_event, filePath: string) => {
   } catch (err) {
     console.error('[InvoiceExtract] Error:', err);
     return { data: null, error: 'Invoice extraction failed' };
+  }
+});
+
+// ── AI Expense extraction (PDF) via Edge Function ──
+ipcMain.handle('expenses:extract', async (_event, filePath: string) => {
+  if (!filePath) return { data: null, error: 'No file' };
+  try {
+    const fileBuffer = fs.readFileSync(filePath);
+    const base64File = fileBuffer.toString('base64');
+    console.log(`[ExpenseExtract] Processing PDF: ${filePath}, size: ${fileBuffer.length} bytes`);
+
+    const sb = getSupabase();
+    const { data, error } = await sb.functions.invoke('expense-extract', {
+      body: { fileBase64: base64File },
+    });
+    if (error) {
+      console.error('[ExpenseExtract] Edge Function error:', error);
+      let detail = String(error);
+      try {
+        if (error.context && typeof error.context.json === 'function') {
+          const body = await error.context.json();
+          detail = body?.error || detail;
+        }
+      } catch { /* ignore */ }
+      return { data: null, error: detail };
+    }
+    console.log('[ExpenseExtract] Raw response data:', JSON.stringify(data));
+    // Edge Function returns { data: { name, amount, ... } } — unwrap the inner data
+    const extracted = data?.data ?? null;
+    console.log('[ExpenseExtract] Extracted:', JSON.stringify(extracted));
+    if (!extracted || typeof extracted !== 'object') {
+      return { data: null, error: 'No data extracted' };
+    }
+    return { data: extracted };
+  } catch (err) {
+    console.error('[ExpenseExtract] Error:', err);
+    return { data: null, error: 'Expense extraction failed' };
   }
 });

@@ -68,22 +68,26 @@ Deno.serve(async (req) => {
     // Service-role client for DB writes (bypasses RLS)
     const adminClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-    const { action } = await req.json() as { action: 'cancel' | 'reactivate' };
+    const { action, module } = await req.json() as { action: 'cancel' | 'reactivate'; module?: 'klient' | 'ads' };
+    const isAdsModule = module === 'ads';
 
     console.log('[ManageSubscription] Action requested:', {
       action,
+      module: module || 'klient',
       user_id: user.id,
-      subscription_id: sub.stripe_subscription_id,
-      current_status: sub.status,
+      subscription_id: isAdsModule ? sub.ads_stripe_subscription_id : sub.stripe_subscription_id,
+      current_status: isAdsModule ? sub.ads_status : sub.status,
       environment: STRIPE_ENV,
     });
 
+    const targetSubId = isAdsModule ? sub.ads_stripe_subscription_id : sub.stripe_subscription_id;
+
     if (action === 'cancel') {
-      if (!sub.stripe_subscription_id) {
+      if (!targetSubId) {
         console.error('[ManageSubscription] Cannot cancel:', {
           user_id: user.id,
           reason: 'no_stripe_subscription_id',
-          plan: sub.plan,
+          module: module || 'klient',
         });
         return new Response(JSON.stringify({ error: 'Nem lehet lemondani (nincs Stripe előfizetés)' }), {
           status: 400,
@@ -94,12 +98,15 @@ Deno.serve(async (req) => {
       // Cancel at period end (user keeps access until billing period ends)
       const params = new URLSearchParams();
       params.append('cancel_at_period_end', 'true');
-      await stripeRequest(`/subscriptions/${sub.stripe_subscription_id}`, 'POST', params);
+      await stripeRequest(`/subscriptions/${targetSubId}`, 'POST', params);
 
       // Update local status (service role to bypass RLS)
+      const updatePayload = isAdsModule
+        ? { ads_status: 'cancelled', updated_at: new Date().toISOString() }
+        : { status: 'cancelled', updated_at: new Date().toISOString() };
       const { error: updateErr } = await adminClient
         .from('subscriptions')
-        .update({ status: 'cancelled', updated_at: new Date().toISOString() })
+        .update(updatePayload)
         .eq('user_id', user.id);
 
       if (updateErr) {
@@ -121,11 +128,11 @@ Deno.serve(async (req) => {
     }
 
     if (action === 'reactivate') {
-      if (!sub.stripe_subscription_id) {
+      if (!targetSubId) {
         console.error('[ManageSubscription] Cannot reactivate:', {
           user_id: user.id,
           reason: 'no_stripe_subscription_id',
-          plan: sub.plan,
+          module: module || 'klient',
         });
         return new Response(JSON.stringify({ error: 'Nem lehet újraaktiválni' }), {
           status: 400,
@@ -136,12 +143,15 @@ Deno.serve(async (req) => {
       // Remove cancellation
       const params = new URLSearchParams();
       params.append('cancel_at_period_end', 'false');
-      await stripeRequest(`/subscriptions/${sub.stripe_subscription_id}`, 'POST', params);
+      await stripeRequest(`/subscriptions/${targetSubId}`, 'POST', params);
 
       // Update local status (service role to bypass RLS)
+      const updatePayload = isAdsModule
+        ? { ads_status: 'active', updated_at: new Date().toISOString() }
+        : { status: 'active', updated_at: new Date().toISOString() };
       const { error: updateErr } = await adminClient
         .from('subscriptions')
-        .update({ status: 'active', updated_at: new Date().toISOString() })
+        .update(updatePayload)
         .eq('user_id', user.id);
 
       if (updateErr) {

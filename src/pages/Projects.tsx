@@ -2,7 +2,7 @@ import { useEffect, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Plus, Search, Clock, Calendar, AlertTriangle, Trash2, X,
-  ChevronLeft, ChevronRight, Receipt, User, ArrowRight, ArrowLeft, Briefcase,
+  ChevronLeft, ChevronRight, Receipt, User, ArrowRight, ArrowLeft, Briefcase, Filter,
 } from 'lucide-react';
 import {
   format,
@@ -24,6 +24,7 @@ import TimePicker from '../components/TimePicker';
 import HexColorPicker from '../components/HexColorPicker';
 import { generateProjectColor, getProjectColorOptions, useThemedColor } from '../utils/colors';
 import ConfirmDialog from '../components/ConfirmDialog';
+import PageHeader from '../components/PageHeader';
 
 export default function Projects() {
   const navigate = useNavigate();
@@ -34,9 +35,13 @@ export default function Projects() {
   const [invoicedProjectIds, setInvoicedProjectIds] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [clientFilter, setClientFilter] = useState<string>('all');
+  const [timeRange, setTimeRange] = useState<string>('all');
+  const [page, setPage] = useState(1);
   const [showForm, setShowForm] = useState(false);
   const [deleteProjectId, setDeleteProjectId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const ITEMS_PER_PAGE = 10;
 
   useEffect(() => {
     loadData();
@@ -53,7 +58,7 @@ export default function Projects() {
       setProjects(projectsData);
       setClients(clientsData);
       setTeamMembers(teamMembersData);
-      setInvoicedProjectIds(new Set(invoicesData.filter(i => i.project_id).map(i => i.project_id!)));
+      setInvoicedProjectIds(new Set(invoicesData.filter(i => i.project_id && i.status !== 'cancelled').map(i => i.project_id!)));
     } catch (err) {
       console.error('Failed to load projects:', err);
     } finally {
@@ -103,12 +108,38 @@ export default function Projects() {
     }
   }
 
-  const filtered = projects.filter(p => {
-    const matchesSearch = p.name.toLowerCase().includes(search.toLowerCase()) ||
-      p.client_name?.toLowerCase().includes(search.toLowerCase());
-    const matchesStatus = statusFilter === 'all' || p.status === statusFilter;
-    return matchesSearch && matchesStatus;
-  });
+  const filtered = useMemo(() => {
+    const now = new Date();
+    return projects
+      .filter(p => {
+        const matchesSearch = p.name.toLowerCase().includes(search.toLowerCase()) ||
+          p.client_name?.toLowerCase().includes(search.toLowerCase());
+        const matchesStatus = statusFilter === 'all' || p.status === statusFilter;
+        const matchesClient = clientFilter === 'all' || p.client_id === clientFilter;
+        let matchesTime = true;
+        if (timeRange !== 'all' && p.created_at) {
+          const created = parseISO(p.created_at);
+          const diffDays = differenceInDays(now, created);
+          if (timeRange === '7') matchesTime = diffDays <= 7;
+          else if (timeRange === '30') matchesTime = diffDays <= 30;
+          else if (timeRange === '90') matchesTime = diffDays <= 90;
+          else if (timeRange === '365') matchesTime = diffDays <= 365;
+        }
+        return matchesSearch && matchesStatus && matchesClient && matchesTime;
+      })
+      .sort((a, b) => {
+        const dateA = a.created_at ? new Date(a.created_at).getTime() : 0;
+        const dateB = b.created_at ? new Date(b.created_at).getTime() : 0;
+        return dateB - dateA;
+      });
+  }, [projects, search, statusFilter, clientFilter, timeRange]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / ITEMS_PER_PAGE));
+  const currentPage = Math.min(page, totalPages);
+  const paginated = filtered.slice((currentPage - 1) * ITEMS_PER_PAGE, currentPage * ITEMS_PER_PAGE);
+
+  // Reset page when filters change
+  useEffect(() => { setPage(1); }, [search, statusFilter, clientFilter, timeRange]);
 
   if (loading) {
     return (
@@ -120,24 +151,23 @@ export default function Projects() {
 
   return (
     <div className="max-w-7xl mx-auto space-y-8">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="font-pixel text-xl text-cream">Projektek</h1>
-          <p className="text-steel text-sm mt-2">{projects.length} projekt</p>
-        </div>
-        <button
+      <PageHeader
+        title="Projektek"
+        subtitle={filtered.length === projects.length ? `${projects.length} projekt` : `${filtered.length} / ${projects.length} projekt`}
+        actions={(
+          <button
           onClick={() => setShowForm(true)}
           className="flex items-center gap-2 px-4 py-2 bg-teal text-cream rounded-lg text-sm font-medium hover:bg-teal/80 transition-colors"
         >
           <Plus width={16} height={16} />
           Új projekt
         </button>
-      </div>
+        )}
+      />
 
       {/* Filters */}
-      <div className="flex gap-3">
-        <div className="relative flex-1">
+      <div className="flex gap-3 flex-wrap">
+        <div className="relative flex-1 min-w-[200px]">
           <Search width={16} height={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-steel" />
           <input
             type="text"
@@ -158,21 +188,43 @@ export default function Projects() {
           <option value="on_hold">Szünetelő</option>
           <option value="cancelled">Törölve</option>
         </select>
+        <select
+          value={clientFilter}
+          onChange={e => setClientFilter(e.target.value)}
+          className="px-3 py-2.5 bg-surface-800/50 border border-teal/10 rounded-lg text-sm text-cream focus:outline-none focus:ring-2 focus:ring-teal/30"
+        >
+          <option value="all">Összes ügyfél</option>
+          {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </select>
+        <select
+          value={timeRange}
+          onChange={e => setTimeRange(e.target.value)}
+          className="px-3 py-2.5 bg-surface-800/50 border border-teal/10 rounded-lg text-sm text-cream focus:outline-none focus:ring-2 focus:ring-teal/30"
+        >
+          <option value="all">Bármikor</option>
+          <option value="7">Elmúlt 7 nap</option>
+          <option value="30">Elmúlt 30 nap</option>
+          <option value="90">Elmúlt 90 nap</option>
+          <option value="365">Elmúlt 1 év</option>
+        </select>
       </div>
 
       {/* Project List */}
       {filtered.length === 0 ? (
         <div className="text-center py-12">
           <p className="text-steel/60 text-sm">
-            {search || statusFilter !== 'all' ? 'Nincs találat' : 'Még nincsenek projektek'}
+            {search || statusFilter !== 'all' || clientFilter !== 'all' || timeRange !== 'all' ? 'Nincs találat' : 'Még nincsenek projektek'}
           </p>
         </div>
       ) : (
         <div className="space-y-3">
-          {filtered.map(project => {
+          {paginated.map((project, idx) => {
             const daysLeft = project.deadline ? differenceInDays(parseISO(project.deadline), new Date()) : Infinity;
             const hoursPercent = project.estimated_hours > 0 ? (project.allocated_hours / project.estimated_hours) * 100 : 0;
             const isOverdue = daysLeft < 0 && project.status === 'active';
+            // Staggered bar animation: only first 5 items, each 80ms slower than the previous
+            const barDelay = idx < 5 ? `${idx * 80}ms` : '0ms';
+            const barDuration = idx < 5 ? `${400 + idx * 80}ms` : '0ms';
 
             return (
               <div
@@ -244,6 +296,7 @@ export default function Projects() {
                         style={{
                           width: `${Math.min(hoursPercent, 100)}%`,
                           backgroundColor: hoursPercent >= 100 ? '#AEC3B0' : hoursPercent >= 75 ? '#f59e0b' : '#598392',
+                          animation: idx < 5 ? `bar-fill ${barDuration} ${barDelay} cubic-bezier(0.32,0.72,0,1) both` : undefined,
                         }}
                       />
                     </div>
@@ -268,6 +321,42 @@ export default function Projects() {
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-between pt-2">
+          <p className="text-xs text-steel">
+            {filtered.length} projektből {(currentPage - 1) * ITEMS_PER_PAGE + 1}–{Math.min(currentPage * ITEMS_PER_PAGE, filtered.length)}
+          </p>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setPage(p => Math.max(1, p - 1))}
+              disabled={currentPage <= 1}
+              className="p-1.5 rounded-lg text-steel hover:text-cream hover:bg-teal/10 transition-colors disabled:opacity-30 disabled:pointer-events-none cursor-pointer"
+            >
+              <ChevronLeft width={16} height={16} />
+            </button>
+            {Array.from({ length: totalPages }, (_, i) => i + 1).map(p => (
+              <button
+                key={p}
+                onClick={() => setPage(p)}
+                className={`w-8 h-8 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
+                  p === currentPage ? 'bg-teal/20 text-cream' : 'text-steel hover:text-cream hover:bg-teal/10'
+                }`}
+              >
+                {p}
+              </button>
+            ))}
+            <button
+              onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+              disabled={currentPage >= totalPages}
+              className="p-1.5 rounded-lg text-steel hover:text-cream hover:bg-teal/10 transition-colors disabled:opacity-30 disabled:pointer-events-none cursor-pointer"
+            >
+              <ChevronRight width={16} height={16} />
+            </button>
+          </div>
         </div>
       )}
 
@@ -374,10 +463,10 @@ export function ProjectForm({ clients, teamMembers = [], onSubmit, onClose, defa
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onDoubleClick={onClose}>
-      <div className="bg-surface-800 rounded-2xl border border-teal/15 w-full max-w-lg shadow-2xl max-h-[85vh] flex flex-col overflow-hidden" onDoubleClick={e => e.stopPropagation()}>
+      <div className="bg-surface-800 rounded-2xl ring-1 ring-inset ring-teal/15 w-full max-w-lg shadow-2xl max-h-[85vh] flex flex-col overflow-hidden" onDoubleClick={e => e.stopPropagation()}>
 
         {/* Header accent */}
-        <div className="h-1 bg-gradient-to-r from-teal via-steel to-teal/30" />
+        <div className="h-1 bg-teal" />
 
         <div className="p-5 flex flex-col flex-1 min-h-0">
           {/* Header with close button */}

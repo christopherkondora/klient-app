@@ -1,18 +1,20 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import { useAuth } from '../contexts/AuthContext';
 import { useSubscription } from '../contexts/SubscriptionContext';
 import Paywall from '../components/Paywall';
-import { Crown, Check, Zap, User, Palette, SlidersHorizontal, Info, LogOut, KeyRound, Eye, EyeOff, XCircle, RotateCcw, CreditCard, X, Loader2 } from 'lucide-react';
+import PageHeader from '../components/PageHeader';
+import { Crown, Check, Zap, User, Palette, SlidersHorizontal, Info, LogOut, KeyRound, Eye, EyeOff, XCircle, RotateCcw, CreditCard, X, Loader2, Receipt, CheckCircle, AlertCircle, Link as LinkIcon, Trash2, Megaphone } from 'lucide-react';
 import { version } from '../../package.json';
 
-const INVOICE_PLATFORMS = [
-  { id: 'szamlazz', label: 'Számlázz.hu' },
-  { id: 'billingo', label: 'Billingo' },
-  { id: 'nav', label: 'NAV Online Számla' },
-  { id: 'kulcs', label: 'Kulcs-Soft' },
-  { id: 'none', label: 'Nincs / Egyéb' },
-];
+// Platform selection now handled in the Számlázás tab
+// const INVOICE_PLATFORMS = [
+//   { id: 'szamlazz', label: 'Számlázz.hu' },
+//   { id: 'billingo', label: 'Billingo' },
+//   { id: 'nav', label: 'NAV Online Számla' },
+//   { id: 'kulcs', label: 'Kulcs-Soft' },
+//   { id: 'none', label: 'Nincs / Egyéb' },
+// ];
 
 const PLANS = [
   {
@@ -36,15 +38,236 @@ const PLANS = [
   },
 ];
 
-type Tab = 'fiok' | 'elofizetes' | 'megjelenes' | 'altalanos' | 'alkalmazas';
+type Tab = 'fiok' | 'elofizetes' | 'megjelenes' | 'szamlazas' | 'altalanos' | 'alkalmazas' | 'ads';
 
 const TABS: { id: Tab; label: string; icon: typeof User }[] = [
   { id: 'fiok', label: 'Fiók', icon: User },
   { id: 'elofizetes', label: 'Előfizetés', icon: Crown },
+  { id: 'ads', label: 'Klient Ads', icon: Megaphone },
   { id: 'megjelenes', label: 'Megjelenés', icon: Palette },
+  { id: 'szamlazas', label: 'Számlázás', icon: Receipt },
   { id: 'altalanos', label: 'Általános', icon: SlidersHorizontal },
   { id: 'alkalmazas', label: 'Alkalmazás', icon: Info },
 ];
+
+type BillingPlatform = 'billingo' | 'szamlazz' | 'egyeb' | 'none';
+type ConnectionStatus = 'idle' | 'testing' | 'connected' | 'error';
+
+const ADS_PLANS = [
+  {
+    id: 'monthly' as const,
+    name: 'Havi',
+    price: '4 990 Ft',
+    period: '/hó',
+  },
+  {
+    id: 'yearly' as const,
+    name: 'Éves',
+    price: '49 900 Ft',
+    period: '/év',
+    badge: '2 hónap ingyen',
+  },
+];
+
+function AdsSubscriptionTab() {
+  const { subscription, hasAdsModule, adsStatus, openCheckout, cancelSubscription, reactivateSubscription, refresh } = useSubscription();
+  const [checkoutLoading, setCheckoutLoading] = useState<string | null>(null);
+  const [cancelLoading, setCancelLoading] = useState(false);
+  const [reactivateLoading, setReactivateLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [checkoutUrl, setCheckoutUrl] = useState<string | null>(null);
+  const [webviewLoading, setWebviewLoading] = useState(true);
+
+  const adsActive = adsStatus === 'active';
+  const adsCancelled = adsStatus === 'cancelled';
+
+  const handleSubscribe = async (plan: 'monthly' | 'yearly') => {
+    setCheckoutLoading(plan);
+    setError('');
+    try {
+      const url = await openCheckout(plan, 'ads');
+      setCheckoutUrl(url);
+    } catch (err: any) {
+      setError(err.message || 'Nem sikerült megnyitni a fizetési oldalt');
+    } finally {
+      setCheckoutLoading(null);
+    }
+  };
+
+  const handleCancel = async () => {
+    setCancelLoading(true);
+    setError('');
+    try {
+      await cancelSubscription('ads');
+    } catch (err: any) {
+      setError(err.message || 'Hiba történt a lemondás során');
+    } finally {
+      setCancelLoading(false);
+    }
+  };
+
+  const handleReactivate = async () => {
+    setReactivateLoading(true);
+    setError('');
+    try {
+      await reactivateSubscription('ads');
+    } catch (err: any) {
+      setError(err.message || 'Hiba történt az újraaktiválás során');
+    } finally {
+      setReactivateLoading(false);
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="font-pixel text-[15px] text-cream">Klient Ads</h2>
+        <p className="text-xs text-steel mt-1">Google Ads kampánykezelő és AI elemző modul</p>
+      </div>
+
+      {/* Feature highlights */}
+      <div className="bg-surface-800/50 rounded-lg border border-teal/10 p-6">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="w-10 h-10 bg-teal/10 rounded-xl flex items-center justify-center">
+            <Megaphone className="w-5 h-5 text-teal" />
+          </div>
+          <div>
+            <h3 className="text-sm font-semibold text-cream">Google Ads Elemző Modul</h3>
+            <p className="text-xs text-steel">Valós idejű kampányteljesítmény, AI elemzés, automatikus riasztások</p>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          {[
+            'Kampány teljesítmény dashboard',
+            'AI-alapú optimalizálási javaslatok',
+            'Automatikus anomália detektálás',
+            'Részletes kampány elemzés',
+            'Költés és ROAS riportok',
+            'Egyedi riasztási szabályok',
+          ].map(f => (
+            <div key={f} className="flex items-center gap-2 text-xs text-steel">
+              <Check className="w-3.5 h-3.5 text-teal shrink-0" />
+              {f}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Current status */}
+      {hasAdsModule ? (
+        <div className="bg-surface-800/50 rounded-lg border border-teal/10 p-6 space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-sm font-semibold text-cream">Aktív előfizetés</h3>
+              <p className="text-xs text-steel mt-0.5">
+                Csomag: <span className="text-cream font-medium">{subscription?.ads_plan === 'monthly' ? 'Havi' : 'Éves'}</span>
+                {adsCancelled && <span className="text-amber-400 ml-2">(lemondva — a periódus végéig aktív)</span>}
+              </p>
+            </div>
+            <span className={`px-2 py-0.5 rounded text-[11px] font-medium ${adsActive ? 'bg-emerald-400/10 text-emerald-400' : 'bg-amber-400/10 text-amber-400'}`}>
+              {adsActive ? 'Aktív' : 'Lemondva'}
+            </span>
+          </div>
+          {subscription?.ads_current_period_end && (
+            <p className="text-xs text-steel/60">
+              {adsCancelled ? 'Lejárat' : 'Következő számlázás'}: {new Date(subscription.ads_current_period_end).toLocaleDateString('hu-HU')}
+            </p>
+          )}
+          {error && <p className="text-xs text-red-400">{error}</p>}
+          {adsCancelled ? (
+            <button
+              onClick={handleReactivate}
+              disabled={reactivateLoading}
+              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-medium bg-teal/15 text-cream hover:bg-teal/25 transition-colors disabled:opacity-50"
+            >
+              {reactivateLoading && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+              Újraaktiválás
+            </button>
+          ) : (
+            <button
+              onClick={handleCancel}
+              disabled={cancelLoading}
+              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-medium border border-red-500/30 text-red-400 hover:bg-red-500/10 transition-colors disabled:opacity-50"
+            >
+              {cancelLoading && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+              Előfizetés lemondása
+            </button>
+          )}
+        </div>
+      ) : (
+        /* Plan selection */
+        <div className="grid grid-cols-2 gap-4">
+          {ADS_PLANS.map(plan => (
+            <div key={plan.id} className="bg-surface-800/50 rounded-lg border border-teal/10 p-6 flex flex-col">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-sm font-semibold text-cream">{plan.name}</h3>
+                {plan.badge && (
+                  <span className="text-[10px] bg-teal/15 text-teal px-2 py-0.5 rounded-full font-medium">{plan.badge}</span>
+                )}
+              </div>
+              <p className="text-2xl font-bold text-cream mb-1">
+                {plan.price}
+                <span className="text-sm font-normal text-steel">{plan.period}</span>
+              </p>
+              <div className="flex-1" />
+              <button
+                onClick={() => handleSubscribe(plan.id)}
+                disabled={checkoutLoading !== null}
+                className="mt-4 w-full py-2.5 rounded-lg text-sm font-medium bg-teal text-cream hover:bg-teal/80 transition-colors disabled:opacity-50"
+              >
+                {checkoutLoading === plan.id ? <Loader2 className="w-4 h-4 animate-spin mx-auto" /> : 'Előfizetés'}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {error && !hasAdsModule && <p className="text-xs text-red-400">{error}</p>}
+
+      {/* Checkout webview */}
+      {checkoutUrl && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onDoubleClick={() => { setCheckoutUrl(null); refresh(); }}>
+          <div className="bg-surface-800 rounded-xl border border-teal/15 shadow-2xl w-[90vw] h-[85vh] flex flex-col overflow-hidden" onDoubleClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-4 py-2 border-b border-teal/10 shrink-0">
+              <div className="flex items-center gap-2">
+                <CreditCard width={14} height={14} className="text-steel" />
+                <span className="text-sm text-cream font-medium">Klient Ads — Fizetés</span>
+              </div>
+              <button onClick={() => { setCheckoutUrl(null); refresh(); }} className="p-1.5 rounded-lg hover:bg-teal/10 text-steel hover:text-cream transition-colors">
+                <X width={16} height={16} />
+              </button>
+            </div>
+            <div className="flex-1 relative">
+              {webviewLoading && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center bg-surface-800 z-10">
+                  <Loader2 className="w-8 h-8 text-teal animate-spin mb-3" />
+                  <p className="text-steel text-sm">Fizetési oldal betöltése...</p>
+                </div>
+              )}
+              <webview
+                src={checkoutUrl}
+                partition="persist:checkout"
+                className="w-full h-full"
+                ref={(el: HTMLWebViewElement | null) => {
+                  if (el) {
+                    el.addEventListener('did-finish-load', () => setWebviewLoading(false));
+                    el.addEventListener('did-fail-load', () => setWebviewLoading(false));
+                    el.addEventListener('did-navigate', (e: any) => {
+                      if (e.url?.includes('/success')) { setCheckoutUrl(null); refresh(); }
+                    });
+                    el.addEventListener('will-navigate', (e: any) => {
+                      if (e.url?.includes('/success')) { setCheckoutUrl(null); refresh(); }
+                    });
+                  }
+                }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function Settings() {
   const { theme, setTheme } = useTheme();
@@ -86,6 +309,66 @@ export default function Settings() {
   const [cancelLoading, setCancelLoading] = useState(false);
   const [reactivateLoading, setReactivateLoading] = useState(false);
   const [subActionError, setSubActionError] = useState('');
+
+  // Billing config state
+  const [billingPlatform, setBillingPlatform] = useState<BillingPlatform>('none');
+  const [billingApiKey, setBillingApiKey] = useState('');
+  const [billingUrl, setBillingUrl] = useState('');
+  const [showBillingKey, setShowBillingKey] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('idle');
+  const [connectionError, setConnectionError] = useState('');
+  const [billingSaving, setBillingSaving] = useState(false);
+  const [billingLoaded, setBillingLoaded] = useState(false);
+
+  // Load billing config on mount
+  useEffect(() => {
+    window.electronAPI.getBillingConfig().then((cfg) => {
+      setBillingPlatform((cfg.platform as BillingPlatform) || 'none');
+      setBillingUrl(cfg.url || '');
+      if (cfg.hasApiKey) {
+        setBillingApiKey('••••••••••••••••');
+        setConnectionStatus('connected');
+      }
+      setBillingLoaded(true);
+    });
+  }, []);
+
+  const handleSaveBillingConfig = async () => {
+    setBillingSaving(true);
+    try {
+      const isPlaceholder = billingApiKey === '••••••••••••••••';
+      await window.electronAPI.setBillingConfig({
+        platform: billingPlatform,
+        apiKey: isPlaceholder ? undefined : billingApiKey || undefined,
+        url: billingPlatform === 'egyeb' ? billingUrl : undefined,
+      });
+      if ((billingPlatform === 'billingo' || billingPlatform === 'szamlazz') && billingApiKey && !isPlaceholder) {
+        await handleTestConnection();
+      }
+    } finally {
+      setBillingSaving(false);
+    }
+  };
+
+  const handleTestConnection = async () => {
+    setConnectionStatus('testing');
+    setConnectionError('');
+    const res = await window.electronAPI.testBillingConnection({ platform: billingPlatform });
+    if (res.success) {
+      setConnectionStatus('connected');
+    } else {
+      setConnectionStatus('error');
+      setConnectionError(res.error || 'Ismeretlen hiba');
+    }
+  };
+
+  const handleClearBillingConfig = async () => {
+    await window.electronAPI.clearBillingConfig();
+    setBillingApiKey('');
+    setBillingUrl('');
+    setConnectionStatus('idle');
+    setConnectionError('');
+  };
 
   const currentPlan = subscription?.plan || 'trial';
   const isTrial = subscription?.status === 'trial';
@@ -152,10 +435,15 @@ export default function Settings() {
   }
 
   return (
-    <div className="max-w-4xl mx-auto flex gap-6 h-full">
+    <div className="max-w-6xl mx-auto h-full min-h-0 flex flex-col gap-6">
+      <PageHeader
+        title="Beállítások"
+        subtitle="Fiók, előfizetés, megjelenés és számlázási konfiguráció egy közös admin felületen."
+      />
+
+      <div className="flex min-h-0 flex-1 gap-6">
       {/* Tab navigation */}
-      <nav className="w-48 shrink-0 py-2">
-        <h1 className="font-pixel text-lg text-cream px-3 mb-6">Beállítások</h1>
+      <nav className="w-56 shrink-0 py-2">
         <div className="space-y-1">
           {TABS.map((tab) => {
             const Icon = tab.icon;
@@ -313,7 +601,14 @@ export default function Settings() {
                   <input
                     type="text"
                     value={user?.tax_number || ''}
-                    onChange={e => updateUser({ tax_number: e.target.value })}
+                    onChange={e => {
+                      const raw = e.target.value.replace(/[^\d]/g, '').slice(0, 11);
+                      let formatted = raw;
+                      if (raw.length > 8) formatted = raw.slice(0, 8) + '-' + raw.slice(8);
+                      if (raw.length > 9) formatted = raw.slice(0, 8) + '-' + raw.slice(8, 9) + '-' + raw.slice(9);
+                      updateUser({ tax_number: formatted });
+                    }}
+                    maxLength={13}
                     className="w-full px-3 py-2 rounded-lg bg-surface-800 border border-teal/10 text-sm text-cream focus:outline-none focus:border-teal/40"
                     placeholder="12345678-1-42"
                   />
@@ -323,7 +618,13 @@ export default function Settings() {
                   <input
                     type="text"
                     value={user?.address || ''}
-                    onChange={e => updateUser({ address: e.target.value })}
+                    onChange={e => {
+                      let val = e.target.value;
+                      // Auto-insert space after 4-digit postal code
+                      const m = val.match(/^(\d{4})(\S)/);
+                      if (m) val = m[1] + ' ' + val.slice(4);
+                      updateUser({ address: val });
+                    }}
                     className="w-full px-3 py-2 rounded-lg bg-surface-800 border border-teal/10 text-sm text-cream focus:outline-none focus:border-teal/40"
                     placeholder="1234 Budapest, Példa utca 1."
                   />
@@ -333,7 +634,14 @@ export default function Settings() {
                   <input
                     type="text"
                     value={user?.bank_account || ''}
-                    onChange={e => updateUser({ bank_account: e.target.value })}
+                    onChange={e => {
+                      const raw = e.target.value.replace(/[^\d]/g, '').slice(0, 24);
+                      let formatted = raw;
+                      if (raw.length > 8) formatted = raw.slice(0, 8) + '-' + raw.slice(8);
+                      if (raw.length > 16) formatted = raw.slice(0, 8) + '-' + raw.slice(8, 16) + '-' + raw.slice(16);
+                      updateUser({ bank_account: formatted });
+                    }}
+                    maxLength={26}
                     className="w-full px-3 py-2 rounded-lg bg-surface-800 border border-teal/10 text-sm text-cream focus:outline-none focus:border-teal/40"
                     placeholder="12345678-12345678-12345678"
                   />
@@ -547,39 +855,236 @@ export default function Settings() {
           </div>
         )}
 
-        {/* ── Általános ── */}
-        {activeTab === 'altalanos' && (
+        {/* ── Számlázás ── */}
+        {activeTab === 'szamlazas' && billingLoaded && (
           <div className="space-y-6">
             <div>
-              <h2 className="font-pixel text-[15px] text-cream">Általános</h2>
-              <p className="text-xs text-steel mt-1">Számlázási és alkalmazás beállítások</p>
+              <h2 className="font-pixel text-[15px] text-cream">Számlázás</h2>
+              <p className="text-xs text-steel mt-1">Számlázó rendszer integráció és API beállítások</p>
             </div>
 
-            {/* Invoice Platform */}
+            {/* Platform selector */}
             <div className="bg-surface-800/50 rounded-lg border border-teal/10 p-6">
-              <h3 className="text-sm font-semibold text-ash mb-1">Számlázási platform</h3>
-              <p className="text-[11px] text-steel mb-4">Válaszd ki, melyik rendszert használod a számlázáshoz.</p>
-              <div className="flex flex-wrap gap-2">
-                {INVOICE_PLATFORMS.map(p => (
+              <h3 className="text-sm font-semibold text-ash mb-1">Számlázó rendszer</h3>
+              <p className="text-[11px] text-steel mb-4">Válaszd ki, melyik számlázót szeretnéd használni.</p>
+              <div className="grid grid-cols-2 gap-3">
+                {([
+                  { id: 'billingo' as BillingPlatform, label: 'Billingo', desc: 'Mély integráció, API kulcson keresztül', deep: true },
+                  { id: 'szamlazz' as BillingPlatform, label: 'Számlázz.hu', desc: 'Mély integráció, API kulcson keresztül', deep: true },
+                  { id: 'egyeb' as BillingPlatform, label: 'Egyéb', desc: 'Egyszerű link megnyitás', deep: false },
+                  { id: 'none' as BillingPlatform, label: 'Nincs számlázó', desc: 'Nem használok számlázó rendszert', deep: false },
+                ]).map(p => (
                   <button
                     key={p.id}
-                    onClick={() => updateUser({ invoice_platform: p.id })}
-                    className={`px-3 py-1.5 rounded-lg border text-xs font-medium transition-colors ${
-                      user?.invoice_platform === p.id
-                        ? 'border-teal bg-teal/15 text-cream'
-                        : 'border-teal/10 text-steel hover:border-teal/25 hover:text-ash'
+                    onClick={() => {
+                      if (billingPlatform !== p.id) {
+                        setBillingPlatform(p.id);
+                        setConnectionStatus('idle');
+                        setConnectionError('');
+                        setBillingApiKey('');
+                      }
+                    }}
+                    className={`p-3 rounded-lg border-2 text-left transition-all ${
+                      billingPlatform === p.id
+                        ? 'border-teal bg-teal/10'
+                        : 'border-teal/10 hover:border-teal/30'
                     }`}
                   >
-                    {p.label}
+                    <div className="flex items-center gap-2">
+                      <div className={`w-2.5 h-2.5 rounded-full ${p.deep ? 'bg-teal' : 'bg-steel/40'}`} />
+                      <span className="text-sm font-medium text-cream">{p.label}</span>
+                    </div>
+                    <p className="text-[10px] text-steel mt-1 ml-[18px]">{p.desc}</p>
                   </button>
                 ))}
               </div>
             </div>
 
-            {/* Pomodoro — hidden in team mode */}
-            {user?.team_mode !== 1 && (
+            {/* Billingo config */}
+            {billingPlatform === 'billingo' && (
+              <div className="bg-surface-800/50 rounded-lg border border-teal/10 p-6 space-y-4">
+                <div>
+                  <h3 className="text-sm font-semibold text-ash">Billingo API konfiguráció</h3>
+                  <p className="text-[11px] text-steel mt-0.5">Add meg a Billingo API kulcsodat a közvetlen integráció használatához.</p>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-steel mb-1.5">API kulcs</label>
+                  <div className="relative">
+                    <input
+                      type={showBillingKey ? 'text' : 'password'}
+                      value={billingApiKey}
+                      onChange={e => { setBillingApiKey(e.target.value); setConnectionStatus('idle'); setConnectionError(''); }}
+                      onFocus={() => { if (billingApiKey === '••••••••••••••••') setBillingApiKey(''); }}
+                      className="w-full px-3 py-2 rounded-lg bg-surface-800 border border-teal/10 text-sm text-cream focus:outline-none focus:border-teal/40 pr-10"
+                      placeholder="Billingo API kulcs"
+                    />
+                    <button type="button" onClick={() => setShowBillingKey(!showBillingKey)} className="absolute right-3 top-1/2 -translate-y-1/2 text-steel hover:text-ash">
+                      {showBillingKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Connection status */}
+                {connectionStatus !== 'idle' && (
+                  <div className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs ${
+                    connectionStatus === 'connected' ? 'bg-emerald-500/10 text-emerald-400' :
+                    connectionStatus === 'error' ? 'bg-red-500/10 text-red-400' :
+                    'bg-teal/5 text-steel'
+                  }`}>
+                    {connectionStatus === 'testing' && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                    {connectionStatus === 'connected' && <CheckCircle className="w-3.5 h-3.5" />}
+                    {connectionStatus === 'error' && <AlertCircle className="w-3.5 h-3.5" />}
+                    <span>
+                      {connectionStatus === 'testing' && 'Ellenőrzés...'}
+                      {connectionStatus === 'connected' && 'Kapcsolódva'}
+                      {connectionStatus === 'error' && (connectionError || 'Hibás kulcs')}
+                    </span>
+                  </div>
+                )}
+
+                <div className="flex gap-2">
+                  <button
+                    onClick={handleSaveBillingConfig}
+                    disabled={billingSaving || !billingApiKey || billingApiKey === '••••••••••••••••'}
+                    className="px-4 py-2 text-sm font-medium bg-teal text-ink rounded-lg hover:bg-teal/80 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    {billingSaving ? 'Mentés...' : 'Mentés és tesztelés'}
+                  </button>
+                  <button
+                    onClick={handleTestConnection}
+                    disabled={connectionStatus === 'testing'}
+                    className="px-4 py-2 text-sm text-cream border border-teal/20 rounded-lg hover:bg-teal/10 transition-colors disabled:opacity-40"
+                  >
+                    Kapcsolat tesztelése
+                  </button>
+                  {connectionStatus === 'connected' && (
+                    <button
+                      onClick={handleClearBillingConfig}
+                      className="px-4 py-2 text-sm text-red-400 border border-red-400/20 rounded-lg hover:bg-red-400/10 transition-colors ml-auto"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Számlázz.hu config */}
+            {billingPlatform === 'szamlazz' && (
+              <div className="bg-surface-800/50 rounded-lg border border-teal/10 p-6 space-y-4">
+                <div>
+                  <h3 className="text-sm font-semibold text-ash">Számlázz.hu API konfiguráció</h3>
+                  <p className="text-[11px] text-steel mt-0.5">Add meg a Számlázz.hu Agent kulcsodat a közvetlen integráció használatához.</p>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-steel mb-1.5">Agent kulcs</label>
+                  <div className="relative">
+                    <input
+                      type={showBillingKey ? 'text' : 'password'}
+                      value={billingApiKey}
+                      onChange={e => { setBillingApiKey(e.target.value); setConnectionStatus('idle'); setConnectionError(''); }}
+                      onFocus={() => { if (billingApiKey === '••••••••••••••••') setBillingApiKey(''); }}
+                      className="w-full px-3 py-2 rounded-lg bg-surface-800 border border-teal/10 text-sm text-cream focus:outline-none focus:border-teal/40 pr-10"
+                      placeholder="Számlázz.hu Agent kulcs"
+                    />
+                    <button type="button" onClick={() => setShowBillingKey(!showBillingKey)} className="absolute right-3 top-1/2 -translate-y-1/2 text-steel hover:text-ash">
+                      {showBillingKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Connection status */}
+                {connectionStatus !== 'idle' && (
+                  <div className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs ${
+                    connectionStatus === 'connected' ? 'bg-emerald-500/10 text-emerald-400' :
+                    connectionStatus === 'error' ? 'bg-red-500/10 text-red-400' :
+                    'bg-teal/5 text-steel'
+                  }`}>
+                    {connectionStatus === 'testing' && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                    {connectionStatus === 'connected' && <CheckCircle className="w-3.5 h-3.5" />}
+                    {connectionStatus === 'error' && <AlertCircle className="w-3.5 h-3.5" />}
+                    <span>
+                      {connectionStatus === 'testing' && 'Ellenőrzés...'}
+                      {connectionStatus === 'connected' && 'Kapcsolódva'}
+                      {connectionStatus === 'error' && (connectionError || 'Hibás kulcs')}
+                    </span>
+                  </div>
+                )}
+
+                <div className="flex gap-2">
+                  <button
+                    onClick={handleSaveBillingConfig}
+                    disabled={billingSaving || !billingApiKey || billingApiKey === '••••••••••••••••'}
+                    className="px-4 py-2 text-sm font-medium bg-teal text-ink rounded-lg hover:bg-teal/80 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    {billingSaving ? 'Mentés...' : 'Mentés és tesztelés'}
+                  </button>
+                  <button
+                    onClick={handleTestConnection}
+                    disabled={connectionStatus === 'testing'}
+                    className="px-4 py-2 text-sm text-cream border border-teal/20 rounded-lg hover:bg-teal/10 transition-colors disabled:opacity-40"
+                  >
+                    Kapcsolat tesztelése
+                  </button>
+                  {connectionStatus === 'connected' && (
+                    <button
+                      onClick={handleClearBillingConfig}
+                      className="px-4 py-2 text-sm text-red-400 border border-red-400/20 rounded-lg hover:bg-red-400/10 transition-colors ml-auto"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Egyéb – URL config */}
+            {billingPlatform === 'egyeb' && (
+              <div className="bg-surface-800/50 rounded-lg border border-teal/10 p-6 space-y-4">
+                <div>
+                  <h3 className="text-sm font-semibold text-ash">Egyéb számlázó</h3>
+                  <p className="text-[11px] text-steel mt-0.5">Add meg a számlázó rendszered webes felületének URL-jét.</p>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-steel mb-1.5">URL</label>
+                  <div className="relative">
+                    <input
+                      type="url"
+                      value={billingUrl}
+                      onChange={e => setBillingUrl(e.target.value)}
+                      className="w-full px-3 py-2 rounded-lg bg-surface-800 border border-teal/10 text-sm text-cream focus:outline-none focus:border-teal/40 pl-9"
+                      placeholder="https://szamlazo.example.com"
+                    />
+                    <LinkIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-steel" />
+                  </div>
+                </div>
+
+                <button
+                  onClick={handleSaveBillingConfig}
+                  disabled={billingSaving || !billingUrl}
+                  className="px-4 py-2 text-sm font-medium bg-teal text-ink rounded-lg hover:bg-teal/80 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  {billingSaving ? 'Mentés...' : 'Mentés'}
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── Általános ── */}
+        {activeTab === 'altalanos' && (
+          <div className="space-y-6">
+            <div>
+              <h2 className="font-pixel text-[15px] text-cream">Általános</h2>
+              <p className="text-xs text-steel mt-1">Alkalmazás beállítások</p>
+            </div>
+
+            {/* Pomodoro project tracking */}
             <div className="bg-surface-800/50 rounded-lg border border-teal/10 p-6">
-              <h3 className="text-sm font-semibold text-ash mb-1">Pomodoro</h3>
+              <h3 className="text-sm font-semibold text-ash mb-1">Pomodoro naplózás</h3>
               <p className="text-[11px] text-steel mb-4">Ha bekapcsolod, a befejezett Pomodoro munkamenetek automatikusan rögzülnek a kiválasztott projekt naptári eseményéhez.</p>
               <div className="flex items-center justify-between">
                 <span className="text-xs text-steel">Projekt követés</span>
@@ -597,7 +1102,6 @@ export default function Settings() {
                 </button>
               </div>
             </div>
-            )}
 
             {/* Team mode */}
             <div className="bg-surface-800/50 rounded-lg border border-teal/10 p-6">
@@ -620,6 +1124,11 @@ export default function Settings() {
               </div>
             </div>
           </div>
+        )}
+
+        {/* ── Klient Ads ── */}
+        {activeTab === 'ads' && (
+          <AdsSubscriptionTab />
         )}
 
         {/* ── Alkalmazás ── */}
@@ -648,6 +1157,7 @@ export default function Settings() {
             </div>
           </div>
         )}
+      </div>
       </div>
 
       {/* Stripe Checkout webview modal (for plan switching) */}

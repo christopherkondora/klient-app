@@ -1,25 +1,28 @@
 import { useEffect, useState, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import {
-  ArrowLeft, Mail, Phone, Building2, MapPin, Briefcase, StickyNote,
+  ArrowLeft, Mail, Phone, Building2, MapPin, Briefcase,
   Mic, Receipt, Plus, Play, Pause, Square, Trash2, Clock, FileText, X, ExternalLink,
-  ChevronDown, ChevronUp, Loader2, Sparkles, ScrollText, FolderOpen,
+  ChevronDown, ChevronUp, Loader2, Sparkles, ScrollText, FolderOpen, Ban, SquarePen, Megaphone, Link2, Unlink2,
 } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
 import { hu } from 'date-fns/locale';
-import DatePicker from '../components/DatePicker';
 import { ProjectForm, TimeSlot } from './Projects';
 import { useAuth } from '../contexts/AuthContext';
 import InvoicePdfViewer from '../components/InvoicePdfViewer';
 import ConfirmDialog from '../components/ConfirmDialog';
 import ContractGenerateModal from '../components/ContractGenerateModal';
+import ContractPdfViewer from '../components/ContractPdfViewer';
+import { ClientForm } from './Clients';
 import { useThemedColor } from '../utils/colors';
+import { useSubscription } from '../contexts/SubscriptionContext';
+import ClientAdsTab from '../components/ClientAdsTab';
 
 const PLATFORM_URLS: Record<string, { label: string; url: string }> = {
   szamlazz: { label: 'Számlázz.hu', url: 'https://www.szamlazz.hu' },
   billingo: { label: 'Billingo', url: 'https://app.billingo.hu' },
   nav: { label: 'NAV Online', url: 'https://onlineszamla.nav.gov.hu' },
-  kulcs: { label: 'Kulcs-Soft', url: 'https://kulcs-soft.hu' },
 };
 
 export default function ClientDetail() {
@@ -27,25 +30,29 @@ export default function ClientDetail() {
   const navigate = useNavigate();
   const { user } = useAuth();
   const tc = useThemedColor();
+  const { hasAdsModule } = useSubscription();
   const [searchParams] = useSearchParams();
-  const initialTab = (['projects', 'notes', 'recordings', 'invoices', 'contracts'] as const).includes(searchParams.get('tab') as any)
-    ? (searchParams.get('tab') as 'projects' | 'notes' | 'recordings' | 'invoices' | 'contracts')
+  const initialTab = (['projects', 'recordings', 'invoices', 'contracts', 'ads'] as const).includes(searchParams.get('tab') as any)
+    ? (searchParams.get('tab') as 'projects' | 'recordings' | 'invoices' | 'contracts' | 'ads')
     : 'projects';
   const [client, setClient] = useState<Client | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
-  const [notes, setNotes] = useState<Note[]>([]);
   const [recordings, setRecordings] = useState<Recording[]>([]);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [contracts, setContracts] = useState<Contract[]>([]);
-  const [activeTab, setActiveTab] = useState<'projects' | 'notes' | 'recordings' | 'invoices' | 'contracts'>(initialTab);
+  const [activeTab, setActiveTab] = useState<'projects' | 'recordings' | 'invoices' | 'contracts' | 'ads'>(initialTab);
+  const [hasLinkedAds, setHasLinkedAds] = useState(false);
+  const [adsAccounts, setAdsAccounts] = useState<AdsAccountRow[]>([]);
+  const [adsLinking, setAdsLinking] = useState(false);
   const [showContractModal, setShowContractModal] = useState(false);
   const [deleteContractId, setDeleteContractId] = useState<string | null>(null);
+  const [viewingContract, setViewingContract] = useState<Contract | null>(null);
   const [loading, setLoading] = useState(true);
   const [showGmail, setShowGmail] = useState(false);
-  const [showInvoicePlatform, setShowInvoicePlatform] = useState(false);
+  const [showEditClient, setShowEditClient] = useState(false);
   const [viewingInvoice, setViewingInvoice] = useState<Invoice | null>(null);
+  const [stornoConfirmId, setStornoConfirmId] = useState<string | null>(null);
   const [deleteRecordingId, setDeleteRecordingId] = useState<string | null>(null);
-  const [showNoteForm, setShowNoteForm] = useState(false);
   const [allProjects, setAllProjects] = useState<Project[]>([]);
   const [showProjectForm, setShowProjectForm] = useState(false);
   const [allClients, setAllClients] = useState<Client[]>([]);
@@ -76,10 +83,9 @@ export default function ClientDetail() {
 
   async function loadData() {
     try {
-      const [clientData, projectsData, notesData, recordingsData, invoicesData, contractsData, clientsData, teamMembersData] = await Promise.all([
+      const [clientData, projectsData, recordingsData, invoicesData, contractsData, clientsData, teamMembersData] = await Promise.all([
         window.electronAPI.getClient(id!),
         window.electronAPI.getProjects(id!),
-        window.electronAPI.getNotes(),
         window.electronAPI.getRecordings(id!),
         window.electronAPI.getClientInvoices(id!),
         window.electronAPI.getContracts(id!),
@@ -89,12 +95,21 @@ export default function ClientDetail() {
       setClient(clientData);
       setProjects(projectsData);
       setAllProjects(projectsData);
-      setNotes(notesData.filter(n => n.client_id === id));
       setRecordings(recordingsData);
       setInvoices(invoicesData);
       setContracts(contractsData);
       setAllClients(clientsData);
       setTeamMembers(teamMembersData);
+
+      // Check if client has linked Ads accounts
+      if (hasAdsModule) {
+        try {
+          const adsSummary = await window.electronAPI.adsGetClientAdsSummary(id!);
+          setHasLinkedAds(adsSummary.success && !!adsSummary.data);
+          const accs = await window.electronAPI.adsGetAccounts();
+          if (accs.success && accs.data) setAdsAccounts(accs.data);
+        } catch { /* ignore */ }
+      }
     } catch (err) {
       console.error('Failed to load client data:', err);
     } finally {
@@ -239,25 +254,6 @@ export default function ClientDetail() {
     }
   }
 
-  async function handleCreateNote(data: Partial<Note>) {
-    try {
-      await window.electronAPI.createNote({ ...data, client_id: id });
-      setShowNoteForm(false);
-      loadData();
-    } catch (err) {
-      console.error('Failed to create note:', err);
-    }
-  }
-
-  async function handleDeleteNote(noteId: string) {
-    try {
-      await window.electronAPI.deleteNote(noteId);
-      loadData();
-    } catch (err) {
-      console.error('Failed to delete note:', err);
-    }
-  }
-
   function formatTime(seconds: number) {
     const m = Math.floor(seconds / 60);
     const s = Math.floor(seconds % 60);
@@ -274,10 +270,10 @@ export default function ClientDetail() {
 
   const tabs = [
     { key: 'projects' as const, label: 'Projektek', icon: Briefcase, count: projects.length },
-    { key: 'notes' as const, label: 'Jegyzetek', icon: StickyNote, count: notes.length },
     { key: 'recordings' as const, label: 'Felvételek', icon: Mic, count: recordings.length },
     { key: 'invoices' as const, label: 'Számlák', icon: Receipt, count: invoices.length },
     { key: 'contracts' as const, label: 'Szerződések', icon: ScrollText, count: contracts.length },
+    ...(hasAdsModule ? [{ key: 'ads' as const, label: 'Google Ads', icon: Megaphone, count: 0 }] : []),
   ];
 
   return (
@@ -301,7 +297,16 @@ export default function ClientDetail() {
             {client.name.charAt(0).toUpperCase()}
           </div>
           <div className="flex-1">
-            <h1 className="font-pixel text-base text-cream">{client.name}</h1>
+            <h1 className="font-pixel text-base text-cream flex items-center gap-2">
+              {client.name}
+              <button
+                onClick={() => setShowEditClient(true)}
+                className="p-1 rounded-lg hover:bg-teal/10 text-steel hover:text-cream transition-colors cursor-pointer"
+                title="Ügyfél szerkesztése"
+              >
+                <SquarePen width={14} height={14} />
+              </button>
+            </h1>
             <div className="flex flex-wrap gap-4 mt-3">
               {client.company && (
                 <span className="flex items-center gap-1.5 text-sm text-steel">
@@ -347,16 +352,6 @@ export default function ClientDetail() {
                 Email
               </button>
             )}
-            {user?.invoice_platform && user.invoice_platform !== 'none' && PLATFORM_URLS[user.invoice_platform] && (
-              <button
-                onClick={() => setShowInvoicePlatform(true)}
-                className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium bg-steel/20 text-cream hover:bg-steel/30 rounded-lg transition-colors border border-steel/25"
-                title={PLATFORM_URLS[user.invoice_platform].label}
-              >
-                <ExternalLink width={16} height={16} />
-                {PLATFORM_URLS[user.invoice_platform].label}
-              </button>
-            )}
             <button
               onClick={() => navigate(`/files?path=${encodeURIComponent(client.name)}`)}
               className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium bg-steel/20 text-cream hover:bg-steel/30 rounded-lg transition-colors border border-steel/25"
@@ -383,7 +378,7 @@ export default function ClientDetail() {
           >
             <tab.icon width={15} height={15} />
             {tab.label}
-            <span className="text-xs bg-teal/10 text-steel px-1.5 py-0.5 rounded-full">{tab.count}</span>
+            {tab.key !== 'ads' && <span className="text-xs bg-teal/10 text-steel px-1.5 py-0.5 rounded-full">{tab.count}</span>}
           </button>
         ))}
       </div>
@@ -451,48 +446,6 @@ export default function ClientDetail() {
                     </span>
                   </div>
                 </div>
-              </div>
-            ))
-          )}
-        </div>
-      )}
-
-      {/* Tab Content: Notes */}
-      {activeTab === 'notes' && (
-        <div className="space-y-3">
-          <div className="flex justify-end">
-            <button
-              onClick={() => setShowNoteForm(true)}
-              className="flex items-center gap-2 px-3 py-1.5 bg-teal text-cream rounded-lg text-sm hover:bg-teal/80"
-            >
-              <Plus width={14} height={14} /> Új jegyzet
-            </button>
-          </div>
-          {notes.length === 0 ? (
-            <p className="text-sm text-steel/60 italic text-center py-8">Nincsenek jegyzetek</p>
-          ) : (
-            notes.map(note => (
-              <div key={note.id} className="bg-surface-800/50 rounded-lg border border-teal/10 p-4 group">
-                <div className="flex items-start justify-between">
-                  <div>
-                    <h3 className="font-semibold text-cream text-sm">{note.title || 'Jegyzet'}</h3>
-                    <p className="text-sm text-steel mt-1">{note.content}</p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-steel/60 shrink-0">
-                      {format(parseISO(note.date), 'yyyy. MM. dd.')}
-                    </span>
-                    <button
-                      onClick={() => handleDeleteNote(note.id)}
-                      className="p-1.5 rounded hover:bg-red-500/10 text-steel/40 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all"
-                    >
-                      <Trash2 width={14} height={14} />
-                    </button>
-                  </div>
-                </div>
-                {note.project_name && (
-                  <p className="text-[10px] text-ash/60 mt-2">{note.project_name}</p>
-                )}
               </div>
             ))
           )}
@@ -720,9 +673,10 @@ export default function ClientDetail() {
                   <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
                     invoice.status === 'paid' ? 'bg-emerald-500/15 text-emerald-400' :
                     invoice.status === 'pending' ? 'bg-amber-500/15 text-amber-400' :
+                    invoice.status === 'cancelled' ? 'bg-steel/15 text-steel/60 line-through' :
                     'bg-red-500/15 text-red-400'
                   }`}>
-                    {invoice.status === 'paid' ? 'Fizetve' : invoice.status === 'pending' ? 'Függő' : 'Lejárt'}
+                    {invoice.status === 'paid' ? 'Fizetve' : invoice.status === 'pending' ? 'Függő' : invoice.status === 'cancelled' ? 'Sztornó' : 'Lejárt'}
                   </span>
                   <span className="text-sm font-bold text-cream">
                     {new Intl.NumberFormat('hu-HU', { style: 'currency', currency: invoice.currency, maximumFractionDigits: 0 }).format(invoice.amount)}
@@ -733,6 +687,36 @@ export default function ClientDetail() {
                       className="px-2 py-1 text-xs text-steel hover:text-cream hover:bg-teal/10 rounded opacity-0 group-hover:opacity-100 transition-all"
                     >
                       Megnyitás
+                    </button>
+                  )}
+                  {!invoice.file_path && invoice.provider === 'billingo' && invoice.provider_invoice_id && (
+                    <button
+                      onClick={async () => {
+                        try {
+                          const res = await window.electronAPI.billingoGetPdf(Number(invoice.provider_invoice_id));
+                          if (res.success && res.data && client) {
+                            const fileName = `${(invoice.invoice_number || 'invoice').replace(/\//g, '-')}.pdf`;
+                            const saved = await window.electronAPI.filesSaveToClientInvoices(client.name, fileName, res.data);
+                            await window.electronAPI.updateInvoice(invoice.id, { file_path: saved.absolutePath });
+                            setViewingInvoice({ ...invoice, file_path: saved.absolutePath });
+                            loadData();
+                          }
+                        } catch (err) {
+                          console.warn('Could not download invoice PDF:', err);
+                        }
+                      }}
+                      className="px-2 py-1 text-xs text-steel hover:text-cream hover:bg-teal/10 rounded opacity-0 group-hover:opacity-100 transition-all"
+                    >
+                      Megnyitás
+                    </button>
+                  )}
+                  {invoice.status !== 'cancelled' && (
+                    <button
+                      onClick={() => setStornoConfirmId(invoice.id)}
+                      className="p-1.5 rounded hover:bg-red-500/10 text-steel/40 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all cursor-pointer"
+                      title="Sztornó"
+                    >
+                      <Ban width={13} height={13} />
                     </button>
                   )}
                 </div>
@@ -775,7 +759,7 @@ export default function ClientDetail() {
                 </div>
                 <div className="flex items-center gap-1">
                   <button
-                    onClick={() => window.electronAPI.openFile(c.file_path)}
+                    onClick={() => setViewingContract(c)}
                     className="px-2 py-1 text-xs text-steel hover:text-cream hover:bg-teal/10 rounded opacity-0 group-hover:opacity-100 transition-all"
                   >
                     Megnyitás
@@ -791,6 +775,56 @@ export default function ClientDetail() {
             ))
           )}
         </div>
+      )}
+
+      {/* Tab Content: Google Ads */}
+      {activeTab === 'ads' && hasAdsModule && (
+        hasLinkedAds ? (
+          <ClientAdsTab clientId={id!} onUnlink={async () => { setHasLinkedAds(false); await loadData(); }} />
+        ) : (
+          <div className="space-y-4">
+            <div className="bg-surface-800/50 rounded-xl border border-teal/10 p-6 text-center">
+              <Megaphone className="w-10 h-10 text-steel/20 mx-auto mb-3" />
+              <p className="text-sm text-cream font-medium mb-1">Nincs hozzárendelt Google Ads fiók</p>
+              <p className="text-xs text-steel/50 mb-5">Válassz egy meglévő Ads fiókot az összekapcsoláshoz</p>
+              {adsAccounts.filter(a => !a.client_id).length === 0 ? (
+                <p className="text-xs text-steel/40 italic">Nincs szabad (hozzá nem rendelt) Ads fiók. Először adj hozzá egyet az Ads Beállításokban.</p>
+              ) : (
+                <div className="max-w-sm mx-auto space-y-1.5">
+                  {adsAccounts.filter(a => !a.client_id).map(acc => (
+                    <button
+                      key={acc.id}
+                      disabled={adsLinking}
+                      onClick={async () => {
+                        setAdsLinking(true);
+                        try {
+                          await window.electronAPI.adsLinkAccount(acc.id, id!);
+                          setHasLinkedAds(true);
+                          await loadData();
+                        } finally {
+                          setAdsLinking(false);
+                        }
+                      }}
+                      className="w-full flex items-center gap-3 px-4 py-3 rounded-lg border border-teal/10 bg-surface-900/40 hover:bg-teal/8 hover:border-teal/25 transition-colors text-left group"
+                    >
+                      <Link2 className="w-4 h-4 text-steel/30 group-hover:text-teal transition-colors" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm text-cream font-medium truncate">{acc.name}</p>
+                        <p className="text-[10px] text-steel/40">{acc.customer_id}</p>
+                      </div>
+                      {adsLinking && <Loader2 className="w-3.5 h-3.5 animate-spin text-steel/40" />}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )
+      )}
+
+      {/* Contract PDF Viewer */}
+      {viewingContract && (
+        <ContractPdfViewer contract={viewingContract} onClose={() => setViewingContract(null)} />
       )}
 
       {/* Contract Generate Modal */}
@@ -842,36 +876,10 @@ export default function ClientDetail() {
         </div>
       )}
 
-      {/* Invoice Platform Popup */}
-      {showInvoicePlatform && user?.invoice_platform && PLATFORM_URLS[user.invoice_platform] && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onDoubleClick={() => setShowInvoicePlatform(false)}>
-          <div className="bg-surface-800 rounded-xl border border-teal/15 shadow-2xl w-[90vw] h-[85vh] flex flex-col overflow-hidden" onDoubleClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between px-4 py-2 border-b border-teal/10 shrink-0">
-              <div className="flex items-center gap-2">
-                <ExternalLink width={14} height={14} className="text-steel" />
-                <span className="text-sm text-cream font-medium">{PLATFORM_URLS[user.invoice_platform].label}</span>
-              </div>
-              <button
-                onClick={() => setShowInvoicePlatform(false)}
-                className="p-1.5 rounded-lg hover:bg-teal/10 text-steel hover:text-cream transition-colors"
-              >
-                <X width={16} height={16} />
-              </button>
-            </div>
-            <webview
-              src={PLATFORM_URLS[user.invoice_platform].url}
-              partition="persist:shortcuts"
-              className="flex-1"
-              style={{ width: '100%', height: '100%' }}
-            />
-          </div>
-        </div>
-      )}
-
       {/* Gmail Popup */}
       {showGmail && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onDoubleClick={() => setShowGmail(false)}>
-          <div className="bg-surface-800 rounded-xl border border-teal/15 shadow-2xl w-[90vw] h-[85vh] flex flex-col overflow-hidden" onDoubleClick={e => e.stopPropagation()}>
+          <div className="bg-surface-800 rounded-xl border border-teal/15 shadow-2xl w-full max-w-4xl h-[85vh] flex flex-col overflow-hidden" onDoubleClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between px-4 py-2 border-b border-teal/10 shrink-0">
               <div className="flex items-center gap-2">
                 <Mail width={14} height={14} className="text-steel" />
@@ -911,86 +919,61 @@ export default function ClientDetail() {
         />
       )}
 
-      {/* Client Note Form */}
-      {showNoteForm && (
-        <ClientNoteForm
-          projects={allProjects}
-          clientId={id!}
-          onSubmit={handleCreateNote}
-          onClose={() => setShowNoteForm(false)}
+      {/* Edit Client Modal */}
+      {showEditClient && (
+        <ClientForm
+          client={client}
+          onSubmit={async (data) => {
+            await window.electronAPI.updateClient(client!.id, data);
+            setShowEditClient(false);
+            loadData();
+          }}
+          onClose={() => setShowEditClient(false)}
         />
       )}
-    </div>
-  );
-}
 
-function ClientNoteForm({ projects, clientId, onSubmit, onClose }: {
-  projects: Project[];
-  clientId: string;
-  onSubmit: (data: Partial<Note>) => void;
-  onClose: () => void;
-}) {
-  const [title, setTitle] = useState('');
-  const [content, setContent] = useState('');
-  const [projectId, setProjectId] = useState('');
-  const [isNotification, setIsNotification] = useState(false);
-  const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
-
-  const clientProjects = projects.filter(p => p.client_id === clientId);
-  const inputClass = "w-full px-3 py-2 bg-surface-900 border border-teal/10 rounded-lg text-sm text-cream focus:outline-none focus:ring-2 focus:ring-teal/30";
-
-  return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onDoubleClick={onClose}>
-      <div className="bg-surface-800 rounded-xl border border-teal/15 p-6 w-full max-w-md shadow-2xl" onDoubleClick={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between mb-5">
-          <h2 className="font-pixel text-[14px] text-cream">Új jegyzet</h2>
-          <button onClick={onClose} className="p-1 rounded hover:bg-teal/10 text-steel hover:text-cream">
-            <X width={14} height={14} />
-          </button>
-        </div>
-        <form
-          onSubmit={e => {
-            e.preventDefault();
-            if (!content.trim()) return;
-            onSubmit({
-              title,
-              content,
-              project_id: projectId || undefined,
-              is_notification: isNotification ? 1 : 0,
-              date,
-            });
-          }}
-          className="space-y-4"
-        >
-          <div>
-            <label className="block text-xs font-medium text-steel mb-1">Dátum</label>
-            <DatePicker value={date} onChange={setDate} />
+      {/* Storno confirmation */}
+      {stornoConfirmId && createPortal(
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="bg-surface-800 border border-teal/15 rounded-xl p-6 w-full max-w-sm shadow-2xl">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="p-2 rounded-lg bg-red-500/10">
+                <Ban width={20} height={20} className="text-red-400" />
+              </div>
+              <h3 className="font-pixel text-sm text-cream">Számla sztornó</h3>
+            </div>
+            <p className="text-sm text-steel mb-1">Biztosan sztornózod ezt a számlát?</p>
+            <p className="text-xs text-steel/50 mb-6">
+              {invoices.find(i => i.id === stornoConfirmId)?.provider
+                ? 'A sztornó számla automatikusan létrejön a számlázó szolgáltatóban is.'
+                : 'Ez a művelet nem vonható vissza.'}
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setStornoConfirmId(null)}
+                className="px-4 py-2 text-sm text-steel hover:text-cream rounded-lg hover:bg-surface-700 transition-colors cursor-pointer"
+              >
+                Mégsem
+              </button>
+              <button
+                onClick={async () => {
+                  const result = await window.electronAPI.deleteInvoice(stornoConfirmId);
+                  setStornoConfirmId(null);
+                  if (!result.success) {
+                    alert(result.error || 'Sztornó sikertelen');
+                    return;
+                  }
+                  loadData();
+                }}
+                className="px-4 py-2 text-sm bg-red-500/15 text-red-400 hover:bg-red-500/25 rounded-lg font-medium transition-colors cursor-pointer"
+              >
+                Sztornózás
+              </button>
+            </div>
           </div>
-          <div>
-            <label className="block text-xs font-medium text-steel mb-1">Projekt</label>
-            <select value={projectId} onChange={e => setProjectId(e.target.value)} className={inputClass}>
-              <option value="">Nincs</option>
-              {clientProjects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-            </select>
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-steel mb-1">Cím</label>
-            <input type="text" value={title} onChange={e => setTitle(e.target.value)} className={inputClass} placeholder="Jegyzet címe" />
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-steel mb-1">Tartalom *</label>
-            <textarea value={content} onChange={e => setContent(e.target.value)} className={`${inputClass} resize-none h-24`} placeholder="Jegyzet tartalma..." required />
-          </div>
-          <label className="flex items-center gap-2">
-            <input type="checkbox" checked={isNotification} onChange={e => setIsNotification(e.target.checked)} className="rounded border-teal/20" />
-            <span className="text-sm text-steel">Megjelölés értesítésként</span>
-          </label>
-          <div className="flex justify-end gap-2 pt-2">
-            <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-steel hover:bg-teal/10 rounded-lg">Mégse</button>
-            <button type="submit" className="px-4 py-2 text-sm bg-teal text-cream rounded-lg hover:bg-teal/80">Létrehozás</button>
-          </div>
-        </form>
-      </div>
+        </div>,
+        document.body
+      )}
     </div>
   );
 }

@@ -45,7 +45,7 @@ beforeEach(() => {
 describe('resolveTaxRules', () => {
   it('returns tax rules for a given business type and year', () => {
     const mockRules = [
-      { id: '1', business_type: 'kiva', year: 2026, rate_percent: 11, rate_label: 'base', notes: null },
+      { id: '1', business_type: 'kiva', year: 2026, rate_percent: 10, rate_label: 'base', notes: null },
     ];
     mockQueryAll.mockReturnValue(mockRules);
 
@@ -283,33 +283,33 @@ describe('calculateTax', () => {
   // ── KIVA ──
 
   describe('kiva', () => {
-    it('calculates KIVA tax at 11% on revenue - expenses', () => {
-      setupCalculation('kiva', [{ rate_percent: 11, rate_label: 'base' }]);
+    it('calculates KIVA tax at 10% on revenue - expenses', () => {
+      setupCalculation('kiva', [{ rate_percent: 10, rate_label: 'base' }]);
       const result = calculateTax({ businessType: 'kiva', year: 2026, revenue: 10_000_000, expenses: 3_000_000 });
 
-      expect(result.taxAmount).toBe(770_000); // (10M - 3M) * 0.11
-      expect(result.breakdown.appliedRate).toBe(11);
+      expect(result.taxAmount).toBe(700_000); // (10M - 3M) * 0.10
+      expect(result.breakdown.appliedRate).toBe(10);
       expect(result.breakdown.taxableBase).toBe(7_000_000);
       expect(result.breakdown.appliedRateLabel).toBe('base');
     });
 
-    it('uses fallback rate 11% when no rule found', () => {
+    it('uses fallback rate 10% when no rule found', () => {
       setupCalculation('kiva', []);
       const result = calculateTax({ businessType: 'kiva', year: 2026, revenue: 10_000_000 });
-      expect(result.breakdown.appliedRate).toBe(11);
+      expect(result.breakdown.appliedRate).toBe(10);
     });
 
     it('floors taxable base to 0 when expenses exceed revenue', () => {
-      setupCalculation('kiva', [{ rate_percent: 11, rate_label: 'base' }]);
+      setupCalculation('kiva', [{ rate_percent: 10, rate_label: 'base' }]);
       const result = calculateTax({ businessType: 'kiva', year: 2026, revenue: 1_000_000, expenses: 5_000_000 });
       expect(result.taxAmount).toBe(0);
       expect(result.breakdown.taxableBase).toBe(0);
     });
 
     it('defaults expenses to 0', () => {
-      setupCalculation('kiva', [{ rate_percent: 11, rate_label: 'base' }]);
+      setupCalculation('kiva', [{ rate_percent: 10, rate_label: 'base' }]);
       const result = calculateTax({ businessType: 'kiva', year: 2026, revenue: 10_000_000 });
-      expect(result.taxAmount).toBe(1_100_000);
+      expect(result.taxAmount).toBe(1_000_000);
     });
   });
 
@@ -352,14 +352,14 @@ describe('calculateTax', () => {
   describe('atalanyadozas', () => {
     it('calculates with deemed cost deduction and SZJA rate', () => {
       setupCalculation('atalanyadozas', [
-        { rate_percent: 40, rate_label: 'deemed_cost_general' },
+        { rate_percent: 45, rate_label: 'deemed_cost_general' },
         { rate_percent: 15, rate_label: 'szja_rate' },
       ]);
       const result = calculateTax({ businessType: 'atalanyadozas', year: 2026, revenue: 10_000_000 });
 
-      // Deemed cost: 10M * 40% = 4M, taxable: 6M, tax: 6M * 15% = 900K
-      expect(result.taxAmount).toBe(900_000);
-      expect(result.breakdown.taxableBase).toBe(6_000_000);
+      // Deemed cost: 10M * 45% = 4.5M, taxable: 5.5M, tax: 5.5M * 15% = 825K
+      expect(result.taxAmount).toBe(825_000);
+      expect(result.breakdown.taxableBase).toBe(5_500_000);
       expect(result.breakdown.appliedRate).toBe(15);
       expect(result.breakdown.appliedRateLabel).toBe('deemed_cost_general');
     });
@@ -368,8 +368,8 @@ describe('calculateTax', () => {
       setupCalculation('atalanyadozas', []);
       const result = calculateTax({ businessType: 'atalanyadozas', year: 2026, revenue: 10_000_000 });
 
-      // Fallback: 40% deemed cost, 15% SZJA => (10M - 4M) * 15% = 900K
-      expect(result.taxAmount).toBe(900_000);
+      // Fallback: 45% deemed cost, 15% SZJA => (10M - 4.5M) * 15% = 825K
+      expect(result.taxAmount).toBe(825_000);
     });
   });
 
@@ -396,26 +396,6 @@ describe('calculateTax', () => {
       const result = calculateTax({ businessType: 'kft_tao', year: 2026, revenue: 5_000_000, expenses: 8_000_000 });
       expect(result.taxAmount).toBe(0);
       expect(result.breakdown.taxableBase).toBe(0);
-    });
-  });
-
-  // ── KATA ──
-
-  describe('kata', () => {
-    it('calculates KATA as fixed monthly flat * 12', () => {
-      setupCalculation('kata', [{ rate_percent: 50000, rate_label: 'monthly_flat' }]);
-      const result = calculateTax({ businessType: 'kata', year: 2026, revenue: 15_000_000 });
-
-      expect(result.taxAmount).toBe(600_000); // 50K * 12
-      expect(result.breakdown.appliedRate).toBe(50000);
-      expect(result.breakdown.taxableBase).toBe(0);
-      expect(result.breakdown.appliedRateLabel).toBe('monthly_flat');
-    });
-
-    it('uses fallback 50000 monthly when no rule found', () => {
-      setupCalculation('kata', []);
-      const result = calculateTax({ businessType: 'kata', year: 2026, revenue: 15_000_000 });
-      expect(result.taxAmount).toBe(600_000);
     });
   });
 

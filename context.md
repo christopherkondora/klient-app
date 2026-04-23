@@ -1,0 +1,454 @@
+# Klient – AI Context File
+
+> Minden új session elején töltsd be ezt a fájlt. Minden kódmódosítás után frissíteni kell.
+
+## Projekt leírás
+
+**Klient** egy magyar nyelvű, Electron asztali alkalmazás szabadúszók és kisvállalkozások számára. Projektek, ügyfelek, számlázás, szerződések, naptár, jegyzetek, hangfelvételek, fájlok és adózás kezelése egyetlen appban. Két magyar számlázó szolgáltatóval integrálódik (Billingo, Számlázz.hu), Stripe előfizetéssel és Supabase auth/edge functions háttérrel.
+
+---
+
+## Tech Stack
+
+| Réteg | Technológia | Verzió |
+|-------|------------|--------|
+| Runtime | Electron | 41 |
+| Frontend | React | 19 |
+| Language | TypeScript | 5.9 |
+| Bundler | Vite | 7.3 |
+| CSS | Tailwind CSS | 4.2 |
+| DB | sql.js (SQLite) | – |
+| Auth/Backend | Supabase | – |
+| Payment | Stripe | – |
+| Invoicing | Billingo API v3, Számlázz.hu XML API | – |
+| Speech | Deepgram (WebSocket + HTTP) | – |
+| PDF | pdf-lib | – |
+| Rich Text | TipTap | – |
+| Fonts | Space Grotesk (heading), Red Hat Display (body) | – |
+
+---
+
+## Mappastruktúra
+
+```
+Klient/
+├── electron/                     # Electron main process
+│   ├── main.ts                   # App lifecycle, window, tray, Deepgram WS, auto-updater
+│   ├── preload.ts                # contextBridge – 90+ IPC method exposed to renderer
+│   ├── database.ts               # sql.js SQLite init, migrations, user-scoped DB
+│   ├── db-helpers.ts             # Generic CRUD helpers (getAll, getById, create, update, delete)
+│   ├── ipc.ts                    # 60+ ipcMain handlers (CRUD, billing, files, speech, tax, stb.)
+│   ├── supabase.ts               # Supabase client, file-based auth persistence
+│   ├── billing-store.ts          # safeStorage encrypted API key storage
+│   ├── contract-templates.ts     # 3 magyar szerződés sablon (megbízási, vállalkozási, NDA)
+│   ├── pdf-generator.ts          # pdf-lib contract PDF generation
+│   ├── tax-service.ts            # 6 magyar adónem kalkuláció (KATA, KIVA, ÁFA, stb.)
+│   ├── tax-service.test.ts       # Tax service unit tests│   ├── ads-store.ts              # safeStorage encrypted Google Ads credentials
+│   ├── ads-auth.ts               # OAuth2 PKCE flow, loopback redirect, token refresh
+│   ├── ads-api.ts                # google-ads-api wrapper, GAQL queries (12 fetch fn)
+│   ├── ads-sync.ts               # 6h sync, incremental + full + campaign-type-specific detail sync
+│   ├── ads-ai.ts                 # Context builder → Supabase edge function call
+│   ├── ads-alerts.ts             # Rule-based anomaly detection (7 campaign + 3 account rules), post-sync
+│   └── billing/
+│       ├── billing-service.ts    # Unified billing orchestrator (provider detection, invoice flow)
+│       ├── billingo-adapter.ts   # Billingo REST API adapter
+│       ├── szamlazz-adapter.ts   # Számlázz.hu XML API adapter
+│       └── sync-service.ts       # 30 perces invoice status polling
+│
+├── src/                          # React renderer process
+│   ├── App.tsx                   # HashRouter, routes, Layout, context providers
+│   ├── main.tsx                  # React entry point
+│   ├── index.css                 # Tailwind + theme CSS variables + global styles
+│   ├── vite-env.d.ts             # window.api type declarations (90+ methods, ExtractedExpense)
+│   │
+│   ├── pages/
+│   │   ├── Dashboard.tsx         # KPI kártyák, naptár, shortcutok, jegyzetek
+│   │   ├── Clients.tsx           # Ügyféllista + CRUD
+│   │   ├── ClientDetail.tsx      # Ügyfél részletek, projektek, számlák, jegyzetek, fájlok
+│   │   ├── Projects.tsx          # Projektlista + szűrők
+│   │   ├── ProjectDetail.tsx     # Projekt részletek, óra tracking, számlák, jegyzetek
+│   │   ├── Calendar.tsx          # Heti/havi naptár, drag-drop események
+│   │   ├── Finances.tsx          # Bevétel/kiadás, számlák, grafikonok, adó kalkulátor, extra costs
+│   │   ├── Notes.tsx             # Globális jegyzetek (TipTap editor, képek)
+│   │   ├── Recordings.tsx        # Hangfelvétel + Deepgram átirás + AI összefoglaló
+│   │   ├── Files.tsx             # Fájlkezelő (Explorer-szerű, drag-out, OS clipboard, rubber-band)
+│   │   ├── Shortcuts.tsx         # Gyorslinkek kezelése
+│   │   ├── Team.tsx              # Csapattagok, hozzárendelés projektekhez
+│   │   ├── Settings.tsx          # Felhasználói beállítások, téma, számlázó konfig
+│   │   ├── Onboarding.tsx        # Első belépés wizard
+│   │   ├── PaymentSuccess.tsx    # Stripe fizetés sikeres
+│   │   ├── PaymentCancel.tsx     # Stripe fizetés megszakítva
+│   │   ├── AdsOverview.tsx       # Google Ads áttekintés oldal: KPI, alert banner, AI elemzés, account selector
+│   │   ├── AdsCampaigns.tsx      # Google Ads kampánylista
+│   │   ├── AdsCampaignDetail.tsx # Kampány részletező oldal
+│   │   ├── AdsAlerts.tsx         # Ads riasztások oldal
+│   │   ├── AdsAiPage.tsx         # Ads AI elemzések oldal
+│   │   └── AdsSettings.tsx       # Ads beállítások és account linking
+│   │
+│   ├── components/
+│   │   ├── Layout.tsx            # Sidebar + TitleBar + tartalom wrapper
+│   │   ├── Sidebar.tsx           # Navigáció, aktív route kiemelés
+│   │   ├── TitleBar.tsx          # Custom title bar (minimize/maximize/close)
+│   │   ├── ConfirmDialog.tsx     # Újrahasználható megerősítő dialog
+│   │   ├── DatePicker.tsx        # Egyedi dátumválasztó
+│   │   ├── TimePicker.tsx        # Egyedi időválasztó
+│   │   ├── HexColorPicker.tsx    # Színválasztó hex értékkel
+│   │   ├── Paywall.tsx           # Előfizetési paywall
+│   │   ├── TrialBanner.tsx       # Próbaidő visszaszámláló banner
+│   │   ├── UpdateBanner.tsx      # App frissítés banner
+│   │   ├── PomodoroTimer.tsx     # Pomodoro timer projekthez kötve
+│   │   ├── NotesPanel.tsx        # TipTap rich text editor panel
+│   │   ├── ResizableImage.tsx    # TipTap image node view (resize handles)
+│   │   ├── ResizableImageExtension.ts # TipTap extension
+│   │   ├── InvoiceGenerateModal.tsx   # Számla generálás modal (Billingo/Számlázz.hu)
+│   │   ├── InvoiceUploadModal.tsx     # Manuális számla feltöltés
+│   │   ├── InvoicePdfViewer.tsx       # PDF előnézet
+│   │   ├── ManualRevenueModal.tsx     # Kézi bevétel rögzítés
+│   │   ├── ExpenseModal.tsx           # Kiadás hozzáadás/szerkesztés (AI PDF extraction + extra cost)
+│   │   ├── ContractGenerateModal.tsx  # Szerződés generálás modal
+│   │   ├── Pagination.tsx             # Újrahasználható lapozó (25/oldal, billentyű nav, ellipszis)
+│   │   ├── AdsAccountSelector.tsx     # Ads account selector ügyfélnévvel, portal dropdownnal
+│   │   ├── SearchCampaignDetail.tsx   # Search kampány 4 tab (Kulcsszavak, Hirdetésszövegek, Keresési kif., Negatív kw)
+│   │   └── PMaxCampaignDetail.tsx     # PMax kampány 5 tab (Csatorna, Asset groupok, Asset minősítés, Termékek, Elhelyezések)
+│   │
+│   ├── contexts/
+│   │   ├── AuthContext.tsx       # Supabase auth state, login/logout/register
+│   │   ├── SubscriptionContext.tsx # Trial/paid/lifetime state, feature gating
+│   │   ├── ThemeContext.tsx      # 4 téma: dark (default), light, teal-ocean, ash-soft
+│   │   └── AdsContext.tsx        # Ads accounts, campaigns, metrics, syncStatus state
+│   │
+│   ├── types/
+│   │   ├── index.ts              # Összes interface (Client, Project, Invoice, Note, stb.)
+│   │   ├── tax.ts                # Tax-specifikus típusok
+│   │   └── ads.ts                # AdsAccount, AdsCampaign, AdsKeyword, AdsMetricsSummary stb.
+│   │
+│   └── utils/
+│       ├── colors.ts             # Brand színek + segédfüggvények
+│       └── shortcutIcons.tsx     # Shortcut ikon komponensek
+│
+│   └── components/
+│       ├── AdsAccountConnect.tsx  # Google Ads fiók összekapcsolás
+│       ├── AdsCampaignView.tsx    # Kampány nézet: header+chart (közös) → típus alapján route Search/PMax
+│       └── AdsAiPanel.tsx         # AI elemzés panel (dropdown menu + A5 document viewer)
+│
+├── supabase/                     # Supabase Edge Functions + migrations
+│   └── functions/ads-analyze/    # Claude API edge function (AI elemzés)
+├── scripts/                      # Build/deploy scriptek
+├── email-templates/              # Email sablonok
+├── assets/                       # App ikonok, képek
+├── docs/                         # Dokumentáció
+└── skills/                       # AI skill fájlok
+```
+
+---
+
+## Brand & Témák
+
+**Színek:** ink `#01161E`, teal `#124559`, steel `#598392`, ash `#AEC3B0`, cream `#EFF6E0`
+
+**Témák (CSS változókkal):**
+- `dark` – Alapértelmezett, sötét háttér
+- `light` – Világos mód
+- `teal-ocean` – Teal dominanciájú
+- `ash-soft` – Lágy zöldes-szürke
+
+---
+
+## Adatbázis
+
+**Típus:** sql.js (SQLite, WASM), felhasználónkénti fájl: `{userData}/klient-{userId}.db`
+
+### Táblák
+
+| Tábla | Leírás |
+|-------|--------|
+| `clients` | Ügyfelek (név, email, cím, adószám, szín) |
+| `projects` | Projektek (ügyfélhez kötve, státusz, órabecslés, prioritás) |
+| `calendar_events` | Naptár események (work/meeting/deadline/reminder/other) |
+| `notes` | Jegyzetek (projekthez/ügyfélhez, pinned, reminder, TipTap HTML) |
+| `recordings` | Hangfelvételek (fájl útvonal, átirás, AI összefoglaló) |
+| `invoices` | Számlák (provider, provider_invoice_id, status: pending/paid/overdue/cancelled) |
+| `contracts` | Szerződések (PDF fájl útvonal) |
+| `expenses` | Kiadások (subscription/investment, monthly/yearly/one-time, extra_amount, extra_description) |
+| `shortcuts` | Gyorslinkek |
+| `user_settings` | Felhasználó beállítások (cég, adószám, téma, számlázó platform) |
+| `team_members` | Csapattagok (employee/contractor/freelancer) |
+| `project_assignments` | Projekt–csapattag összerendelés |
+| `tax_business_types` | Adónem típusok (KATA, KIVA, ÁFA, stb.) |
+| `tax_rules` | Adószabályok (típus + év + %) |
+| `tax_eligibility_criteria` | Adónem jogosultsági feltételek |
+| `tax_calculations` | Számított adók történet |
+| `user_tax_settings` | Felhasználó aktív adóneme |
+| `ads_accounts` | Összekapcsolt Google Ads fiókok (customer_id, refresh_token_encrypted) |
+| `ads_campaigns` | Kampány struktúra (id, name, type, status, budget) |
+| `ads_ad_groups` | Hirdetéscsoportok |
+| `ads_keywords` | Kulcsszavak + Quality Score (3 komponens) |
+| `ads_daily_metrics` | Denormalizált napi metrikák (entity_type + entity_id, indexelt) |
+| `ads_sync_log` | Szinkronizáció történet |
+| `ads_ai_analyses` | AI elemzések archívum |
+| `ads_knowledge_base` | Felhasználó saját AI tudásbázis |
+| `ads_alerts` | Riasztások (severity, type, metric, currentValue, previousValue, changePercent) |
+| `ads_ad_group_ads` | Hirdetésszövegek (RSA headlines/descriptions JSON, metrikkák) |
+| `ads_negative_keywords` | Negatív kulcsszavak (campaign szintű) |
+| `ads_asset_groups` | PMax asset csoportok (ad_strength, metrikkák) |
+| `ads_asset_group_assets` | PMax assetek (field_type, performance_label: BEST/GOOD/LOW/LEARNING) |
+| `ads_shopping_performance` | Termék teljesítmény (product_title, ROAS) |
+| `ads_placements` | Elhelyezések (display_name, target_url, placement_type) |
+
+### Fontosabb mezők
+
+- `invoices.status`: `pending` | `paid` | `overdue` | `cancelled`
+- `invoices.type`: `invoice` (provider-ből) | `manual` (feltöltött)
+- `invoices.amount`: Bruttó összeg (REAL) – **NEM `gross_total`!**
+- `projects.status`: `active` | `completed` | `on_hold` | `cancelled`
+- `expenses.type`: `subscription` | `investment`
+- `expenses.frequency`: `monthly` | `yearly` | `one-time`
+- `expenses.extra_amount`: Előfizetésen felüli plusz költség (pl. GitHub Copilot Usage) (REAL, nullable)
+- `expenses.extra_description`: Plusz költség leírása (TEXT, nullable)
+
+---
+
+## IPC Handler-ek (50+)
+
+Az IPC rendszer `db:` prefixű handler-ekkel működik, a `preload.ts` bridge-eli a renderer felé.
+
+| Domain | Handler-ek |
+|--------|-----------|
+| **Auth** | `db:user:get`, `login`, `logout`, `register`, `changePassword`, `resetPassword`, `checkEmailConfirmed`, `googleAuth`, `update` |
+| **Subscription** | `db:subscription:get`, `checkout`, `cancel`, `reactivate` |
+| **Clients** | `db:clients:getAll`, `get`, `create`, `update`, `delete` |
+| **Projects** | `db:projects:getAll`, `get`, `create`, `update`, `delete`, `close`, `markPaid`, `completedHours` |
+| **Calendar** | `db:calendar:getAll`, `create`, `update`, `delete` |
+| **Notes** | `db:notes:getAll`, `create`, `update`, `delete`, `getReminders` |
+| **Recordings** | `db:recordings:getAll`, `create`, `update`, `delete` |
+| **Shortcuts** | `db:shortcuts:getAll`, `create`, `update`, `delete` |
+| **Contracts** | `db:contracts:getTemplates`, `getAll`, `generate`, `delete` |
+| **Invoices** | `db:invoices:getAll`, `getByClient`, `create`, `update`, `delete`, `nextNumber` |
+| **Finance** | `db:finance:stats`, `monthlyRevenue`, `enhanced` |
+| **Expenses** | `db:expenses:getAll`, `create`, `update`, `delete`, `expenses:extract` (AI PDF) |
+| **Dashboard** | `db:dashboard:stats`, `todayNotes`, `upcomingDeadlines` |
+| **Team** | `db:team:getAll`, `get`, `create`, `update`, `delete`, `getProjectAssignments`, `getMemberAssignments`, `assignToProject`, `unassignFromProject` |
+| **Tax** | `db:tax:getBusinessTypes`, `getRules`, `checkEligibility`, `calculate`, `getAvailableTypes`, `getUserSettings`, `setUserSettings`, `getCalculationHistory` |
+| **Billing config** | `billing:set-config`, `get-config`, `test-connection`, `clear-config` |
+| **Billingo** | `billing:billingo:get-blocks`, `get-banks`, `ensure-partner`, `create-invoice`, `get-pdf`, `cancel`, `get-status` |
+| **Számlázz.hu** | `billing:szamlazz:create-invoice`, `get-by-external-id`, `cancel` |
+| **Unified billing** | `billing:get-active-provider`, `create-invoice`, `mark-invoice-paid`, `sync-invoices`, `get-last-sync-time` |
+| **Files** | `files:getRoot`, `list`, `createFolder`, `rename`, `delete`, `openInExplorer`, `openFile`, `readFile`, `ensureClientFolder`, `ensureProjectFolder`, `saveToClientInvoices`, `renameFolder`, `copyFiles`, `selectFiles`, `selectFolder`, `moveFiles`, `duplicate`, `getAbsolutePath`, `startDrag`, `copyToClipboard` |
+| **Window** | `window-minimize`, `window-maximize`, `window-close`, `window-is-maximized`, `update:install` |
+| **Speech** | `speech:startStream`, `sendAudio`, `stopStream`, `recordings:transcribe`, `recordings:summarize`, `invoices:extract` |
+| **Exchange** | `exchange:getRate` |
+| **Ads Auth** | `ads:save-credentials`, `ads:start-oauth`, `ads:list-accounts`, `ads:connect-account`, `ads:disconnect-account`, `ads:get-accounts` |
+| **Ads Sync** | `ads:sync-account`, `ads:sync-all`, `ads:get-sync-log`, `ads:get-last-sync` |
+| **Ads Data** | `ads:get-campaigns`, `ads:get-campaign-detail`, `ads:get-keywords`, `ads:get-metrics`, `ads:get-search-terms` |
+| **Ads Detail** | `ads:get-ad-group-ads`, `ads:get-negative-keywords`, `ads:get-asset-groups`, `ads:get-asset-group-assets`, `ads:get-shopping-performance`, `ads:get-placements`, `ads:get-keywords-with-metrics` |
+| **Ads Alerts** | `ads:get-alerts`, `ads:dismiss-alert`, `ads:get-alert-count` |
+| **Ads AI** | `ads:run-analysis`, `ads:get-analyses`, `ads:get-analysis` |
+| **Ads KB** | `ads:kb-create`, `ads:kb-getAll`, `ads:kb-update`, `ads:kb-delete` |
+
+---
+
+## Integrációk
+
+### Billingo API v3
+- **URL:** `https://api.billingo.hu/v3`
+- **Auth:** `X-API-KEY` header (safeStorage-ból)
+- **Funkciók:** Partner kezelés, számla létrehozás, PDF letöltés (202 retry), storno (`POST /documents/{id}/cancel` üres body-val), fizetés jelölés, email küldés (`POST /documents/{id}/send`)
+- **Rate limit:** 429-re 3x retry, 3 sec delay
+- **Storno response:** `{ id, invoice_number, gross_total, type: "cancellation" }`
+
+### Számlázz.hu XML API
+- **URL:** `https://www.szamlazz.hu/szamla/`
+- **Auth:** `szamlaagentkulcs` XML mezőben (safeStorage-ból)
+- **Formátum:** Multipart/form-data XML request, HTTP header + PDF response
+- **Funkciók:** Számla létrehozás (`xmlagentxmlfile`), storno (`szamla_agent_st`), fizetés (`szamla_agent_kifiz`), lekérdezés external ID-vel
+- **Automatikus email:** `eszamla: true` + vevő email → automatikusan küld
+
+### Supabase
+- **URL:** `https://arbhhltbjovuxwvfcnni.supabase.co`
+- **Auth:** Email/password + Google OAuth (PKCE), file-based session persistence
+- **Edge Functions:** `get-deepgram-key`, `summarize`, `invoice-extract`, `expense-extract`, `create-checkout`, `manage-subscription`, `stripe-webhook`, `sync-stripe-subscriptions`, `transcribe` (mind `--no-verify-jwt`)
+- **RPC:** `expire_subscription(p_user_id)`
+- **Tábla:** `subscriptions` (status, trial_ends_at, current_period_end)
+
+### Stripe
+- **Via Supabase Edge Functions:** `create-checkout` (Monthly/Yearly/Lifetime), `manage-subscription`
+- **Webhook:** Supabase-ben kezelve, `subscriptions` táblát frissíti
+
+### Deepgram
+- **Real-time:** WebSocket `wss://api.deepgram.com/v1/listen` (magyar nyelv)
+- **Batch:** HTTP `POST /v1/listen` (fájl átirás)
+- **AI summary:** Supabase `summarize` Edge Function
+
+### Frankfurter
+- **URL:** `https://api.frankfurter.dev`
+- **Cél:** Valuta átváltás (EUR/USD→HUF kiadásoknál)
+
+### Google Ads API
+- **SDK:** `google-ads-api` (Opteo, npm)
+- **API verzió:** v23.2
+- **Auth:** OAuth2 PKCE + developer token
+- **Lekérdezés:** GAQL (Google Ads Query Language)
+- **Rate limit:** token bucket, 15 000 ops/nap (Basic Access)
+- **Pénzügyi értékek:** micros / 1 000 000 konverzió
+
+### Claude API (AI elemzéshez)
+- **Via Supabase Edge Function:** `ads-analyze`
+- **Model:** claude-sonnet-4-20250514
+- **Input:** markdown táblázatok (metrikák) + system prompt (benchmarkok)
+- **Output:** magyar nyelvű elemzés, javaslatok
+
+---
+
+## Google Ads AI Elemző Modul
+
+> **Fizetős kiegészítő modul** — külön előfizetéssel érhető el, az alap app működik nélküle.
+
+### Architektúra
+
+| Réteg | Fájl | Leírás |
+|-------|------|--------|
+| Credential Store | `electron/ads-store.ts` | safeStorage (mint billing-store.ts) |
+| OAuth2 | `electron/ads-auth.ts` | PKCE flow, loopback redirect, token refresh |
+| API Wrapper | `electron/ads-api.ts` | Opteo `google-ads-api` npm csomag, GAQL lekérdezések |
+| Sync Engine | `electron/ads-sync.ts` | node-cron 6 óránként, inkrementális + full sync |
+| AI Orchestrator | `electron/ads-ai.ts` | Context készítés → Supabase edge function hívás |
+| Edge Function | `supabase/functions/ads-analyze` | Claude API (Anthropic SDK), system prompt + benchmarkok |
+| Típusok | `src/types/ads.ts` | AdsAccount, AdsCampaign, AdsKeyword, AdsMetricsSummary stb. |
+| Context | `src/contexts/AdsContext.tsx` | accounts, campaigns, metrics, syncStatus state |
+| Fő oldal | `src/pages/Ads.tsx` | Fiók lista, KPI kártyák, kampány táblázat |
+| Alert System | `electron/ads-alerts.ts` | Rule-based anomaly detection, post-sync trigger |
+| Komponensek | `src/components/Ads*.tsx` | AccountConnect, CampaignView, AiPanel |
+| Search Detail | `src/components/SearchCampaignDetail.tsx` | 4 tab: Kulcsszavak (paginated+filtered), Hirdetésszövegek, Keresési kif., Negatív kw |
+| PMax Detail | `src/components/PMaxCampaignDetail.tsx` | 5 tab: Csatorna bontás, Asset groupok, Asset minősítés, Termékek, Elhelyezések |
+| Pagination | `src/components/Pagination.tsx` | Reusable, 25/page, keyboard nav |
+
+### Kritikus szabályok
+
+- **sql.js** adatbázis (NEM better-sqlite3)
+- OAuth: **shell.openExternal()** + loopback redirect (NEM BrowserWindow)
+- Credentials: **safeStorage** a main process-ben (billing-store.ts minta)
+- Pénzügyi értékek: **micros / 1 000 000** konverzió
+- Claude API kulcs: **Supabase edge function-ben**, NEM a desktop appban
+- Az Ads modul **opcionális** — az alap app működjön nélküle
+- Kampány státusz: **színes pötty** (zöld=aktív, szürke=szüneteltetve), NEM Play/Pause ikon
+- Alert leírások mindig tartalmazzák az **időtávot** ("Az utóbbi 7 napban:")
+- Sidebar alert badge: **kis piros pötty** (szám nélkül)
+- `ads_asset_group_assets`: **nincs UNIQUE** constraint — sync előtt DELETE + INSERT
+- Search terms: **live API** fetch (nem szinkronizált DB-be)
+- `ads:get-keywords-with-metrics`: 4-table JOIN (keywords → ad_groups → campaigns → daily_metrics)
+
+---
+
+## Fő Folyamatok
+
+### Bejelentkezés
+1. React → `db:user:login` → Supabase `signInWithPassword()`
+2. Sikeres → `switchDatabase(userId)` → user-specifikus SQLite init
+3. `ensureLocalUser()` → `user_settings` sor létrehozás/frissítés
+4. `syncService.startPolling()` → 30 perces billing szinkron indul
+
+### Számla létrehozás
+1. React → `billing:create-invoice` → `billingService.createInvoice()`
+2. Provider detection → Billingo VAGY Számlázz.hu adapter
+3. **Billingo:** `ensurePartner()` → `createInvoice()` → `getInvoicePdf()` (202 retry) → `sendInvoice()` (email)
+4. **Számlázz.hu:** XML build → POST multipart → invoice number + PDF headerből
+5. DB mentés: `invoices` tábla (provider, provider_invoice_id, provider_synced_at)
+6. Return: invoice number, gross total, PDF base64
+
+### Storno
+1. React → `db:invoices:delete` → provider cancel API hívás
+2. **Billingo:** `POST /documents/{id}/cancel` → storno doc + PDF letöltés
+3. **Számlázz.hu:** XML cancel (`szamla_agent_st`)
+4. Negatív összegű storno rekord az `invoices` táblába, eredeti `cancelled` státuszra
+5. Hiba → `{ success: false, error: message }` → frontend `alert()`
+
+### Billing szinkron
+- 30 percenként lekérdezi az összes `pending` számlát a provider API-ból
+- Státusz változás → DB update → `billing:sync-updated` event a renderernek
+
+### Szerződés generálás
+1. Template kiválasztás (megbízási/vállalkozási/NDA) + mezők kitöltés
+2. `generateContractLines()` → szöveg összeállítás
+3. `generateContractPdf()` → pdf-lib PDF
+4. Mentés: `{ClientName}/Szerződések/` + `contracts` tábla rekord
+
+### AI Kiadás feldolgozás (Expense Extract)
+1. React ExpenseModal → PDF feltöltés (drag-drop vagy fájlválasztó)
+2. `expenses:extract` IPC → fájl beolvasás → base64 → Supabase `expense-extract` Edge Function
+3. Edge Function → OpenAI GPT-4o-mini (PDF mint `type: 'file'`) → strukturált JSON válasz
+4. Visszakapott mezők: name, amount, currency, category, type, frequency, date, vendor, notes, subscription_hint, extra_amount, extra_description
+5. Form automatikus kitöltés + AI prefill banner + subscription hint megjelenítés
+
+### Fájlrendszer
+- Root: `{userData}/Files/{ClientName}/{ProjectName}/`
+- Auto-created: ügyfél mappa, projekt mappa, `Számlák/`, `Szerződések/`
+- Fájlnév sanitization: `<>:"/\|?*` → `_`
+- **Drag-out:** `ipcMain.on` + `ipcRenderer.send` (szinkron, nem handle/invoke) → `webContents.startDrag`
+- **Copy to OS clipboard:** PowerShell `Set-Clipboard -Path` (Windows) / `file://` URI (macOS/Linux)
+- **Műveletek:** copy, cut, paste, duplicate, move, rename, delete, rubber-band selection
+
+---
+
+## Konvenciók
+
+- **Nyelv:** Magyar UI szövegek, angol kód (változónevek, kommentek)
+- **Routing:** HashRouter (`/#/dashboard`, `/#/clients/:id`, stb.)
+- **State:** React context (Auth, Subscription, Theme) + lokális useState
+- **IPC naming:** `domain:entity:action` (pl. `db:clients:create`, `billing:billingo:get-blocks`)
+- **DB ID-k:** UUID v4 (`crypto.randomUUID()`)
+- **Dátumok:** ISO string SQLite-ban, `date-fns` a formázáshoz
+- **Stílus:** Tailwind utility classes, CSS változók a témákhoz
+- **Típusok:** `src/types/index.ts` központi típus definíciók
+- **Error handling:** IPC try/catch → `{ success: false, error }` pattern, frontend `alert()`
+- **Billing keys:** safeStorage (OS-level encryption) via `billing-store.ts`
+- **PDF-ek:** Base64 string-ként mozognak IPC-n keresztül
+
+---
+
+## Jelenlegi állapot & TODO-k
+
+### Kész
+- Teljes CRUD: ügyfelek, projektek, naptár, jegyzetek, hangfelvételek, fájlok, shortcutok, csapat, kiadások
+- Billingo + Számlázz.hu integráció (létrehozás, PDF, storno, fizetés jelölés, email küldés)
+- Szerződés generálás (3 sablon) + in-app PDF megjelenítő
+- Adó kalkulátor (6 magyar adónem, 2026 szabályok) + adóhatáridők naptár szinkron
+- Előfizetés kezelés (Stripe: Monthly/Yearly/Lifetime, trial)
+- Deepgram speech-to-text (real-time + batch)
+- 4 téma, Pomodoro timer (átnevezés, láthatóság), Exchange rates
+- AI kiadás feldolgozás (PDF → OpenAI GPT-4o-mini → form kitöltés, subscription hint)
+- Előfizetésen felüli plusz költségek (extra_amount + extra_description, pl. GitHub Copilot Usage)
+- Fájlkezelő: drag-out OS-re, copy-to-clipboard (PowerShell Set-Clipboard), duplicate, move, rubber-band selection
+- DatePicker overflow fix, light téma amber színek
+
+### Kész (Google Ads modul)
+- Ads fiók OAuth2, kampányok, hirdetéscsoportok, kulcsszavak szinkron
+- Külön Ads route-struktúra: `AdsLayout` + `AdsOverview` / `AdsCampaigns` / `AdsAlerts` / `AdsAiPage` / `AdsSettings`
+- KPI kártyák (5 db: megjelenítés, kattintás, CTR, költés, konverzió; benchmark színek, info tooltip)
+- Kampány táblázat (szűrők: aktív/szüneteltetve/mind, default ENABLED)
+- Kampány részletes nézet: header+chart (közös) + típus alapú routing
+- Search kampány: 4 tab (Kulcsszavak paginated+filter+QS dots, Hirdetésszövegek card grid, Keresési kifejezések live API, Negatív kulcsszavak chip view)
+- PMax kampány: 5 tab (Csatorna bontás KPI cards, Asset groupok strength bar, Asset minősítés BEST/GOOD/LOW/LEARNING, Termékek paginated+ROAS, Elhelyezések top 50)
+- Alert rendszer: 10 szabály (7 kampány + 3 fiók szintű), post-sync trigger, alert banner, dismiss, sidebar pötty
+- AI elemzés panel (dropdown menu + A5 nézet)
+- Sync: kampány típus szerinti detail sync (SEARCH→ads+neg kw, PMAX→asset groups+assets+shopping+placements)
+- Account selector ügyfélnév-prioritással az Ads overview fejlécében
+
+### Friss megjegyzések
+- A base Dashboardból az Ads widget el lett távolítva, hogy a Klient főfelület fókuszált maradjon.
+- A `npm run dev` fejlesztői indulása gyorsítva lett: Electron watch build + `nodemon` restart, nincs automatikus DevTools megnyitás.
+- A base polish terv UX-001 feladata elkészült: a Dashboard, Pénzügyek, Ügyfelek, Projektek, Naptár, Fájlok és Beállítások most közös `PageHeader` komponensre épülnek, egységes title/subtitle/actions ritmussal.
+- A base polish terv UX-003 feladata elkészült: a shared vizuális rendszer kapott olvashatóbb secondary text tier-eket, és a Dashboard, Pénzügyek, Ügyfelek oldalakon a halk meta/helper szövegek kontrasztja emelve lett.
+- A base polish terv UX-002 feladata elkészült: a sidebar shortcut blokk másodlagosabb vizuális súlyt kapott, a fő navigáció dominánsabb lett, a jobb alsó Notes/Pomodoro/Ads utility-k pedig közös railbe rendeződtek.
+- A base polish terv UX-101 feladata elkészült: a Dashboard headerben az óra és a billing shortcut most közös halk utility-csoport, a Gyors felvétel pedig az egyetlen egyértelmű header action maradt.
+- A base polish terv UX-102 feladata elkészült: a Dashboard most egyértelműbben különíti el a hero bevételi blokkot, az operatív mini stat support zónát és a naptár melletti "Mai fókusz" panelt.
+
+### Lehetséges fejlesztések
+- Lejárt számlák automatikus detekció (overdue → email emlékeztető)
+- Számlázz.hu PDF újraletöltés
+- Dashboard bővítés (több widget)
+- Offline mode javítás
+- Export funkciók (CSV, PDF report)
+
+---
+
+*Utolsó frissítés: 2026-04-21*

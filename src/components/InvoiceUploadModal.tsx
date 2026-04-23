@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback } from 'react';
 import { FileText, Upload, Loader2, X, Sparkles, ArrowLeft } from 'lucide-react';
+import { fmtNum, parseNum } from '../utils/numberFormat';
 
 interface InvoiceUploadModalProps {
   clients: Client[];
@@ -237,7 +238,7 @@ export default function InvoiceUploadModal({ clients, projects, onClose, onSaved
                     Összeg *
                     {!extractedData?.amount && <span className="ml-1 text-amber-400 text-[9px]">• manuális</span>}
                   </label>
-                  <input type="number" value={confirmFields.amount} onChange={e => setConfirmFields(f => ({ ...f, amount: e.target.value }))} className={inputClass} required />
+                  <input type="text" inputMode="numeric" value={fmtNum(confirmFields.amount)} onChange={e => setConfirmFields(f => ({ ...f, amount: parseNum(e.target.value) }))} className={inputClass} required />
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-steel mb-1">Pénznem</label>

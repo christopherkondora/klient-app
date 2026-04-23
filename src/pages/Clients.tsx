@@ -1,20 +1,23 @@
 import { useEffect, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useThemedColor } from '../utils/colors';
+import { useAuth } from '../contexts/AuthContext';
 import {
   Plus, Search, Mail, Phone, Building2, Trash2, SquarePen,
-  LayoutGrid, List, Briefcase, ChevronRight, X,
+  LayoutGrid, List, Briefcase, ChevronRight, X, AlertTriangle,
 } from 'lucide-react';
 import { differenceInDays, parseISO } from 'date-fns';
 import { hu } from 'date-fns/locale';
 import HexColorPicker from '../components/HexColorPicker';
 import ConfirmDialog from '../components/ConfirmDialog';
+import PageHeader from '../components/PageHeader';
 
 const COLORS = ['#598392', '#AEC3B0', '#124559', '#10b981', '#3b82f6', '#8b5cf6', '#ef4444', '#14b8a6'];
 
 export default function Clients() {
   const navigate = useNavigate();
   const tc = useThemedColor();
+  const { user } = useAuth();
   const [clients, setClients] = useState<Client[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
@@ -111,6 +114,13 @@ export default function Clients() {
     return `${formatted} Ft`;
   }
 
+  const billingActive = user?.invoice_platform && user.invoice_platform !== 'none';
+
+  const incompleteClients = useMemo(() => {
+    if (!billingActive) return [];
+    return clients.filter(c => !c.postal_code?.trim() || !c.city?.trim() || !c.street?.trim() || !c.tax_number?.trim());
+  }, [clients, billingActive]);
+
   function formatActivity(dateStr: string | null) {
     if (!dateStr) return 'Új ügyfél';
     try {
@@ -133,20 +143,19 @@ export default function Clients() {
 
   return (
     <div className="max-w-7xl mx-auto space-y-8">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="font-pixel text-xl text-cream">Ügyfelek</h1>
-          <p className="text-steel text-sm mt-2">{clients.length} ügyfél</p>
-        </div>
-        <button
+      <PageHeader
+        title="Ügyfelek"
+        subtitle={`${clients.length} ügyfél`}
+        actions={(
+          <button
           onClick={() => { setEditingClient(null); setShowForm(true); }}
           className="flex items-center gap-2 px-4 py-2 bg-teal text-cream rounded-lg text-sm font-medium hover:bg-teal/80 transition-colors"
         >
           <Plus width={16} height={16} />
           Új ügyfél
         </button>
-      </div>
+        )}
+      />
 
       {/* Search + View Toggle */}
       <div className="flex items-center gap-3">
@@ -178,10 +187,38 @@ export default function Clients() {
         </div>
       </div>
 
+      {/* Missing billing fields warning */}
+      {incompleteClients.length > 0 && (
+        <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg px-4 py-3 flex items-start gap-3">
+          <AlertTriangle width={16} height={16} className="text-amber-400 shrink-0 mt-0.5" />
+          <div className="text-sm">
+            <p className="text-amber-300 font-medium">Hiányos számlázási adatok</p>
+            <p className="text-amber-400/70 text-xs mt-1">
+              {incompleteClients.length} ügyfélnél hiányzik az adószám, irányítószám, helység vagy utca.
+              Számlát csak teljes adatokkal rendelkező ügyfeleknek lehet kiállítani.
+            </p>
+            <div className="flex flex-wrap gap-1.5 mt-2">
+              {incompleteClients.slice(0, 5).map(c => (
+                <span
+                  key={c.id}
+                  className="inline-flex items-center gap-1 px-2 py-0.5 bg-amber-500/15 rounded text-[11px] text-amber-300 cursor-pointer hover:bg-amber-500/25 transition-colors"
+                  onClick={() => navigate(`/clients/${c.id}`)}
+                >
+                  {c.name}
+                </span>
+              ))}
+              {incompleteClients.length > 5 && (
+                <span className="text-[11px] text-amber-400/60">+{incompleteClients.length - 5} további</span>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Content */}
       {filtered.length === 0 ? (
         <div className="text-center py-12">
-          <p className="text-steel/60 text-sm">
+          <p className="text-muted text-sm">
             {search ? 'Nincs találat a keresésre' : 'Még nincsenek ügyfelek. Adj hozzá egyet!'}
           </p>
         </div>
@@ -191,21 +228,31 @@ export default function Clients() {
           {filtered.map(client => {
             const stats = clientStats.get(client.id);
             const isActive = (stats?.activeProjects ?? 0) > 0;
+            const isIncomplete = billingActive && (!client.postal_code?.trim() || !client.city?.trim() || !client.street?.trim() || !client.tax_number?.trim());
             return (
               <div
                 key={client.id}
-                className="bg-surface-800/50 rounded-lg border border-teal/10 hover:border-teal/25 hover:border-l-[3px] hover:border-l-steel transition-all cursor-pointer group"
+                className={`relative bg-surface-800/50 rounded-lg border overflow-hidden hover:border-teal/25 transition-colors duration-200 cursor-pointer group ${isIncomplete ? 'border-amber-500/20' : 'border-teal/10'}`}
                 onClick={() => navigate(`/clients/${client.id}`)}
               >
+                {/* Animated left accent strip — absolute so it never shifts layout */}
+                <div className="absolute left-0 inset-y-0 w-[3px] bg-steel origin-left scale-x-0 group-hover:scale-x-100 transition-transform duration-200 ease-[cubic-bezier(0.32,0.72,0,1)] rounded-r-full" />
                 {/* Top: Avatar + Identity */}
                 <div className="p-5 pb-4">
                   <div className="flex items-start justify-between">
                     <div className="flex items-center gap-3.5">
-                      <div
-                        className="w-12 h-12 rounded-lg flex items-center justify-center text-ink font-bold text-base shrink-0"
-                        style={{ backgroundColor: tc(client.color) }}
-                      >
-                        {client.name.charAt(0)}
+                      <div className="relative">
+                        <div
+                          className="w-12 h-12 rounded-lg flex items-center justify-center text-ink font-bold text-base shrink-0"
+                          style={{ backgroundColor: tc(client.color) }}
+                        >
+                          {client.name.charAt(0)}
+                        </div>
+                        {isIncomplete && (
+                          <div className="absolute -top-1 -right-1 w-4 h-4 bg-amber-500 rounded-full flex items-center justify-center" title="Hiányos számlázási adatok">
+                            <AlertTriangle width={10} height={10} className="text-ink" />
+                          </div>
+                        )}
                       </div>
                       <div>
                         <div className="flex items-center gap-2">
@@ -213,7 +260,7 @@ export default function Clients() {
                           <div className={`w-2 h-2 rounded-full shrink-0 ${isActive ? 'bg-emerald-400' : 'bg-steel/40'}`} />
                         </div>
                         {client.company && (
-                          <p className="text-xs text-steel mt-0.5">{client.company}</p>
+                          <p className="text-muted text-xs mt-0.5">{client.company}</p>
                         )}
                       </div>
                     </div>
@@ -240,10 +287,10 @@ export default function Clients() {
                     <Briefcase width={11} height={11} />
                     <span>{stats?.activeProjects ?? 0} aktív</span>
                   </div>
-                  <div className={`font-medium ${(stats?.pendingAmount ?? 0) > 0 ? 'text-amber-400' : 'text-steel/50'}`}>
+                  <div className={`font-medium ${(stats?.pendingAmount ?? 0) > 0 ? 'text-amber-400' : 'text-muted-soft'}`}>
                     {(stats?.pendingAmount ?? 0) > 0 ? formatCurrency(stats!.pendingAmount) : 'Rendben'}
                   </div>
-                  <div className="text-steel/60">
+                  <div className="text-muted-soft">
                     {formatActivity(stats?.lastActivity ?? null)}
                   </div>
                 </div>
@@ -257,18 +304,28 @@ export default function Clients() {
           {filtered.map(client => {
             const stats = clientStats.get(client.id);
             const isActive = (stats?.activeProjects ?? 0) > 0;
+            const isIncomplete = billingActive && (!client.postal_code?.trim() || !client.city?.trim() || !client.street?.trim() || !client.tax_number?.trim());
             return (
               <div
                 key={client.id}
                 onClick={() => navigate(`/clients/${client.id}`)}
-                className="flex items-center gap-4 bg-surface-800/50 rounded-lg border border-teal/10 px-5 py-3.5 hover:border-teal/25 hover:border-l-[3px] hover:border-l-steel transition-all cursor-pointer group"
+                className={`relative flex items-center gap-4 bg-surface-800/50 rounded-lg border overflow-hidden px-5 py-3.5 hover:border-teal/25 transition-colors duration-200 cursor-pointer group ${isIncomplete ? 'border-amber-500/20' : 'border-teal/10'}`}
               >
+                {/* Animated left accent strip */}
+                <div className="absolute left-0 inset-y-0 w-[3px] bg-steel origin-left scale-x-0 group-hover:scale-x-100 transition-transform duration-200 ease-[cubic-bezier(0.32,0.72,0,1)] rounded-r-full" />
                 {/* Avatar */}
-                <div
-                  className="w-10 h-10 rounded-lg flex items-center justify-center text-ink font-bold text-sm shrink-0"
-                  style={{ backgroundColor: tc(client.color) }}
-                >
-                  {client.name.charAt(0)}
+                <div className="relative">
+                  <div
+                    className="w-10 h-10 rounded-lg flex items-center justify-center text-ink font-bold text-sm shrink-0"
+                    style={{ backgroundColor: tc(client.color) }}
+                  >
+                    {client.name.charAt(0)}
+                  </div>
+                  {isIncomplete && (
+                    <div className="absolute -top-1 -right-1 w-3.5 h-3.5 bg-amber-500 rounded-full flex items-center justify-center" title="Hiányos számlázási adatok">
+                      <AlertTriangle width={9} height={9} className="text-ink" />
+                    </div>
+                  )}
                 </div>
 
                 {/* Name + Company */}
@@ -277,14 +334,14 @@ export default function Clients() {
                     <h3 className="font-semibold text-cream truncate">{client.name}</h3>
                     <div className={`w-2 h-2 rounded-full shrink-0 ${isActive ? 'bg-emerald-400' : 'bg-steel/40'}`} />
                     {client.company && (
-                      <span className="text-xs text-steel shrink-0">· {client.company}</span>
+                      <span className="text-muted text-xs shrink-0">· {client.company}</span>
                     )}
                   </div>
                 </div>
 
                 {/* Status badge */}
                 <div className={`flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded shrink-0 ${
-                  isActive ? 'text-emerald-400 bg-emerald-400/10' : 'text-steel/60 bg-surface-900'
+                  isActive ? 'text-emerald-400 bg-emerald-400/10' : 'text-muted-soft bg-surface-900'
                 }`}>
                   <div className={`w-1.5 h-1.5 rounded-full ${isActive ? 'bg-emerald-400' : 'bg-steel/40'}`} />
                   {isActive ? 'Aktív' : 'Inaktív'}
@@ -292,13 +349,13 @@ export default function Clients() {
 
                 {/* Stats */}
                 <div className="flex items-center gap-6 shrink-0 text-xs">
-                  <span className="text-steel w-16">
+                  <span className="text-muted w-16">
                     {stats?.activeProjects ?? 0} projekt
                   </span>
-                  <span className={`w-24 text-right font-medium ${(stats?.pendingAmount ?? 0) > 0 ? 'text-amber-400' : 'text-steel/50'}`}>
+                  <span className={`w-24 text-right font-medium ${(stats?.pendingAmount ?? 0) > 0 ? 'text-amber-400' : 'text-muted-soft'}`}>
                     {(stats?.pendingAmount ?? 0) > 0 ? formatCurrency(stats!.pendingAmount) : 'Rendben'}
                   </span>
-                  <span className="text-steel/60 w-24 text-right">
+                  <span className="text-muted-soft w-24 text-right">
                     {formatActivity(stats?.lastActivity ?? null)}
                   </span>
                 </div>
@@ -352,6 +409,8 @@ export default function Clients() {
 }
 
 export function ClientForm({ client, onSubmit, onClose }: { client: Client | null; onSubmit: (data: Partial<Client>) => void; onClose: () => void }) {
+  const { user } = useAuth();
+  const billingActive = user?.invoice_platform && user.invoice_platform !== 'none';
   const [name, setName] = useState(client?.name || '');
   const [email, setEmail] = useState(client?.email || '');
   const [phone, setPhone] = useState(client?.phone || '');
@@ -363,6 +422,7 @@ export function ClientForm({ client, onSubmit, onClose }: { client: Client | nul
   const [addressLine2, setAddressLine2] = useState(client?.address_line2 || '');
   const [taxNumber, setTaxNumber] = useState(client?.tax_number || '');
   const [color, setColor] = useState(client?.color || '#598392');
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
   const COLORS = ['#598392', '#AEC3B0', '#124559', '#10b981', '#3b82f6', '#8b5cf6', '#ef4444', '#14b8a6'];
 
@@ -396,117 +456,41 @@ export function ClientForm({ client, onSubmit, onClose }: { client: Client | nul
     setPhone(formatted);
   }
 
-  function getCityFromPostalCode(postalCode: string): string {
-    const code = postalCode.trim();
-    if (code.length !== 4 || !/^\d{4}$/.test(code)) return '';
-
-    const firstDigit = code[0];
-    const firstTwo = code.slice(0, 2);
-
-    // Budapest districts (1xxx)
-    if (firstDigit === '1') return 'Budapest';
-
-    // Major cities by postal code prefix
-    const cityMap: { [key: string]: string } = {
-      '20': 'Szentendre',
-      '21': 'Budakalász',
-      '22': 'Érd',
-      '23': 'Szigetszentmiklós',
-      '24': 'Dunaharaszti',
-      '25': 'Dunakeszi',
-      '26': 'Szentendre',
-      '27': 'Vác',
-      '28': 'Gödöllő',
-      '29': 'Monor',
-      '30': 'Cegléd',
-      '31': 'Albertirsa',
-      '32': 'Jászberény',
-      '33': 'Szolnok',
-      '34': 'Törökszentmiklós',
-      '35': 'Jászapáti',
-      '36': 'Eger',
-      '37': 'Gyöngyös',
-      '38': 'Hatvan',
-      '39': 'Salgótarján',
-      '40': 'Tiszafüred',
-      '41': 'Mezőkövesd',
-      '42': 'Tiszaújváros',
-      '43': 'Miskolc',
-      '44': 'Ózd',
-      '45': 'Sátoraljaújhely',
-      '46': 'Miskolc',
-      '47': 'Nyíregyháza',
-      '48': 'Nyírbátor',
-      '49': 'Kisvárda',
-      '50': 'Tokaj',
-      '52': 'Debrecen',
-      '53': 'Hajdúböszörmény',
-      '54': 'Hajdúnánás',
-      '55': 'Berettyóújfalu',
-      '56': 'Szeghalom',
-      '57': 'Gyula',
-      '58': 'Orosháza',
-      '59': 'Szarvas',
-      '60': 'Kecskemét',
-      '61': 'Kiskunfélegyháza',
-      '62': 'Szeged',
-      '63': 'Hódmezővásárhely',
-      '64': 'Makó',
-      '65': 'Békéscsaba',
-      '66': 'Szentes',
-      '67': 'Csongrád',
-      '68': 'Baja',
-      '69': 'Mohács',
-      '70': 'Pécs',
-      '71': 'Pécs',
-      '72': 'Szekszárd',
-      '73': 'Bonyhád',
-      '74': 'Kalocsa',
-      '75': 'Dunaföldvár',
-      '76': 'Paks',
-      '77': 'Dombóvár',
-      '78': 'Siófok',
-      '79': 'Kaposvár',
-      '80': 'Zalaegerszeg',
-      '81': 'Nagykanizsa',
-      '82': 'Letenye',
-      '83': 'Keszthely',
-      '84': 'Veszprém',
-      '85': 'Tapolca',
-      '86': 'Pápa',
-      '87': 'Győr',
-      '88': 'Szombathely',
-      '89': 'Sárvár',
-      '90': 'Sopron',
-      '91': 'Mosonmagyaróvár',
-      '92': 'Csorna',
-      '93': 'Kapuvár',
-      '94': 'Kőszeg',
-      '95': 'Szombathely',
-      '96': 'Pápa',
-      '97': 'Tatabánya',
-      '98': 'Komárom',
-      '99': 'Balatonalmádi',
-    };
-
-    return cityMap[firstTwo] || '';
-  }
-
   function handlePostalCodeChange(value: string) {
     const cleaned = value.replace(/\D/g, '').slice(0, 4);
     setPostalCode(cleaned);
-
-    if (cleaned.length === 4 && !city) {
-      const detectedCity = getCityFromPostalCode(cleaned);
-      if (detectedCity) {
-        setCity(detectedCity);
-      }
-    }
   }
+
+  useEffect(() => {
+    if (postalCode.length !== 4 || !/^\d{4}$/.test(postalCode) || city) return;
+    let cancelled = false;
+    fetch(`https://api.zippopotam.us/hu/${postalCode}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (!cancelled && data?.places?.[0]?.['place name']) {
+          setCity(data.places[0]['place name']);
+        }
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [postalCode]);
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!name.trim()) return;
+
+    if (billingActive) {
+      const errors: Record<string, string> = {};
+      if (!postalCode.trim()) errors.postalCode = 'Irányítószám megadása kötelező';
+      if (!city.trim()) errors.city = 'Helység megadása kötelező';
+      if (!street.trim()) errors.street = 'Utca és házszám megadása kötelező';
+      if (!taxNumber.trim()) errors.taxNumber = 'Adószám megadása kötelező';
+      if (Object.keys(errors).length > 0) {
+        setFieldErrors(errors);
+        return;
+      }
+    }
+    setFieldErrors({});
     onSubmit({
       name: name.trim(),
       email,
@@ -524,10 +508,10 @@ export function ClientForm({ client, onSubmit, onClose }: { client: Client | nul
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onDoubleClick={onClose}>
-      <div className="bg-surface-800 rounded-2xl border border-teal/15 w-full max-w-sm shadow-2xl overflow-hidden" onDoubleClick={e => e.stopPropagation()}>
+      <div className="bg-surface-800 rounded-2xl ring-1 ring-inset ring-teal/15 w-full max-w-sm shadow-2xl overflow-hidden" onDoubleClick={e => e.stopPropagation()}>
 
         {/* Header accent */}
-        <div className="h-1 bg-gradient-to-r from-teal via-steel to-teal/30" />
+        <div className="h-1 bg-teal" />
 
         <form onSubmit={handleSubmit} className="p-5">
           <div className="flex items-center justify-between mb-5">
@@ -558,8 +542,8 @@ export function ClientForm({ client, onSubmit, onClose }: { client: Client | nul
             />
           </div>
 
-          {/* Contact row */}
-          <div className="mt-5 grid grid-cols-2 gap-3">
+          {/* Contact fields */}
+          <div className="mt-5 space-y-3">
             <div>
               <span className="text-[10px] text-steel tracking-wider uppercase mb-1 block">Email</span>
               <div className="flex items-center gap-2 border-b border-teal/8 py-1.5">
@@ -605,14 +589,23 @@ export function ClientForm({ client, onSubmit, onClose }: { client: Client | nul
               </div>
             </div>
             <div>
-              <span className="text-[10px] text-steel tracking-wider uppercase mb-1 block">Adószám</span>
+              <span className={`text-[10px] tracking-wider uppercase mb-1 block ${fieldErrors.taxNumber ? 'text-red-400' : 'text-steel'}`}>Adószám {billingActive && <span className="text-red-400">*</span>}</span>
               <input
                 type="text"
                 value={taxNumber}
-                onChange={e => setTaxNumber(e.target.value)}
-                className="w-full px-0 py-1.5 bg-transparent border-b border-teal/8 text-sm text-cream focus:outline-none focus:border-teal/25 placeholder:text-steel/40 transition-colors"
+                onChange={e => {
+                  const raw = e.target.value.replace(/[^\d]/g, '').slice(0, 11);
+                  let formatted = raw;
+                  if (raw.length > 8) formatted = raw.slice(0, 8) + '-' + raw.slice(8);
+                  if (raw.length > 9) formatted = raw.slice(0, 8) + '-' + raw.slice(8, 9) + '-' + raw.slice(9);
+                  setTaxNumber(formatted);
+                  setFieldErrors(prev => { const { taxNumber: _, ...rest } = prev; return rest; });
+                }}
+                maxLength={13}
+                className={`w-full px-0 py-1.5 bg-transparent border-b text-sm text-cream focus:outline-none transition-colors ${fieldErrors.taxNumber ? 'border-red-400/60 focus:border-red-400' : 'border-teal/8 focus:border-teal/25'} placeholder:text-steel/40`}
                 placeholder="12345678-1-23"
               />
+              {fieldErrors.taxNumber && <span className="text-[10px] text-red-400 mt-0.5 block">{fieldErrors.taxNumber}</span>}
             </div>
           </div>
 
@@ -620,36 +613,39 @@ export function ClientForm({ client, onSubmit, onClose }: { client: Client | nul
           <div className="mt-4 space-y-3">
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <span className="text-[10px] text-steel tracking-wider uppercase mb-1 block">Irányítószám</span>
+                <span className={`text-[10px] tracking-wider uppercase mb-1 block ${fieldErrors.postalCode ? 'text-red-400' : 'text-steel'}`}>Irányítószám {billingActive && <span className="text-red-400">*</span>}</span>
                 <input
                   type="text"
                   value={postalCode}
-                  onChange={e => handlePostalCodeChange(e.target.value)}
-                  className="w-full px-0 py-1.5 bg-transparent border-b border-teal/8 text-sm text-cream focus:outline-none focus:border-teal/25 placeholder:text-steel/40 transition-colors"
+                  onChange={e => { handlePostalCodeChange(e.target.value); setFieldErrors(prev => { const { postalCode: _, ...rest } = prev; return rest; }); }}
+                  className={`w-full px-0 py-1.5 bg-transparent border-b text-sm text-cream focus:outline-none transition-colors ${fieldErrors.postalCode ? 'border-red-400/60 focus:border-red-400' : 'border-teal/8 focus:border-teal/25'} placeholder:text-steel/40`}
                   placeholder="1234"
                   maxLength={4}
                 />
+                {fieldErrors.postalCode && <span className="text-[10px] text-red-400 mt-0.5 block">{fieldErrors.postalCode}</span>}
               </div>
               <div>
-                <span className="text-[10px] text-steel tracking-wider uppercase mb-1 block">Helység</span>
+                <span className={`text-[10px] tracking-wider uppercase mb-1 block ${fieldErrors.city ? 'text-red-400' : 'text-steel'}`}>Helység {billingActive && <span className="text-red-400">*</span>}</span>
                 <input
                   type="text"
                   value={city}
-                  onChange={e => setCity(e.target.value)}
-                  className="w-full px-0 py-1.5 bg-transparent border-b border-teal/8 text-sm text-cream focus:outline-none focus:border-teal/25 placeholder:text-steel/40 transition-colors"
+                  onChange={e => { setCity(e.target.value); setFieldErrors(prev => { const { city: _, ...rest } = prev; return rest; }); }}
+                  className={`w-full px-0 py-1.5 bg-transparent border-b text-sm text-cream focus:outline-none transition-colors ${fieldErrors.city ? 'border-red-400/60 focus:border-red-400' : 'border-teal/8 focus:border-teal/25'} placeholder:text-steel/40`}
                   placeholder="Budapest"
                 />
+                {fieldErrors.city && <span className="text-[10px] text-red-400 mt-0.5 block">{fieldErrors.city}</span>}
               </div>
             </div>
             <div>
-              <span className="text-[10px] text-steel tracking-wider uppercase mb-1 block">Utca és házszám</span>
+              <span className={`text-[10px] tracking-wider uppercase mb-1 block ${fieldErrors.street ? 'text-red-400' : 'text-steel'}`}>Utca és házszám {billingActive && <span className="text-red-400">*</span>}</span>
               <input
                 type="text"
                 value={street}
-                onChange={e => setStreet(e.target.value)}
-                className="w-full px-0 py-1.5 bg-transparent border-b border-teal/8 text-sm text-cream focus:outline-none focus:border-teal/25 placeholder:text-steel/40 transition-colors"
+                onChange={e => { setStreet(e.target.value); setFieldErrors(prev => { const { street: _, ...rest } = prev; return rest; }); }}
+                className={`w-full px-0 py-1.5 bg-transparent border-b text-sm text-cream focus:outline-none transition-colors ${fieldErrors.street ? 'border-red-400/60 focus:border-red-400' : 'border-teal/8 focus:border-teal/25'} placeholder:text-steel/40`}
                 placeholder="Fő utca 123"
               />
+              {fieldErrors.street && <span className="text-[10px] text-red-400 mt-0.5 block">{fieldErrors.street}</span>}
             </div>
             <div>
               <span className="text-[10px] text-steel tracking-wider uppercase mb-1 block">Emelet, ajtó (opcionális)</span>

@@ -7,7 +7,7 @@ export default defineConfig({
     include: ['electron/**/*.test.ts'],
     coverage: {
       provider: 'v8',
-      include: ['electron/tax-service.ts'],
+      include: ['electron/tax-service.ts', 'electron/tax-engine.ts'],
       reporter: ['text', 'text-summary'],
     },
   },

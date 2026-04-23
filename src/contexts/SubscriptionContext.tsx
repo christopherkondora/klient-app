@@ -6,10 +6,12 @@ interface SubscriptionContextType {
   loading: boolean;
   isActive: boolean;
   daysRemaining: number | null;
+  hasAdsModule: boolean;
+  adsStatus: 'none' | 'active' | 'cancelled' | 'expired' | 'past_due';
   refresh: () => Promise<void>;
-  openCheckout: (plan: 'monthly' | 'yearly' | 'lifetime') => Promise<string>;
-  cancelSubscription: () => Promise<void>;
-  reactivateSubscription: () => Promise<void>;
+  openCheckout: (plan: 'monthly' | 'yearly' | 'lifetime', module?: 'klient' | 'ads') => Promise<string>;
+  cancelSubscription: (module?: 'klient' | 'ads') => Promise<void>;
+  reactivateSubscription: (module?: 'klient' | 'ads') => Promise<void>;
   celebratingPayment: boolean;
   setCelebratingPayment: (v: boolean) => void;
 }
@@ -19,6 +21,8 @@ const SubscriptionContext = createContext<SubscriptionContextType>({
   loading: true,
   isActive: false,
   daysRemaining: null,
+  hasAdsModule: false,
+  adsStatus: 'none',
   refresh: async () => {},
   openCheckout: async () => { return ''; },
   cancelSubscription: async () => {},
@@ -114,23 +118,35 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
     return Math.max(0, Math.ceil(diff / (1000 * 60 * 60 * 24)));
   })();
 
-  const openCheckout = async (plan: 'monthly' | 'yearly' | 'lifetime'): Promise<string> => {
-    const result = await window.electronAPI.openCheckout({ plan });
+  const openCheckout = async (plan: 'monthly' | 'yearly' | 'lifetime', module?: 'klient' | 'ads'): Promise<string> => {
+    const result = await window.electronAPI.openCheckout({ plan, module });
     return result.url;
   };
 
-  const cancelSubscription = async () => {
-    await window.electronAPI.cancelSubscription();
+  const cancelSubscription = async (module?: 'klient' | 'ads') => {
+    await window.electronAPI.cancelSubscription(module);
     await refresh();
   };
 
-  const reactivateSubscription = async () => {
-    await window.electronAPI.reactivateSubscription();
+  const reactivateSubscription = async (module?: 'klient' | 'ads') => {
+    await window.electronAPI.reactivateSubscription(module);
     await refresh();
   };
+
+  const hasAdsModule = (() => {
+    if (!subscription) return false;
+    const s = subscription.ads_status;
+    if (s === 'active') return true;
+    if (s === 'cancelled' && subscription.ads_current_period_end) {
+      return new Date(subscription.ads_current_period_end) > new Date();
+    }
+    return false;
+  })();
+
+  const adsStatus = subscription?.ads_status || 'none';
 
   return (
-    <SubscriptionContext.Provider value={{ subscription, loading, isActive, daysRemaining, refresh, openCheckout, cancelSubscription, reactivateSubscription, celebratingPayment, setCelebratingPayment }}>
+    <SubscriptionContext.Provider value={{ subscription, loading, isActive, daysRemaining, hasAdsModule, adsStatus, refresh, openCheckout, cancelSubscription, reactivateSubscription, celebratingPayment, setCelebratingPayment }}>
       {children}
     </SubscriptionContext.Provider>
   );

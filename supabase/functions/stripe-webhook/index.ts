@@ -171,6 +171,8 @@ async function createBillingoInvoice(params: {
       monthly: 'Klient Havi előfizetés',
       yearly: 'Klient Éves előfizetés',
       lifetime: 'Klient Lifetime licenc',
+      ads_monthly: 'Klient Ads Havi előfizetés',
+      ads_yearly: 'Klient Ads Éves előfizetés',
     };
 
     // Create the invoice
@@ -251,6 +253,11 @@ const PLAN_AMOUNTS: Record<string, number> = {
   lifetime: 119900,
 };
 
+const ADS_PLAN_AMOUNTS: Record<string, number> = {
+  monthly: 4990,
+  yearly: 49900,
+};
+
 // ─── Main handler ───
 Deno.serve(async (req) => {
   if (req.method !== 'POST') {
@@ -326,6 +333,60 @@ Deno.serve(async (req) => {
             plan,
             mode,
           });
+          break;
+        }
+
+        // ── Ads module subscription ──
+        const isAdsModule = metadata.module === 'ads';
+        if (isAdsModule) {
+          const stripeSubId = obj.subscription as string || null;
+          const adsPayload = {
+            ads_status: 'active',
+            ads_plan: plan,
+            ads_stripe_subscription_id: stripeSubId,
+            ads_current_period_start: new Date().toISOString(),
+            ads_current_period_end: plan === 'yearly'
+              ? new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString()
+              : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+            stripe_customer_id: stripeCustomerId,
+          };
+          const { data: existing } = await supabase.from('subscriptions')
+            .select('id').eq('user_id', userId).maybeSingle();
+          if (existing) {
+            const { error: updErr } = await supabase.from('subscriptions')
+              .update(adsPayload).eq('user_id', userId);
+            if (updErr) {
+              console.error('[Webhook] CRITICAL: Failed to activate Ads subscription:', {
+                user_id: userId, session_id: obj.id, error: updErr,
+              });
+              throw new Error(`Failed to update Ads subscription: ${updErr.message}`);
+            }
+            console.log('[Webhook] Ads subscription activated:', { user_id: userId, plan });
+          } else {
+            const { error: insErr } = await supabase.from('subscriptions')
+              .insert({ user_id: userId, ...adsPayload });
+            if (insErr) {
+              console.error('[Webhook] CRITICAL: Failed to create Ads subscription:', {
+                user_id: userId, session_id: obj.id, error: insErr,
+              });
+              throw new Error(`Failed to insert Ads subscription: ${insErr.message}`);
+            }
+            console.log('[Webhook] Ads subscription created:', { user_id: userId, plan });
+          }
+
+          // Create Billingo invoice for Ads module
+          const adsBillingoResult = await createBillingoInvoice({
+            customerEmail,
+            plan: `ads_${plan}`,
+            amountHuf: ADS_PLAN_AMOUNTS[plan] || 0,
+            userId,
+          });
+          if (adsBillingoResult && userId) {
+            await supabase.from('subscriptions').update({
+              billingo_invoice_id: adsBillingoResult.invoiceId.toString(),
+              billingo_partner_id: adsBillingoResult.partnerId,
+            }).eq('user_id', userId);
+          }
           break;
         }
 
@@ -567,6 +628,26 @@ Deno.serve(async (req) => {
           ? new Date((obj.current_period_end as number) * 1000).toISOString()
           : null;
 
+        // Route to Ads module columns if metadata says so
+        const isAdsSub = metadata.module === 'ads';
+        if (isAdsSub) {
+          const { error: adsUpdateErr } = await supabase.from('subscriptions').update({
+            ads_status: appStatus,
+            ads_plan: plan,
+            ads_current_period_start: periodStart,
+            ads_current_period_end: periodEnd,
+            ads_stripe_subscription_id: stripeSubId,
+            stripe_customer_id: stripeCustomerId,
+          }).eq('user_id', userId);
+
+          if (adsUpdateErr) {
+            console.error('[Webhook] Ads subscription sync failed:', { user_id: userId, error: adsUpdateErr });
+          } else {
+            console.log('[Webhook] Ads subscription synced:', { user_id: userId, status: appStatus, plan });
+          }
+          break;
+        }
+
         const { error: updateErr } = await supabase.from('subscriptions').update({
           status: appStatus,
           plan,
@@ -605,7 +686,22 @@ Deno.serve(async (req) => {
 
         // Guard: never expire a lifetime plan due to a subscription deletion event
         const { data: currentSubDel } = await supabase.from('subscriptions')
-          .select('plan').eq('user_id', userId).maybeSingle();
+          .select('plan, ads_stripe_subscription_id').eq('user_id', userId).maybeSingle();
+
+        // Check if this is an Ads module subscription deletion
+        const isAdsSubDel = metadata.module === 'ads' || currentSubDel?.ads_stripe_subscription_id === (obj.id as string);
+        if (isAdsSubDel) {
+          const { error: adsDelErr } = await supabase.from('subscriptions').update({
+            ads_status: 'expired',
+          }).eq('user_id', userId);
+          if (adsDelErr) {
+            console.error('[Webhook] Ads subscription expiration failed:', { user_id: userId, error: adsDelErr });
+          } else {
+            console.log('[Webhook] Ads subscription expired:', { user_id: userId });
+          }
+          break;
+        }
+
         if (currentSubDel?.plan === 'lifetime') {
           console.log('[Webhook] Skipping subscription.deleted — user has lifetime plan:', {
             user_id: userId,
@@ -644,22 +740,46 @@ Deno.serve(async (req) => {
           break;
         }
 
-        // Look up user by stripe_subscription_id
-        const { data: sub, error: lookupErr } = await supabase
+        // Look up user by stripe_subscription_id (main or Ads)
+        let sub = null;
+        let lookupErr = null;
+        let isAdsPaymentFailed = false;
+
+        // Try main subscription first
+        const { data: mainSub, error: mainLookupErr } = await supabase
           .from('subscriptions')
           .select('user_id')
           .eq('stripe_subscription_id', subscriptionId)
-          .single();
+          .maybeSingle();
 
-        if (lookupErr) {
+        if (mainSub) {
+          sub = mainSub;
+        } else {
+          // Try Ads subscription
+          const { data: adsSub, error: adsLookupErr } = await supabase
+            .from('subscriptions')
+            .select('user_id')
+            .eq('ads_stripe_subscription_id', subscriptionId)
+            .maybeSingle();
+          if (adsSub) {
+            sub = adsSub;
+            isAdsPaymentFailed = true;
+          } else {
+            lookupErr = mainLookupErr || adsLookupErr;
+          }
+        }
+
+        if (lookupErr || !sub) {
           console.error('[Webhook] Failed to lookup subscription:', { subscription_id: subscriptionId, error: lookupErr });
           break;
         }
 
         if (sub?.user_id) {
-          const { error: updateErr } = await supabase.from('subscriptions').update({
-            status: 'past_due',
-          }).eq('user_id', sub.user_id);
+          const updatePayload = isAdsPaymentFailed
+            ? { ads_status: 'past_due' }
+            : { status: 'past_due' };
+          const { error: updateErr } = await supabase.from('subscriptions')
+            .update(updatePayload).eq('user_id', sub.user_id);
 
           if (updateErr) {
             console.error('[Webhook] Failed to mark subscription past_due:', { user_id: sub.user_id, error: updateErr });

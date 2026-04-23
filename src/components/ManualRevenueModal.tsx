@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { X } from 'lucide-react';
+import { fmtNum, parseNum } from '../utils/numberFormat';
 
 interface ManualRevenueModalProps {
   clients: Client[];
@@ -93,9 +94,10 @@ export default function ManualRevenueModal({ clients, projects, onClose, onSaved
             <div>
               <label className="block text-xs font-medium text-steel mb-1">Összeg *</label>
               <input
-                type="number"
-                value={fields.amount}
-                onChange={e => setFields(f => ({ ...f, amount: e.target.value }))}
+                type="text"
+                inputMode="numeric"
+                value={fmtNum(fields.amount)}
+                onChange={e => setFields(f => ({ ...f, amount: parseNum(e.target.value) }))}
                 className={inputClass}
                 placeholder="0"
                 required

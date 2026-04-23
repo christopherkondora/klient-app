@@ -4,10 +4,12 @@ import {
   Folder, FileText, Image, FileSpreadsheet, FileCode, Film, Music,
   Search, FolderPlus, ChevronRight, LayoutGrid, List, ArrowLeft,
   Trash2, Pencil, ExternalLink, FolderOpen, X, File, Plus,
-  Upload, FolderUp,
+  Upload, FolderUp, Copy, Scissors, ClipboardPaste, CopyPlus,
 } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
 import ConfirmDialog from '../components/ConfirmDialog';
+import PageHeader from '../components/PageHeader';
+import { useThemedColor, generateProjectColor } from '../utils/colors';
 
 const IMAGE_EXTS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg'];
 const PDF_EXT = '.pdf';
@@ -60,6 +62,8 @@ export default function Files() {
   const [dragging, setDragging] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bgContextMenu, setBgContextMenu] = useState<{ x: number; y: number } | null>(null);
+  // Clipboard for copy/cut-paste
+  const [clipboard, setClipboard] = useState<{ paths: string[]; mode: 'copy' | 'cut' } | null>(null);
   // Rubber-band selection
   const [rubberBand, setRubberBand] = useState<{ startX: number; startY: number; curX: number; curY: number } | null>(null);
   const rubberBandBaseSelection = useRef<Set<string>>(new Set());
@@ -68,6 +72,35 @@ export default function Files() {
   const addMenuRef = useRef<HTMLDivElement>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
   const newFolderInputRef = useRef<HTMLInputElement>(null);
+
+  // Client colors for folder tinting
+  const tc = useThemedColor();
+  const [clientColorMap, setClientColorMap] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    window.electronAPI.getClients().then(clients => {
+      const map: Record<string, string> = {};
+      clients.forEach(c => { if (c.color) map[c.name] = c.color; });
+      setClientColorMap(map);
+    }).catch(() => {});
+  }, []);
+
+  /** Get folder color: root folders → client color, subfolders → variant */
+  function getFolderColor(entry: FileEntry): string | undefined {
+    if (!entry.isDirectory) return undefined;
+    // Root level: folder name IS the client name
+    if (!currentPath) {
+      return clientColorMap[entry.name];
+    }
+    // Inside a client folder: first path segment is client name
+    const rootName = currentPath.split('/')[0];
+    const baseColor = clientColorMap[rootName];
+    if (!baseColor) return undefined;
+    // Determine subfolder index for variant
+    const dirs = entries.filter(e => e.isDirectory);
+    const idx = dirs.indexOf(entry);
+    return generateProjectColor(baseColor, idx + 1);
+  }
 
   useEffect(() => {
     loadEntries();
@@ -105,14 +138,31 @@ export default function Files() {
     ? entries.filter(e => e.name.toLowerCase().includes(search.toLowerCase()))
     : entries;
 
-  // Ctrl+A to select all
+  // Ctrl+A to select all, Ctrl+C/X/V, Delete
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
+      const tag = (e.target as HTMLElement).tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+
       if (e.ctrlKey && e.key === 'a' && filtered.length > 0) {
-        const tag = (e.target as HTMLElement).tagName;
-        if (tag === 'INPUT' || tag === 'TEXTAREA') return;
         e.preventDefault();
         setSelected(new Set(filtered.map(f => f.path)));
+      }
+      if (e.ctrlKey && e.key === 'c' && selected.size > 0) {
+        e.preventDefault();
+        handleCopy();
+      }
+      if (e.ctrlKey && e.key === 'x' && selected.size > 0) {
+        e.preventDefault();
+        handleCut();
+      }
+      if (e.ctrlKey && e.key === 'v' && clipboard) {
+        e.preventDefault();
+        handlePaste();
+      }
+      if (e.key === 'Delete' && selected.size > 0) {
+        e.preventDefault();
+        handleBulkDelete();
       }
       if (e.key === 'Escape') {
         setSelected(new Set());
@@ -120,7 +170,7 @@ export default function Files() {
     }
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [filtered]);
+  }, [filtered, selected, clipboard]);
 
   // Clear selection on path change
   useEffect(() => {
@@ -210,14 +260,63 @@ export default function Files() {
     loadEntries();
   }
 
+  // Copy selected files to internal clipboard + OS clipboard
+  function handleCopy(paths?: string[]) {
+    const targets = paths || Array.from(selected);
+    if (targets.length === 0) return;
+    setClipboard({ paths: targets, mode: 'copy' });
+    // Also copy to OS clipboard for pasting outside the app
+    window.electronAPI.filesCopyToClipboard(targets);
+  }
+
+  // Cut selected files to internal clipboard
+  function handleCut(paths?: string[]) {
+    const targets = paths || Array.from(selected);
+    if (targets.length === 0) return;
+    setClipboard({ paths: targets, mode: 'cut' });
+  }
+
+  // Paste from clipboard into current directory
+  async function handlePaste() {
+    if (!clipboard || clipboard.paths.length === 0) return;
+    const target = currentPath || '.';
+    if (clipboard.mode === 'copy') {
+      // Get absolute paths and copy them
+      const absPaths = await Promise.all(
+        clipboard.paths.map(p => window.electronAPI.filesGetAbsolutePath(p))
+      );
+      await window.electronAPI.filesCopyFiles(absPaths, target);
+    } else {
+      await window.electronAPI.filesMoveFiles(clipboard.paths, target);
+      setClipboard(null);
+    }
+    loadEntries();
+  }
+
+  // Duplicate a single entry
+  async function handleDuplicate(entryPath: string) {
+    await window.electronAPI.filesDuplicate(entryPath);
+    loadEntries();
+  }
+
+  // Drag-out handler: native file drag from app to OS
+  function handleFileDragStart(e: React.DragEvent, entry: FileEntry) {
+    e.preventDefault();
+    const paths = selected.size > 0 && selected.has(entry.path)
+      ? Array.from(selected)
+      : [entry.path];
+    window.electronAPI.filesStartDrag(paths);
+  }
+
   // Rubber-band selection
   function handleRubberBandStart(e: React.MouseEvent) {
     // Only start on left-click
     if (e.button !== 0) return;
-    // Don't start on buttons, inputs, checkboxes
+    // Don't start on buttons, inputs, checkboxes, or file entries (let drag handle those)
     if ((e.target as HTMLElement).closest('button')) return;
     if ((e.target as HTMLElement).closest('input')) return;
     if ((e.target as HTMLElement).closest('[data-checkbox]')) return;
+    if ((e.target as HTMLElement).closest('[data-file-entry]')) return;
     if (!e.ctrlKey) setSelected(new Set());
     rubberBandBaseSelection.current = e.ctrlKey ? new Set(selected) : new Set();
     setRubberBand({ startX: e.clientX, startY: e.clientY, curX: e.clientX, curY: e.clientY });
@@ -414,13 +513,11 @@ export default function Files() {
         </div>
       )}
 
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="font-pixel text-xl text-cream">Fájlok</h1>
-          <p className="text-steel text-sm mt-2">{entries.length} elem</p>
-        </div>
-        <div className="relative" ref={addMenuRef}>
+      <PageHeader
+        title="Fájlok"
+        subtitle={`${entries.length} elem`}
+        actions={(
+          <div className="relative" ref={addMenuRef}>
           <button
             onClick={(e) => { e.stopPropagation(); setShowAddMenu(prev => !prev); }}
             className="flex items-center gap-2 px-4 py-2 bg-teal text-cream rounded-lg text-sm font-medium hover:bg-teal/80 transition-colors"
@@ -451,8 +548,9 @@ export default function Files() {
               </button>
             </div>
           )}
-        </div>
-      </div>
+          </div>
+        )}
+      />
 
       {/* Breadcrumbs + controls */}
       <div className="flex items-center gap-3">
@@ -590,16 +688,22 @@ export default function Files() {
             const Icon = getFileIcon(entry.name, entry.isDirectory);
             const isRenaming = renameTarget?.path === entry.path;
             const isSelected = selected.has(entry.path);
+            const folderColor = getFolderColor(entry);
+            const themedColor = folderColor ? tc(folderColor) : undefined;
+            const isCut = clipboard?.mode === 'cut' && clipboard.paths.includes(entry.path);
             return (
               <div
                 key={entry.path}
                 data-file-entry={entry.path}
+                draggable
+                onDragStart={(e) => handleFileDragStart(e, entry)}
                 onClick={(e) => !isRenaming && handleEntryClick(entry, e)}
                 onDoubleClick={() => !isRenaming && handleEntryDoubleClick(entry)}
                 onContextMenu={e => handleContextMenu(e, entry)}
-                className={`group relative bg-surface-800/50 rounded-lg border p-4 cursor-pointer transition-colors flex flex-col items-center text-center gap-2 ${
-                  isSelected ? 'border-teal/50 bg-teal/10' : 'border-teal/10 hover:border-teal/25'
-                }`}
+                className={`group relative rounded-lg border p-4 cursor-pointer transition-colors flex flex-col items-center text-center gap-2 ${
+                  isSelected ? 'border-teal/50 bg-teal/10' : themedColor ? 'hover:brightness-125' : 'bg-surface-800/50 border-teal/10 hover:border-teal/25'
+                } ${isCut ? 'opacity-40' : ''}`}
+                style={themedColor && !isSelected ? { backgroundColor: `${themedColor}12`, borderColor: `${themedColor}30` } : undefined}
               >
                 {/* Checkbox */}
                 <div
@@ -618,7 +722,8 @@ export default function Files() {
                 <Icon
                   width={36}
                   height={36}
-                  className={entry.isDirectory ? 'text-teal' : 'text-steel'}
+                  className={entry.isDirectory && !themedColor ? 'text-teal' : !entry.isDirectory ? 'text-steel' : ''}
+                  style={themedColor ? { color: themedColor } : undefined}
                 />
                 {isRenaming ? (
                   <input
@@ -667,16 +772,21 @@ export default function Files() {
             const Icon = getFileIcon(entry.name, entry.isDirectory);
             const isRenaming = renameTarget?.path === entry.path;
             const isSelected = selected.has(entry.path);
+            const folderColor = getFolderColor(entry);
+            const themedColor = folderColor ? tc(folderColor) : undefined;
+            const isCut = clipboard?.mode === 'cut' && clipboard.paths.includes(entry.path);
             return (
               <div
                 key={entry.path}
                 data-file-entry={entry.path}
+                draggable
+                onDragStart={(e) => handleFileDragStart(e, entry)}
                 onClick={(e) => !isRenaming && handleEntryClick(entry, e)}
                 onDoubleClick={() => !isRenaming && handleEntryDoubleClick(entry)}
                 onContextMenu={e => handleContextMenu(e, entry)}
                 className={`flex items-center gap-3 px-4 py-3 cursor-pointer transition-colors group ${
                   isSelected ? 'bg-teal/10' : 'hover:bg-teal/5'
-                }`}
+                } ${isCut ? 'opacity-40' : ''}`}
               >
                 {/* Checkbox */}
                 <div
@@ -695,7 +805,8 @@ export default function Files() {
                 <Icon
                   width={20}
                   height={20}
-                  className={entry.isDirectory ? 'text-teal shrink-0' : 'text-steel shrink-0'}
+                  className={`shrink-0 ${entry.isDirectory && !themedColor ? 'text-teal' : !entry.isDirectory ? 'text-steel' : ''}`}
+                  style={themedColor ? { color: themedColor } : undefined}
                 />
                 {isRenaming ? (
                   <input
@@ -730,7 +841,7 @@ export default function Files() {
       {/* Context Menu */}
       {contextMenu && (
         <div
-          className="fixed z-50 bg-surface-800 border border-teal/15 rounded-lg shadow-2xl py-1 min-w-[180px]"
+          className="fixed z-50 bg-surface-800 border border-teal/15 rounded-lg shadow-2xl py-1 min-w-[200px]"
           style={{ left: contextMenu.x, top: contextMenu.y }}
           onClick={e => e.stopPropagation()}
         >
@@ -755,6 +866,49 @@ export default function Files() {
           >
             <Pencil width={14} height={14} className="text-steel" /> Átnevezés
           </button>
+          <button
+            onClick={() => {
+              handleDuplicate(contextMenu.entry.path);
+              setContextMenu(null);
+            }}
+            className="w-full flex items-center gap-2 px-3 py-2 text-sm text-cream hover:bg-teal/10 transition-colors"
+          >
+            <CopyPlus width={14} height={14} className="text-steel" /> Duplikálás
+          </button>
+          <div className="border-t border-teal/10 my-1" />
+          <button
+            onClick={() => {
+              handleCopy([contextMenu.entry.path]);
+              setContextMenu(null);
+            }}
+            className="w-full flex items-center gap-2 px-3 py-2 text-sm text-cream hover:bg-teal/10 transition-colors"
+          >
+            <Copy width={14} height={14} className="text-steel" /> Másolás
+            <span className="ml-auto text-[10px] text-steel/50">Ctrl+C</span>
+          </button>
+          <button
+            onClick={() => {
+              handleCut([contextMenu.entry.path]);
+              setContextMenu(null);
+            }}
+            className="w-full flex items-center gap-2 px-3 py-2 text-sm text-cream hover:bg-teal/10 transition-colors"
+          >
+            <Scissors width={14} height={14} className="text-steel" /> Kivágás
+            <span className="ml-auto text-[10px] text-steel/50">Ctrl+X</span>
+          </button>
+          {clipboard && clipboard.paths.length > 0 && (
+            <button
+              onClick={() => {
+                handlePaste();
+                setContextMenu(null);
+              }}
+              className="w-full flex items-center gap-2 px-3 py-2 text-sm text-cream hover:bg-teal/10 transition-colors"
+            >
+              <ClipboardPaste width={14} height={14} className="text-steel" /> Beillesztés
+              <span className="ml-auto text-[10px] text-steel/50">Ctrl+V</span>
+            </button>
+          )}
+          <div className="border-t border-teal/10 my-1" />
           <button
             onClick={() => {
               window.electronAPI.filesOpenInExplorer(contextMenu.entry.path);
@@ -784,6 +938,18 @@ export default function Files() {
           style={{ left: bgContextMenu.x, top: bgContextMenu.y }}
           onClick={e => e.stopPropagation()}
         >
+          {clipboard && clipboard.paths.length > 0 && (
+            <>
+              <button
+                onClick={() => { setBgContextMenu(null); handlePaste(); }}
+                className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-cream hover:bg-teal/10 transition-colors"
+              >
+                <ClipboardPaste width={14} height={14} className="text-steel" /> Beillesztés ({clipboard.paths.length} elem)
+                <span className="ml-auto text-[10px] text-steel/50">Ctrl+V</span>
+              </button>
+              <div className="border-t border-teal/10 my-1" />
+            </>
+          )}
           <button
             onClick={() => { setBgContextMenu(null); setShowNewFolder(true); setNewFolderName(''); }}
             className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-cream hover:bg-teal/10 transition-colors"

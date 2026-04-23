@@ -8,22 +8,33 @@ const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!;
 const STRIPE_ENV = Deno.env.get('STRIPE_ENV') || 'test';
 const IS_PRODUCTION = STRIPE_ENV === 'production';
 
-// Test mode price IDs (default)
+// ── Klient app price IDs ──
 const TEST_PRICE_IDS: Record<string, string> = {
   monthly: 'price_1TECUdArzcPFCRN0k4CyvdG1',
   yearly: 'price_1TECVpArzcPFCRN0L7oY3FPc',
   lifetime: 'price_1TECWhArzcPFCRN0GWGwf92H',
 };
 
-// Production price IDs (from environment variables)
 const PROD_PRICE_IDS: Record<string, string> = {
   monthly: Deno.env.get('STRIPE_PRICE_MONTHLY_PROD') || '',
   yearly: Deno.env.get('STRIPE_PRICE_YEARLY_PROD') || '',
   lifetime: Deno.env.get('STRIPE_PRICE_LIFETIME_PROD') || '',
 };
 
+// ── Klient Ads module price IDs ──
+const TEST_ADS_PRICE_IDS: Record<string, string> = {
+  monthly: 'price_1TLrcWArzcPFCRN0bftdwT6N',
+  yearly: 'price_1TLrdAArzcPFCRN0IxAj3Pid',
+};
+
+const PROD_ADS_PRICE_IDS: Record<string, string> = {
+  monthly: Deno.env.get('STRIPE_PRICE_ADS_MONTHLY_PROD') || '',
+  yearly: Deno.env.get('STRIPE_PRICE_ADS_YEARLY_PROD') || '',
+};
+
 // Select price IDs based on environment
 const PRICE_IDS = IS_PRODUCTION ? PROD_PRICE_IDS : TEST_PRICE_IDS;
+const ADS_PRICE_IDS = IS_PRODUCTION ? PROD_ADS_PRICE_IDS : TEST_ADS_PRICE_IDS;
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -57,8 +68,9 @@ Deno.serve(async (req) => {
       });
     }
 
-    const { plan } = await req.json() as { plan: string };
-    const priceId = PRICE_IDS[plan];
+    const { plan, module } = await req.json() as { plan: string; module?: 'klient' | 'ads' };
+    const isAdsModule = module === 'ads';
+    const priceId = isAdsModule ? ADS_PRICE_IDS[plan] : PRICE_IDS[plan];
 
     // Validate plan and price ID
     if (!priceId) {
@@ -78,7 +90,7 @@ Deno.serve(async (req) => {
       });
     }
 
-    const isLifetime = plan === 'lifetime';
+    const isLifetime = plan === 'lifetime' && !isAdsModule;
 
     // Environment-aware URLs
     const BASE_URL = Deno.env.get('APP_URL') || 'https://klient.work';
@@ -104,9 +116,15 @@ Deno.serve(async (req) => {
     params.append('client_reference_id', user.id);
     params.append('metadata[user_id]', user.id);
     params.append('metadata[plan]', plan);
+    if (isAdsModule) {
+      params.append('metadata[module]', 'ads');
+    }
     if (!isLifetime) {
       params.append('subscription_data[metadata][user_id]', user.id);
       params.append('subscription_data[metadata][plan]', plan);
+      if (isAdsModule) {
+        params.append('subscription_data[metadata][module]', 'ads');
+      }
     } else {
       // For lifetime (one-time payment), also add metadata to the payment_intent
       // This ensures payment_intent.succeeded events can activate the subscription

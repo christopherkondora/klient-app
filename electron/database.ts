@@ -1,6 +1,7 @@
 import initSqlJs, { Database as SqlJsDatabase } from 'sql.js';
 import path from 'path';
 import fs from 'fs';
+import { HIPA_RATES } from './hipa-data';
 import { app } from 'electron';
 
 let db: SqlJsDatabase | null = null;
@@ -179,7 +180,7 @@ function createTables() {
       currency TEXT DEFAULT 'HUF',
       issue_date TEXT,
       due_date TEXT,
-      status TEXT DEFAULT 'pending' CHECK(status IN ('pending', 'paid', 'overdue')),
+      status TEXT DEFAULT 'pending' CHECK(status IN ('pending', 'paid', 'overdue', 'cancelled')),
       notes TEXT,
       created_at TEXT DEFAULT (datetime('now')),
       FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
@@ -305,6 +306,285 @@ function createTables() {
       UNIQUE (user_id, year),
       FOREIGN KEY (business_type) REFERENCES tax_business_types(id)
     );
+
+    CREATE TABLE IF NOT EXISTS tax_parameters (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      year INTEGER NOT NULL UNIQUE,
+      minimalber_havi REAL NOT NULL,
+      garantalt_berminimum_havi REAL NOT NULL,
+      szja_kulcs REAL NOT NULL,
+      tb_kulcs REAL NOT NULL,
+      szocho_kulcs REAL NOT NULL,
+      tao_kulcs REAL NOT NULL,
+      kiva_kulcs REAL NOT NULL,
+      aam_limit REAL NOT NULL,
+      atalany_altalanos REAL NOT NULL,
+      atalany_specialis REAL NOT NULL,
+      atalany_kisker REAL NOT NULL,
+      atalany_limit_szorzo REAL NOT NULL DEFAULT 10,
+      atalany_adomentes_szorzo REAL NOT NULL DEFAULT 0.5,
+      szocho_plafon_szorzo REAL NOT NULL DEFAULT 24,
+      hipa_max_kulcs REAL NOT NULL DEFAULT 0.02,
+      afa_standard REAL NOT NULL DEFAULT 0.27,
+      afa_reduced REAL NOT NULL DEFAULT 0.18,
+      afa_super_reduced REAL NOT NULL DEFAULT 0.05,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS business_profile (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id TEXT NOT NULL UNIQUE,
+      vallalkozas_tipus TEXT NOT NULL CHECK(vallalkozas_tipus IN ('EV', 'Kft', 'Bt', 'Kkt')),
+      adozas_forma TEXT NOT NULL CHECK(adozas_forma IN ('atalany', 'vszja', 'TAO', 'KIVA')),
+      foglalkozas TEXT NOT NULL DEFAULT 'fofoglalkozasu' CHECK(foglalkozas IN ('fofoglalkozasu', 'mellekfoglalkozasu')),
+      koltseghanyad REAL NOT NULL DEFAULT 0.45,
+      szakkepzettseg INTEGER NOT NULL DEFAULT 0,
+      aam_valasztott INTEGER NOT NULL DEFAULT 0,
+      afa_bevallas TEXT DEFAULT 'negyedeves' CHECK(afa_bevallas IN ('havi', 'negyedeves', 'eves')),
+      hipa_kulcs REAL DEFAULT 0,
+      hipa_telepules TEXT DEFAULT '',
+      hipa_egyszeru INTEGER NOT NULL DEFAULT 0,
+      adoev INTEGER NOT NULL DEFAULT 2026,
+      beallitva INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS hipa_rates (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      megye TEXT NOT NULL,
+      telepules TEXT NOT NULL,
+      kulcs REAL NOT NULL,
+      UNIQUE(megye, telepules)
+    );
+
+    -- Google Ads AI module tables
+    CREATE TABLE IF NOT EXISTS ads_accounts (
+      id TEXT PRIMARY KEY,
+      customer_id TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL,
+      currency TEXT DEFAULT 'HUF',
+      timezone TEXT DEFAULT 'Europe/Budapest',
+      refresh_token_encrypted BLOB,
+      is_mcc INTEGER DEFAULT 0,
+      parent_mcc_id TEXT,
+      status TEXT DEFAULT 'active',
+      last_sync_at TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS ads_campaigns (
+      id TEXT PRIMARY KEY,
+      account_id TEXT NOT NULL,
+      campaign_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      type TEXT,
+      status TEXT,
+      budget_amount_micros INTEGER,
+      budget_type TEXT,
+      bidding_strategy TEXT,
+      start_date TEXT,
+      end_date TEXT,
+      updated_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(account_id, campaign_id),
+      FOREIGN KEY (account_id) REFERENCES ads_accounts(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS ads_ad_groups (
+      id TEXT PRIMARY KEY,
+      account_id TEXT NOT NULL,
+      campaign_id TEXT NOT NULL,
+      ad_group_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      status TEXT,
+      cpc_bid_micros INTEGER,
+      updated_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(account_id, ad_group_id),
+      FOREIGN KEY (account_id) REFERENCES ads_accounts(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS ads_keywords (
+      id TEXT PRIMARY KEY,
+      account_id TEXT NOT NULL,
+      ad_group_id TEXT NOT NULL,
+      criterion_id TEXT NOT NULL,
+      keyword_text TEXT NOT NULL,
+      match_type TEXT,
+      status TEXT,
+      quality_score INTEGER,
+      expected_ctr TEXT,
+      ad_relevance TEXT,
+      landing_page_experience TEXT,
+      updated_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(account_id, criterion_id),
+      FOREIGN KEY (account_id) REFERENCES ads_accounts(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS ads_daily_metrics (
+      id TEXT PRIMARY KEY,
+      account_id TEXT NOT NULL,
+      entity_type TEXT NOT NULL,
+      entity_id TEXT NOT NULL,
+      date TEXT NOT NULL,
+      impressions INTEGER DEFAULT 0,
+      clicks INTEGER DEFAULT 0,
+      cost_micros INTEGER DEFAULT 0,
+      conversions REAL DEFAULT 0,
+      conversions_value REAL DEFAULT 0,
+      ctr REAL DEFAULT 0,
+      avg_cpc_micros INTEGER DEFAULT 0,
+      search_impression_share REAL,
+      search_budget_lost_is REAL,
+      search_rank_lost_is REAL,
+      UNIQUE(account_id, entity_type, entity_id, date),
+      FOREIGN KEY (account_id) REFERENCES ads_accounts(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_ads_metrics_date ON ads_daily_metrics(account_id, date);
+    CREATE INDEX IF NOT EXISTS idx_ads_metrics_entity ON ads_daily_metrics(entity_type, entity_id);
+
+    CREATE TABLE IF NOT EXISTS ads_sync_log (
+      id TEXT PRIMARY KEY,
+      account_id TEXT NOT NULL,
+      sync_type TEXT NOT NULL,
+      status TEXT NOT NULL,
+      started_at TEXT DEFAULT (datetime('now')),
+      completed_at TEXT,
+      records_synced INTEGER DEFAULT 0,
+      error_message TEXT,
+      FOREIGN KEY (account_id) REFERENCES ads_accounts(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS ads_ai_analyses (
+      id TEXT PRIMARY KEY,
+      account_id TEXT NOT NULL,
+      analysis_type TEXT NOT NULL,
+      prompt_summary TEXT,
+      response_text TEXT,
+      data_snapshot TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (account_id) REFERENCES ads_accounts(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS ads_knowledge_base (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      content TEXT NOT NULL,
+      category TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS ads_alerts (
+      id TEXT PRIMARY KEY,
+      account_id TEXT NOT NULL,
+      campaign_id TEXT,
+      campaign_name TEXT,
+      severity TEXT NOT NULL,
+      type TEXT NOT NULL,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL,
+      metric TEXT,
+      current_value REAL,
+      previous_value REAL,
+      change_percent REAL,
+      detected_at TEXT DEFAULT (datetime('now')),
+      dismissed INTEGER DEFAULT 0,
+      ai_analysis_id TEXT,
+      FOREIGN KEY (account_id) REFERENCES ads_accounts(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS ads_ad_group_ads (
+      id TEXT PRIMARY KEY,
+      account_id TEXT NOT NULL,
+      ad_group_id TEXT NOT NULL,
+      campaign_id TEXT NOT NULL,
+      ad_id TEXT NOT NULL,
+      ad_type TEXT,
+      headlines TEXT,
+      descriptions TEXT,
+      status TEXT,
+      impressions INTEGER DEFAULT 0,
+      clicks INTEGER DEFAULT 0,
+      ctr REAL DEFAULT 0,
+      cost_micros INTEGER DEFAULT 0,
+      conversions REAL DEFAULT 0,
+      updated_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(account_id, ad_id),
+      FOREIGN KEY (account_id) REFERENCES ads_accounts(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS ads_negative_keywords (
+      id TEXT PRIMARY KEY,
+      account_id TEXT NOT NULL,
+      campaign_id TEXT NOT NULL,
+      keyword_text TEXT NOT NULL,
+      match_type TEXT,
+      UNIQUE(account_id, campaign_id, keyword_text),
+      FOREIGN KEY (account_id) REFERENCES ads_accounts(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS ads_asset_groups (
+      id TEXT PRIMARY KEY,
+      account_id TEXT NOT NULL,
+      campaign_id TEXT NOT NULL,
+      asset_group_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      status TEXT,
+      ad_strength TEXT,
+      impressions INTEGER DEFAULT 0,
+      clicks INTEGER DEFAULT 0,
+      cost_micros INTEGER DEFAULT 0,
+      conversions REAL DEFAULT 0,
+      conversions_value REAL DEFAULT 0,
+      updated_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(account_id, asset_group_id),
+      FOREIGN KEY (account_id) REFERENCES ads_accounts(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS ads_asset_group_assets (
+      id TEXT PRIMARY KEY,
+      account_id TEXT NOT NULL,
+      asset_group_id TEXT NOT NULL,
+      field_type TEXT,
+      performance_label TEXT,
+      asset_text TEXT,
+      asset_name TEXT,
+      status TEXT,
+      updated_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (account_id) REFERENCES ads_accounts(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS ads_shopping_performance (
+      id TEXT PRIMARY KEY,
+      account_id TEXT NOT NULL,
+      campaign_id TEXT NOT NULL,
+      product_title TEXT,
+      product_item_id TEXT,
+      impressions INTEGER DEFAULT 0,
+      clicks INTEGER DEFAULT 0,
+      cost_micros INTEGER DEFAULT 0,
+      conversions REAL DEFAULT 0,
+      conversions_value REAL DEFAULT 0,
+      updated_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(account_id, campaign_id, product_item_id),
+      FOREIGN KEY (account_id) REFERENCES ads_accounts(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS ads_placements (
+      id TEXT PRIMARY KEY,
+      account_id TEXT NOT NULL,
+      campaign_id TEXT NOT NULL,
+      display_name TEXT,
+      target_url TEXT,
+      placement_type TEXT,
+      impressions INTEGER DEFAULT 0,
+      clicks INTEGER DEFAULT 0,
+      cost_micros INTEGER DEFAULT 0,
+      updated_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(account_id, campaign_id, target_url),
+      FOREIGN KEY (account_id) REFERENCES ads_accounts(id)
+    );
   `);
 }
 
@@ -343,6 +623,12 @@ function runMigrations() {
   }
   if (!expColNames.includes('category')) {
     db.run("ALTER TABLE expenses ADD COLUMN category TEXT DEFAULT 'other'");
+  }
+  if (!expColNames.includes('extra_amount')) {
+    db.run("ALTER TABLE expenses ADD COLUMN extra_amount REAL");
+  }
+  if (!expColNames.includes('extra_description')) {
+    db.run("ALTER TABLE expenses ADD COLUMN extra_description TEXT");
   }
 
   // No test user seeding — auth is handled by Supabase
@@ -466,6 +752,9 @@ function runMigrations() {
   if (!userColNames.includes('revenue_goal_yearly')) {
     db.run("ALTER TABLE user_settings ADD COLUMN revenue_goal_yearly REAL DEFAULT 0");
   }
+  if (!userColNames.includes('profit_goal_yearly')) {
+    db.run("ALTER TABLE user_settings ADD COLUMN profit_goal_yearly REAL DEFAULT 0");
+  }
   // Business info for contracts
   if (!userColNames.includes('company_name')) {
     db.run("ALTER TABLE user_settings ADD COLUMN company_name TEXT DEFAULT ''");
@@ -482,6 +771,118 @@ function runMigrations() {
   if (!userColNames.includes('team_mode')) {
     db.run("ALTER TABLE user_settings ADD COLUMN team_mode INTEGER DEFAULT 0");
   }
+  // ── ÁFA kezelés (Fázis 1) ──
+  if (!userColNames.includes('vat_status')) {
+    // 'exempt' = alanyi mentes (AAM), 'standard' = áfakörös
+    db.run("ALTER TABLE user_settings ADD COLUMN vat_status TEXT DEFAULT 'exempt'");
+  }
+  if (!userColNames.includes('vat_rate_default')) {
+    db.run("ALTER TABLE user_settings ADD COLUMN vat_rate_default REAL DEFAULT 27");
+  }
+  if (!userColNames.includes('vat_number')) {
+    db.run("ALTER TABLE user_settings ADD COLUMN vat_number TEXT DEFAULT ''");
+  }
+
+  // Add VAT columns to invoices (amount marad bruttó, visszamenőleges kompatibilitás)
+  const invColsVat = db.exec("PRAGMA table_info(invoices)");
+  const invColNamesVat = invColsVat[0]?.values.map(row => row[1]) || [];
+  const invNeedsBackfill: string[] = [];
+  if (!invColNamesVat.includes('vat_rate')) {
+    db.run("ALTER TABLE invoices ADD COLUMN vat_rate REAL DEFAULT NULL");
+    invNeedsBackfill.push('vat_rate');
+  }
+  if (!invColNamesVat.includes('net_amount')) {
+    db.run("ALTER TABLE invoices ADD COLUMN net_amount REAL DEFAULT NULL");
+    invNeedsBackfill.push('net_amount');
+  }
+  if (!invColNamesVat.includes('vat_amount')) {
+    db.run("ALTER TABLE invoices ADD COLUMN vat_amount REAL DEFAULT NULL");
+    invNeedsBackfill.push('vat_amount');
+  }
+  if (!invColNamesVat.includes('net_amount_huf')) {
+    db.run("ALTER TABLE invoices ADD COLUMN net_amount_huf REAL DEFAULT NULL");
+    invNeedsBackfill.push('net_amount_huf');
+  }
+  if (!invColNamesVat.includes('vat_amount_huf')) {
+    db.run("ALTER TABLE invoices ADD COLUMN vat_amount_huf REAL DEFAULT NULL");
+    invNeedsBackfill.push('vat_amount_huf');
+  }
+  if (!invColNamesVat.includes('amount_huf')) {
+    db.run("ALTER TABLE invoices ADD COLUMN amount_huf REAL DEFAULT NULL");
+    db.run("UPDATE invoices SET amount_huf = amount WHERE currency = 'HUF' AND amount_huf IS NULL");
+  }
+
+  // Add VAT columns to expenses
+  const expColsVat = db.exec("PRAGMA table_info(expenses)");
+  const expColNamesVat = expColsVat[0]?.values.map(row => row[1]) || [];
+  const expNeedsBackfill: string[] = [];
+  if (!expColNamesVat.includes('vat_rate')) {
+    db.run("ALTER TABLE expenses ADD COLUMN vat_rate REAL DEFAULT NULL");
+    expNeedsBackfill.push('vat_rate');
+  }
+  if (!expColNamesVat.includes('net_amount')) {
+    db.run("ALTER TABLE expenses ADD COLUMN net_amount REAL DEFAULT NULL");
+    expNeedsBackfill.push('net_amount');
+  }
+  if (!expColNamesVat.includes('vat_amount')) {
+    db.run("ALTER TABLE expenses ADD COLUMN vat_amount REAL DEFAULT NULL");
+    expNeedsBackfill.push('vat_amount');
+  }
+  if (!expColNamesVat.includes('net_amount_huf')) {
+    db.run("ALTER TABLE expenses ADD COLUMN net_amount_huf REAL DEFAULT NULL");
+    expNeedsBackfill.push('net_amount_huf');
+  }
+  if (!expColNamesVat.includes('vat_amount_huf')) {
+    db.run("ALTER TABLE expenses ADD COLUMN vat_amount_huf REAL DEFAULT NULL");
+    expNeedsBackfill.push('vat_amount_huf');
+  }
+  if (!expColNamesVat.includes('vat_deductible')) {
+    // 1 = visszaigényelhető áfa (áfakörös usernél), 0 = nem (AAM-nél vagy magánhasználat)
+    db.run("ALTER TABLE expenses ADD COLUMN vat_deductible INTEGER DEFAULT 1");
+  }
+
+  // Opció A backfill: meglévő sorok szétbontása a user áfa-státusza alapján
+  // (Fejlesztési fázisban elég egyszer lefutni; production-ben idempotens a NULL check miatt.)
+  if (invNeedsBackfill.length > 0 || expNeedsBackfill.length > 0) {
+    const userVatRow = db.exec("SELECT vat_status, vat_rate_default FROM user_settings LIMIT 1");
+    const userVatStatus = (userVatRow[0]?.values[0]?.[0] as string) || 'exempt';
+    const userVatRate = (userVatRow[0]?.values[0]?.[1] as number) ?? 27;
+
+    if (userVatStatus === 'exempt') {
+      // AAM: nincs áfa, nettó = bruttó
+      db.run(`UPDATE invoices SET
+        vat_rate = 0,
+        net_amount = amount,
+        vat_amount = 0,
+        net_amount_huf = COALESCE(amount_huf, amount),
+        vat_amount_huf = 0
+        WHERE net_amount IS NULL`);
+      db.run(`UPDATE expenses SET
+        vat_rate = 0,
+        net_amount = amount,
+        vat_amount = 0,
+        net_amount_huf = COALESCE(amount_huf, amount),
+        vat_amount_huf = 0
+        WHERE net_amount IS NULL`);
+    } else {
+      // Standard: amount bruttó, áfát visszaszámoljuk vat_rate_default alapján
+      const rateDecimal = userVatRate / 100;
+      db.run(`UPDATE invoices SET
+        vat_rate = ?,
+        net_amount = ROUND(amount / (1 + ?), 2),
+        vat_amount = ROUND(amount - (amount / (1 + ?)), 2),
+        net_amount_huf = ROUND(COALESCE(amount_huf, amount) / (1 + ?), 2),
+        vat_amount_huf = ROUND(COALESCE(amount_huf, amount) - (COALESCE(amount_huf, amount) / (1 + ?)), 2)
+        WHERE net_amount IS NULL`, [userVatRate, rateDecimal, rateDecimal, rateDecimal, rateDecimal]);
+      db.run(`UPDATE expenses SET
+        vat_rate = ?,
+        net_amount = ROUND(amount / (1 + ?), 2),
+        vat_amount = ROUND(amount - (amount / (1 + ?)), 2),
+        net_amount_huf = ROUND(COALESCE(amount_huf, amount) / (1 + ?), 2),
+        vat_amount_huf = ROUND(COALESCE(amount_huf, amount) - (COALESCE(amount_huf, amount) / (1 + ?)), 2)
+        WHERE net_amount IS NULL`, [userVatRate, rateDecimal, rateDecimal, rateDecimal, rateDecimal]);
+    }
+  }
 
   // Seed tax business types and 2026 rules (idempotent via INSERT OR IGNORE)
   db.exec(`
@@ -490,27 +891,59 @@ function runMigrations() {
       ('afa',           'AFA',           'Általános Forgalmi Adó',        'ÁFA - 27%-os általános forgalmi adó',                    2),
       ('aam',           'AAM',           'Alanyi Adómentesség',           'Alanyi adómentesség - ÁFA-mentes működés',               3),
       ('atalanyadozas', 'ATALANYADOZAS', 'Átalányadózás',                 'Egyszerűsített SZJA egyéni vállalkozóknak',               4),
-      ('kft_tao',       'KFT_TAO',       'Kft (TAO)',                     'Korlátolt felelősségű társaság - társasági adó',          5),
-      ('kata',          'KATA',          'Kisadózó Vállalkozások Tételes Adója', 'Tételes adó egyéni vállalkozóknak (korlátozott)', 6);
+      ('kft_tao',       'KFT_TAO',       'Kft (TAO)',                     'Korlátolt felelősségű társaság - társasági adó',          5);
 
     INSERT OR IGNORE INTO tax_rules (id, business_type, year, rate_percent, rate_label, notes) VALUES
-      ('tr-kiva-2026',       'kiva',          2026, 11.0,   'base',                'Speciális adóalap: béralapú számítás'),
+      ('tr-kiva-2026',       'kiva',          2026, 10.0,   'base',                'Speciális adóalap: béralapú számítás'),
       ('tr-afa-std-2026',    'afa',           2026, 27.0,   'standard',            'EU egyik legmagasabb ÁFA kulcsa'),
       ('tr-afa-red-2026',    'afa',           2026, 18.0,   'reduced',             'Csökkentett kulcs (pl. egyes élelmiszerek)'),
       ('tr-afa-sred-2026',   'afa',           2026,  5.0,   'super_reduced',       'Szuper csökkentett kulcs (pl. könyvek)'),
       ('tr-aam-2026',        'aam',           2026,  0.0,   'exempt',              'ÁFA-mentes - 20M Ft bevételi határ'),
-      ('tr-atal-gen-2026',   'atalanyadozas', 2026, 40.0,   'deemed_cost_general', 'Általános vélelmezett költséghányad'),
+      ('tr-atal-gen-2026',   'atalanyadozas', 2026, 45.0,   'deemed_cost_general', 'Általános vélelmezett költséghányad'),
       ('tr-atal-ret-2026',   'atalanyadozas', 2026, 80.0,   'deemed_cost_retail',  'Kiskereskedelmi vélelmezett költséghányad'),
-      ('tr-tao-2026',        'kft_tao',       2026,  9.0,   'base',                'Társasági adó alapkulcs'),
-      ('tr-kata-2026',       'kata',          2026, 50000,  'monthly_flat',        'Havi tételes adó (Ft, nem százalék)');
+      ('tr-atal-kisker-2026','atalanyadozas', 2026, 90.0,   'deemed_cost_kisker',  'Üzletszerű kiskereskedelmi vélelmezett költséghányad'),
+      ('tr-tao-2026',        'kft_tao',       2026,  9.0,   'base',                'Társasági adó alapkulcs');
 
     INSERT OR IGNORE INTO tax_eligibility_criteria (id, business_type, year, max_revenue_huf, max_employees, conditions_json) VALUES
-      ('te-kiva-2026',  'kiva',          2026, 12000000000, 200, '{"replaces":["tao","szocho","szakkepzesi_hozzajarulas"]}'),
+      ('te-kiva-2026',  'kiva',          2026, 6000000000,  100,  '{"replaces":["tao","szocho","szakkepzesi_hozzajarulas"]}'),
       ('te-aam-2026',   'aam',           2026, 20000000,    NULL, '{"progressive_increase":{"2027":22000000,"2028":24000000}}'),
       ('te-atal-2026',  'atalanyadozas', 2026, NULL,        NULL, '{"entity_type":"egyeni_vallalkozo","simplified_szja":true}'),
-      ('te-kata-2026',  'kata',          2026, NULL,        NULL, '{"entity_type":"egyeni_vallalkozo","restricted_since":2022}'),
       ('te-kft-2026',   'kft_tao',       2026, NULL,        NULL, '{"entity_type":"kft","alternative":"kiva"}');
   `);
+
+  // Fix legacy data: update átalány 40→45%, KIVA 11→10%, remove KATA
+  db.run(`UPDATE tax_rules SET rate_percent = 45.0 WHERE id = 'tr-atal-gen-2026' AND rate_percent = 40.0`);
+  db.run(`UPDATE tax_rules SET rate_percent = 10.0 WHERE id = 'tr-kiva-2026' AND rate_percent = 11.0`);
+  db.run(`DELETE FROM tax_rules WHERE business_type = 'kata'`);
+  db.run(`DELETE FROM tax_eligibility_criteria WHERE business_type = 'kata'`);
+  db.run(`DELETE FROM tax_business_types WHERE id = 'kata'`);
+
+  // Seed tax_parameters for 2026 and 2027
+  db.exec(`
+    INSERT OR IGNORE INTO tax_parameters (
+      year, minimalber_havi, garantalt_berminimum_havi,
+      szja_kulcs, tb_kulcs, szocho_kulcs, tao_kulcs, kiva_kulcs,
+      aam_limit, atalany_altalanos, atalany_specialis, atalany_kisker,
+      atalany_limit_szorzo, atalany_adomentes_szorzo, szocho_plafon_szorzo,
+      hipa_max_kulcs, afa_standard, afa_reduced, afa_super_reduced
+    ) VALUES
+      (2026, 322800, 373200, 0.15, 0.185, 0.13, 0.09, 0.10,
+       20000000, 0.45, 0.80, 0.90, 10, 0.5, 24, 0.02, 0.27, 0.18, 0.05),
+      (2027, 322800, 373200, 0.15, 0.185, 0.13, 0.09, 0.10,
+       22000000, 0.50, 0.80, 0.90, 10, 0.5, 24, 0.02, 0.27, 0.18, 0.05);
+  `);
+
+  // Seed HIPA rates from embedded data (idempotent)
+  const hipaCount = db.exec('SELECT COUNT(*) as cnt FROM hipa_rates');
+  const existingHipa = (hipaCount[0]?.values[0]?.[0] as number) ?? 0;
+  if (existingHipa === 0) {
+    const insertStmt = db.prepare('INSERT OR IGNORE INTO hipa_rates (megye, telepules, kulcs) VALUES (?, ?, ?)');
+    for (const entry of HIPA_RATES) {
+      insertStmt.run([entry.megye, entry.telepules, entry.kulcs]);
+    }
+    insertStmt.free();
+    console.log(`[Database] Seeded ${HIPA_RATES.length} HIPA rates`);
+  }
 
   // Client fields for contracts
   const clientCols = db.exec("PRAGMA table_info(clients)");
@@ -534,5 +967,94 @@ function runMigrations() {
   }
   if (!clientColNames.includes('address_line2')) {
     db.run("ALTER TABLE clients ADD COLUMN address_line2 TEXT DEFAULT ''");
+  }
+
+  // Add billing provider fields to invoices for API-generated invoices
+  const invCols3 = db.exec("PRAGMA table_info(invoices)");
+  const invColNames3 = invCols3[0]?.values.map(row => row[1]) || [];
+  if (!invColNames3.includes('provider')) {
+    db.run("ALTER TABLE invoices ADD COLUMN provider TEXT DEFAULT NULL");
+  }
+  if (!invColNames3.includes('provider_invoice_id')) {
+    db.run("ALTER TABLE invoices ADD COLUMN provider_invoice_id TEXT DEFAULT NULL");
+  }
+  if (!invColNames3.includes('provider_synced_at')) {
+    db.run("ALTER TABLE invoices ADD COLUMN provider_synced_at TEXT DEFAULT NULL");
+  }
+
+  // Migrate invoices: add 'cancelled' to status CHECK constraint
+  const statusCol = invCols3[0]?.values.find(row => row[1] === 'status');
+  const currentSql = db.exec("SELECT sql FROM sqlite_master WHERE type='table' AND name='invoices'");
+  const tableSql = currentSql[0]?.values[0]?.[0] as string || '';
+  if (statusCol && !tableSql.includes("'cancelled'")) {
+    // Get current column list to preserve all columns including later additions
+    const allCols = invCols3[0]?.values.map(row => row[1] as string) || [];
+    const colList = allCols.join(', ');
+    db.run('PRAGMA foreign_keys = OFF');
+    db.exec(`
+      CREATE TABLE invoices_migrated (
+        id TEXT PRIMARY KEY,
+        project_id TEXT,
+        client_id TEXT NOT NULL,
+        file_path TEXT,
+        invoice_number TEXT,
+        amount REAL NOT NULL,
+        currency TEXT DEFAULT 'HUF',
+        issue_date TEXT,
+        due_date TEXT,
+        status TEXT DEFAULT 'pending' CHECK(status IN ('pending', 'paid', 'overdue', 'cancelled')),
+        notes TEXT,
+        type TEXT DEFAULT 'invoice' CHECK(type IN ('invoice', 'manual')),
+        created_at TEXT DEFAULT (datetime('now')),
+        provider TEXT DEFAULT NULL,
+        provider_invoice_id TEXT DEFAULT NULL,
+        provider_synced_at TEXT DEFAULT NULL,
+        gross_total REAL DEFAULT NULL,
+        net_total REAL DEFAULT NULL,
+        FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+        FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
+      );
+      INSERT INTO invoices_migrated (${colList}) SELECT ${colList} FROM invoices;
+      DROP TABLE invoices;
+      ALTER TABLE invoices_migrated RENAME TO invoices;
+    `);
+    db.run('PRAGMA foreign_keys = ON');
+  }
+
+  // Add client_id to ads_accounts for linking Ads accounts to Klient clients
+  const adsAccCols = db.exec("PRAGMA table_info(ads_accounts)");
+  const adsAccColNames = adsAccCols[0]?.values.map(row => row[1]) || [];
+  if (!adsAccColNames.includes('client_id')) {
+    db.run("ALTER TABLE ads_accounts ADD COLUMN client_id TEXT REFERENCES clients(id) ON DELETE SET NULL");
+    db.run("CREATE INDEX IF NOT EXISTS idx_ads_accounts_client ON ads_accounts(client_id)");
+  }
+
+  // Add status to team_members
+  const teamCols = db.exec("PRAGMA table_info(team_members)");
+  const teamColNames = teamCols[0]?.values.map(row => row[1]) || [];
+  if (!teamColNames.includes('status')) {
+    db.run("ALTER TABLE team_members ADD COLUMN status TEXT DEFAULT 'active'");
+  }
+  if (!teamColNames.includes('monthly_salary')) {
+    db.run("ALTER TABLE team_members ADD COLUMN monthly_salary REAL");
+  }
+  if (!teamColNames.includes('salary_currency')) {
+    db.run("ALTER TABLE team_members ADD COLUMN salary_currency TEXT DEFAULT 'HUF'");
+  }
+  if (!teamColNames.includes('salary_huf')) {
+    db.run("ALTER TABLE team_members ADD COLUMN salary_huf REAL");
+  }
+
+  // Per-project fee on assignments
+  const paCols = db.exec("PRAGMA table_info(project_assignments)");
+  const paColNames = paCols[0]?.values.map(row => row[1]) || [];
+  if (!paColNames.includes('fee')) {
+    db.run("ALTER TABLE project_assignments ADD COLUMN fee REAL");
+  }
+  if (!paColNames.includes('fee_currency')) {
+    db.run("ALTER TABLE project_assignments ADD COLUMN fee_currency TEXT DEFAULT 'HUF'");
+  }
+  if (!paColNames.includes('fee_huf')) {
+    db.run("ALTER TABLE project_assignments ADD COLUMN fee_huf REAL");
   }
 }

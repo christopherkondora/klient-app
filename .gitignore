@@ -7,12 +7,3 @@ release/
 *.db-journal
 *.db-wal
 .env
-
-klient.work/
-supabase/.temp/
-
-# Code signing certificates (never commit these!)
-*.pfx
-*.p12
-*.cer
-certificate.*

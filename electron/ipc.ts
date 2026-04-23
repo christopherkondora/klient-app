@@ -5,8 +5,18 @@ import fs from 'fs';
 import path from 'path';
 import { app } from 'electron';
 import { getSupabase } from './supabase';
-import { switchDatabase, closeDatabase, getCurrentUserId } from './database';
+import { switchDatabase, closeDatabase, getCurrentUserId, saveDb } from './database';
 import * as taxService from './tax-service';
+import { setBillingConfig, getBillingConfig, getBillingApiKey, clearBillingConfig } from './billing-store';
+import * as billingoAdapter from './billing/billingo-adapter';
+import * as szamlazzAdapter from './billing/szamlazz-adapter';
+import * as billingService from './billing/billing-service';
+import * as syncService from './billing/sync-service';
+import { saveGoogleCredentials, getGoogleCredentials, clearGoogleCredentials, saveAccountRefreshToken, getAccountRefreshToken, removeAccountRefreshToken } from './ads-store';
+import { startOAuthFlow, refreshAccessToken, listAccessibleAccounts, getAccountInfo, listMccClientAccounts } from './ads-auth';
+import { syncAccount, syncAllAccounts, getSyncLog, getLastSync } from './ads-sync';
+import { runAnalysis, getAnalyses, getAnalysis, getKnowledgeBase, createKnowledgeEntry, updateKnowledgeEntry, deleteKnowledgeEntry, type AnalysisType } from './ads-ai';
+import { getAlerts, getAllAlerts, dismissAlert, getAlertCount } from './ads-alerts';
 
 function sanitizeFolderName(name: string): string {
   return name.replace(/[<>:"/\\|?*]/g, '_').trim();
@@ -16,7 +26,7 @@ function getFilesRoot(): string {
   return path.join(app.getPath('userData'), 'Files');
 }
 
-const USER_FIELDS = 'id, name, email, invoice_platform, onboarding_complete, pomodoro_project_tracking, revenue_goal_yearly, company_name, tax_number, address, bank_account, team_mode, created_at';
+const USER_FIELDS = 'id, name, email, invoice_platform, onboarding_complete, pomodoro_project_tracking, revenue_goal_yearly, profit_goal_yearly, company_name, tax_number, address, bank_account, team_mode, vat_status, vat_rate_default, vat_number, created_at';
 
 /** Ensure a local user_settings row exists for a Supabase user, return it */
 function ensureLocalUser(supabaseId: string, email: string, name?: string): Record<string, unknown> {
@@ -49,7 +59,23 @@ export function registerIpcHandlers() {
         await switchDatabase(session.user.id);
       }
 
-      const local = ensureLocalUser(session.user.id, session.user.email ?? '');
+      let local: Record<string, unknown>;
+      try {
+        local = ensureLocalUser(session.user.id, session.user.email ?? '');
+      } catch (err: any) {
+        if (err?.message?.includes('Database not initialized')) {
+          await switchDatabase(session.user.id);
+          local = ensureLocalUser(session.user.id, session.user.email ?? '');
+        } else {
+          throw err;
+        }
+      }
+
+      // Keep session restore responsive; tax sync can run after the user is returned.
+      setTimeout(() => {
+        try { taxService.syncTaxDeadlinesToCalendar(session.user.id); } catch {}
+      }, 0);
+
       return local;
     } catch (err) {
       console.error('[Auth] Error getting user:', err);
@@ -71,16 +97,21 @@ export function registerIpcHandlers() {
     });
     if (error) { console.error('[Auth] Register error:', error.message); throw new Error(error.message); }
     if (!authData.user) throw new Error('Regisztráció sikertelen');
+    const authUser = authData.user;
 
     // If identities is empty, the email already exists but is unconfirmed — resend confirmation
-    if (authData.user.identities?.length === 0) {
+    if (authUser.identities?.length === 0) {
       await sb.auth.resend({ type: 'signup', email, options: { emailRedirectTo: 'https://klient.work/confirmed' } });
     }
 
     // Initialize user-specific database
-    await switchDatabase(authData.user.id);
+    await switchDatabase(authUser.id);
 
-    const local = ensureLocalUser(authData.user.id, authData.user.email ?? '', data.name as string);
+    const local = ensureLocalUser(authUser.id, authUser.email ?? '', data.name as string);
+    syncService.startPolling();
+    setTimeout(() => {
+      try { taxService.syncTaxDeadlinesToCalendar(authUser.id); } catch {}
+    }, 0);
     return local;
   });
 
@@ -93,17 +124,23 @@ export function registerIpcHandlers() {
     });
     if (error) { console.error('[Auth] Login error:', error.message); throw new Error(error.message); }
     if (!authData.user) throw new Error('Bejelentkezés sikertelen');
+    const authUser = authData.user;
 
     // Switch to user-specific database
-    await switchDatabase(authData.user.id);
+    await switchDatabase(authUser.id);
 
-    const local = ensureLocalUser(authData.user.id, authData.user.email ?? '', authData.user.user_metadata?.name as string);
+    const local = ensureLocalUser(authUser.id, authUser.email ?? '', authUser.user_metadata?.name as string);
+    syncService.startPolling();
+    setTimeout(() => {
+      try { taxService.syncTaxDeadlinesToCalendar(authUser.id); } catch {}
+    }, 0);
     return local;
   });
 
   // Logout
   ipcMain.handle('db:user:logout', async () => {
     try {
+      syncService.stopPolling();
       // Close database first
       closeDatabase();
 
@@ -167,114 +204,43 @@ export function registerIpcHandlers() {
     return { confirmed: true, user: local };
   });
 
-  // Google OAuth
+  // Google OAuth — natív PKCE loopback flow (nem Supabase-proxyn át)
+  // A Google consent screen-en "Klient" és klient.work jelenik meg, nem a supabase.co URL.
   ipcMain.handle('db:user:googleAuth', async () => {
     const sb = getSupabase();
-    const redirectUrl = 'http://localhost/auth/callback';
+    const { startGoogleSignIn } = await import('./google-signin');
 
-    const { data, error } = await sb.auth.signInWithOAuth({
+    // 1. Natív Google PKCE flow → id_token
+    const { idToken } = await startGoogleSignIn();
+
+    // 2. Supabase session id_token-ből (nem redirect, nem code exchange Supabase-en)
+    const { data: authData, error } = await sb.auth.signInWithIdToken({
       provider: 'google',
-      options: {
-        skipBrowserRedirect: true,
-        redirectTo: redirectUrl,
-      },
+      token: idToken,
     });
 
-    if (error || !data.url) throw new Error(error?.message || 'Google auth indítása sikertelen');
+    if (error || !authData.user) {
+      throw new Error(error?.message || 'Supabase session létrehozása sikertelen');
+    }
 
-    return new Promise<Record<string, unknown>>((resolve, reject) => {
-      let settled = false;
+    const authUser = authData.user;
+    await switchDatabase(authUser.id);
 
-      const authWindow = new BrowserWindow({
-        width: 500,
-        height: 700,
-        autoHideMenuBar: true,
-        webPreferences: {
-          nodeIntegration: false,
-          contextIsolation: true,
-          partition: 'oauth',
-        },
-      });
-
-      const handleCallback = async (url: string) => {
-        if (settled || !url.startsWith(redirectUrl)) return;
-        settled = true;
-
-        try {
-          const urlObj = new URL(url);
-          const code = urlObj.searchParams.get('code');
-
-          // Also check hash params (implicit flow fallback)
-          const hashStr = url.includes('#') ? url.split('#')[1] : '';
-          const hashParams = new URLSearchParams(hashStr);
-          const accessToken = hashParams.get('access_token');
-          const refreshToken = hashParams.get('refresh_token');
-
-          let userId: string | undefined;
-          let userEmail: string | undefined;
-          let userName: string | undefined;
-
-          if (code) {
-            // PKCE flow
-            const { data: session, error: sessErr } = await sb.auth.exchangeCodeForSession(code);
-            if (sessErr || !session.user) throw new Error(sessErr?.message || 'Session hiba');
-            userId = session.user.id;
-            userEmail = session.user.email;
-            userName = session.user.user_metadata?.full_name || session.user.user_metadata?.name;
-          } else if (accessToken && refreshToken) {
-            // Implicit flow
-            const { data: session, error: sessErr } = await sb.auth.setSession({ access_token: accessToken, refresh_token: refreshToken });
-            if (sessErr || !session.user) throw new Error(sessErr?.message || 'Session hiba');
-            userId = session.user.id;
-            userEmail = session.user.email;
-            userName = session.user.user_metadata?.full_name || session.user.user_metadata?.name;
-          } else {
-            throw new Error('Nem érkezett token a Google-tól');
-          }
-
-          // Switch to user-specific database
-          await switchDatabase(userId!);
-
-          const local = ensureLocalUser(userId!, userEmail ?? '', userName);
-          authWindow.close();
-          resolve(local);
-        } catch (err) {
-          authWindow.close();
-          reject(err);
-        }
-      };
-
-      // Intercept redirects to localhost callback
-      authWindow.webContents.on('will-redirect', (_event, url) => { handleCallback(url); });
-      authWindow.webContents.on('will-navigate', (_event, url) => { handleCallback(url); });
-
-      // Also intercept via request filter (catches PKCE code in query params)
-      authWindow.webContents.session.webRequest.onBeforeRequest(
-        { urls: [`${redirectUrl}*`] },
-        (details, callback) => {
-          if (details.url.startsWith(redirectUrl)) {
-            callback({ cancel: true });
-            handleCallback(details.url);
-          } else {
-            callback({ cancel: false });
-          }
-        }
-      );
-
-      authWindow.on('closed', () => {
-        if (!settled) {
-          settled = true;
-          reject(new Error('Google bejelentkezés megszakítva'));
-        }
-      });
-
-      authWindow.loadURL(data.url);
-    });
+    const local = ensureLocalUser(
+      authUser.id,
+      authUser.email ?? '',
+      authUser.user_metadata?.full_name || authUser.user_metadata?.name,
+    );
+    syncService.startPolling();
+    setTimeout(() => {
+      try { taxService.syncTaxDeadlinesToCalendar(authUser.id); } catch {}
+    }, 0);
+    return local;
   });
 
   // Update local user settings (non-auth fields)
   ipcMain.handle('db:user:update', (_event, id: string, data: Record<string, unknown>) => {
-    const allowedFields = ['name', 'email', 'invoice_platform', 'onboarding_complete', 'pomodoro_project_tracking', 'revenue_goal_yearly', 'company_name', 'tax_number', 'address', 'bank_account', 'team_mode'];
+    const allowedFields = ['name', 'email', 'invoice_platform', 'onboarding_complete', 'pomodoro_project_tracking', 'revenue_goal_yearly', 'profit_goal_yearly', 'company_name', 'tax_number', 'address', 'bank_account', 'team_mode', 'vat_status', 'vat_rate_default', 'vat_number'];
     const filteredData: Record<string, unknown> = {};
     for (const key of allowedFields) {
       if (key in data) filteredData[key] = data[key];
@@ -326,6 +292,15 @@ export function registerIpcHandlers() {
         }
       }
 
+      // Check if Ads subscription period has ended
+      if ((data.ads_status === 'active' || data.ads_status === 'cancelled') && data.ads_current_period_end) {
+        const adsPeriodEnd = new Date(data.ads_current_period_end);
+        if (adsPeriodEnd < new Date()) {
+          await sb.rpc('expire_ads_subscription', { p_user_id: session.user.id });
+          data.ads_status = 'expired';
+        }
+      }
+
       return data;
     } catch (err) {
       console.error('[Subscription] Error fetching:', err);
@@ -334,7 +309,7 @@ export function registerIpcHandlers() {
   });
 
   // ── Stripe Checkout — creates session via Supabase Edge Function ──
-  ipcMain.handle('db:subscription:checkout', async (_event, data: { plan: 'monthly' | 'yearly' | 'lifetime' }) => {
+  ipcMain.handle('db:subscription:checkout', async (_event, data: { plan: 'monthly' | 'yearly' | 'lifetime'; module?: 'klient' | 'ads' }) => {
     const sb = getSupabase();
     const { data: { session } } = await sb.auth.getSession();
     if (!session?.user) throw new Error('Nincs bejelentkezve');
@@ -346,7 +321,7 @@ export function registerIpcHandlers() {
     });
 
     const res = await sb.functions.invoke('create-checkout', {
-      body: { plan: data.plan },
+      body: { plan: data.plan, module: data.module },
     });
 
     console.log('[Checkout] Edge function response:', {
@@ -363,13 +338,13 @@ export function registerIpcHandlers() {
   });
 
   // Cancel subscription (cancel_at_period_end)
-  ipcMain.handle('db:subscription:cancel', async () => {
+  ipcMain.handle('db:subscription:cancel', async (_event, module?: 'klient' | 'ads') => {
     const sb = getSupabase();
     const { data: { session } } = await sb.auth.getSession();
     if (!session?.user) throw new Error('Nincs bejelentkezve');
 
     const res = await sb.functions.invoke('manage-subscription', {
-      body: { action: 'cancel' },
+      body: { action: 'cancel', module },
     });
 
     if (res.error) throw new Error(res.error.message || 'Lemondási hiba');
@@ -379,13 +354,13 @@ export function registerIpcHandlers() {
   });
 
   // Reactivate cancelled subscription
-  ipcMain.handle('db:subscription:reactivate', async () => {
+  ipcMain.handle('db:subscription:reactivate', async (_event, module?: 'klient' | 'ads') => {
     const sb = getSupabase();
     const { data: { session } } = await sb.auth.getSession();
     if (!session?.user) throw new Error('Nincs bejelentkezve');
 
     const res = await sb.functions.invoke('manage-subscription', {
-      body: { action: 'reactivate' },
+      body: { action: 'reactivate', module },
     });
 
     if (res.error) throw new Error(res.error.message || 'Újraaktiválási hiba');
@@ -406,8 +381,8 @@ export function registerIpcHandlers() {
   ipcMain.handle('db:clients:create', (_event, data: Record<string, unknown>) => {
     const id = uuidv4();
     execute(
-      `INSERT INTO clients (id, name, email, phone, company, address, notes, color) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [id, data.name, data.email, data.phone, data.company, data.address, data.notes, data.color || '#6366f1']
+      `INSERT INTO clients (id, name, email, phone, company, address, postal_code, city, street, address_line2, tax_number, notes, color) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [id, data.name, data.email, data.phone, data.company, data.address, data.postal_code, data.city, data.street, data.address_line2, data.tax_number, data.notes, data.color || '#6366f1']
     );
     // Auto-create client folder
     if (data.name) {
@@ -430,7 +405,7 @@ export function registerIpcHandlers() {
         }
       }
     }
-    const allowedFields = ['name', 'email', 'phone', 'company', 'address', 'notes', 'color', 'tax_number', 'representative_name'];
+    const allowedFields = ['name', 'email', 'phone', 'company', 'address', 'postal_code', 'city', 'street', 'address_line2', 'notes', 'color', 'tax_number', 'representative_name'];
     const filteredData: Record<string, unknown> = {};
     for (const key of allowedFields) {
       if (key in data) filteredData[key] = data[key];
@@ -547,9 +522,22 @@ export function registerIpcHandlers() {
     if (!project) throw new Error('Project not found');
 
     const invoiceId = uuidv4();
+    // ÁFA szétbontás a user áfa-státusza alapján
+    const user = queryOne('SELECT vat_status, vat_rate_default FROM user_settings LIMIT 1') as Record<string, unknown> | null;
+    const vatStatus = (user?.vat_status as string) || 'exempt';
+    const defaultRate = (user?.vat_rate_default as number) ?? 27;
+    const amount = Number(invoiceData.amount);
+    const currency = (invoiceData.currency as string) || 'HUF';
+    const amountHuf = (invoiceData.amount_huf as number | undefined) ?? amount;
+    const vatRate = vatStatus === 'exempt' ? 0 : defaultRate;
+    const divisor = 1 + (vatRate / 100);
+    const netAmount = Math.round((amount / divisor) * 100) / 100;
+    const vatAmount = Math.round((amount - netAmount) * 100) / 100;
+    const netAmountHuf = Math.round((amountHuf / divisor) * 100) / 100;
+    const vatAmountHuf = Math.round((amountHuf - netAmountHuf) * 100) / 100;
     execute(
-      `INSERT INTO invoices (id, project_id, client_id, file_path, invoice_number, amount, currency, issue_date, due_date, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [invoiceId, id, project.client_id, invoiceData.file_path, invoiceData.invoice_number, invoiceData.amount, invoiceData.currency || 'HUF', invoiceData.issue_date, invoiceData.due_date, invoiceData.notes]
+      `INSERT INTO invoices (id, project_id, client_id, file_path, invoice_number, amount, currency, amount_huf, vat_rate, net_amount, vat_amount, net_amount_huf, vat_amount_huf, issue_date, due_date, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [invoiceId, id, project.client_id, invoiceData.file_path, invoiceData.invoice_number, amount, currency, amountHuf, vatRate, netAmount, vatAmount, netAmountHuf, vatAmountHuf, invoiceData.issue_date, invoiceData.due_date, invoiceData.notes]
     );
     return { success: true };
   });
@@ -836,12 +824,14 @@ export function registerIpcHandlers() {
       userTaxNumber: user.tax_number || '',
       userBankAccount: user.bank_account || '',
       userEmail: user.email || '',
+      userPhone: '',
       clientName: client.name || '',
       clientCompany: client.company || '',
       clientAddress: clientAddress,
       clientTaxNumber: client.tax_number || '',
       clientRepresentative: client.representative_name || '',
       clientEmail: client.email || '',
+      clientPhone: client.phone || '',
       fields: data.fields,
       contractDate: data.contractDate,
       contractPlace: data.fields.place || '',
@@ -926,15 +916,39 @@ export function registerIpcHandlers() {
 
   ipcMain.handle('db:invoices:create', (_event, data: Record<string, unknown>) => {
     const id = uuidv4();
+    // ÁFA szétbontás: ha a kliens küld net_amount-ot, azt használjuk; különben fallback:
+    // áfakörös usernél alapértelmezett kulcs alapján, AAM-nél net = amount, vat = 0.
+    const user = queryOne('SELECT vat_status, vat_rate_default FROM user_settings LIMIT 1') as Record<string, unknown> | null;
+    const vatStatus = (user?.vat_status as string) || 'exempt';
+    const defaultRate = (user?.vat_rate_default as number) ?? 27;
+    const amount = Number(data.amount);
+    const currency = (data.currency as string) || 'HUF';
+    const amountHuf = (data.amount_huf as number | undefined) ?? (currency === 'HUF' ? amount : amount);
+    let vatRate = data.vat_rate as number | undefined;
+    let netAmount = data.net_amount as number | undefined;
+    let vatAmount = data.vat_amount as number | undefined;
+    let netAmountHuf = data.net_amount_huf as number | undefined;
+    let vatAmountHuf = data.vat_amount_huf as number | undefined;
+    if (vatRate === undefined) vatRate = vatStatus === 'exempt' ? 0 : defaultRate;
+    if (netAmount === undefined || vatAmount === undefined) {
+      const divisor = 1 + (vatRate / 100);
+      netAmount = Math.round((amount / divisor) * 100) / 100;
+      vatAmount = Math.round((amount - netAmount) * 100) / 100;
+    }
+    if (netAmountHuf === undefined || vatAmountHuf === undefined) {
+      const divisor = 1 + (vatRate / 100);
+      netAmountHuf = Math.round((amountHuf / divisor) * 100) / 100;
+      vatAmountHuf = Math.round((amountHuf - netAmountHuf) * 100) / 100;
+    }
     execute(
-      `INSERT INTO invoices (id, project_id, client_id, file_path, invoice_number, amount, currency, issue_date, due_date, status, notes, type) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [id, data.project_id, data.client_id, data.file_path, data.invoice_number, data.amount, data.currency || 'HUF', data.issue_date, data.due_date, data.status || 'pending', data.notes, data.type || 'invoice']
+      `INSERT INTO invoices (id, project_id, client_id, file_path, invoice_number, amount, currency, amount_huf, vat_rate, net_amount, vat_amount, net_amount_huf, vat_amount_huf, issue_date, due_date, status, notes, type, provider, provider_invoice_id, provider_synced_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [id, data.project_id, data.client_id, data.file_path, data.invoice_number, amount, currency, amountHuf, vatRate, netAmount, vatAmount, netAmountHuf, vatAmountHuf, data.issue_date, data.due_date, data.status || 'pending', data.notes, data.type || 'invoice', data.provider || null, data.provider_invoice_id || null, data.provider_synced_at || null]
     );
     return queryOne('SELECT * FROM invoices WHERE id = ?', [id]);
   });
 
   ipcMain.handle('db:invoices:update', (_event, id: string, data: Record<string, unknown>) => {
-    const allowedFields = ['invoice_number', 'amount', 'currency', 'issue_date', 'due_date', 'status', 'notes', 'file_path', 'client_id', 'project_id', 'type'];
+    const allowedFields = ['invoice_number', 'amount', 'currency', 'amount_huf', 'vat_rate', 'net_amount', 'vat_amount', 'net_amount_huf', 'vat_amount_huf', 'issue_date', 'due_date', 'status', 'notes', 'file_path', 'client_id', 'project_id', 'type', 'provider', 'provider_invoice_id', 'provider_synced_at'];
     const filteredData: Record<string, unknown> = {};
     for (const key of allowedFields) {
       if (key in data) filteredData[key] = data[key];
@@ -951,8 +965,62 @@ export function registerIpcHandlers() {
     );
   });
 
-  ipcMain.handle('db:invoices:delete', (_event, id: string) => {
-    execute('DELETE FROM invoices WHERE id = ?', [id]);
+  ipcMain.handle('db:invoices:delete', async (_event, id: string) => {
+    // Look up the full invoice
+    const invoice = queryOne('SELECT * FROM invoices WHERE id = ?', [id]) as Record<string, any> | undefined;
+    if (!invoice) return { success: false, error: 'Számla nem található' };
+
+    let stornoResult: { stornoInvoiceNumber?: string; stornoInvoiceId?: string; grossTotal?: number; pdfBase64?: string; provider?: string } | null = null;
+
+    // Cancel on billing provider first
+    if (invoice.provider && invoice.provider_invoice_id) {
+      try {
+        stornoResult = await billingService.cancelInvoice(invoice.provider_invoice_id, invoice.provider);
+      } catch (err: any) {
+        console.error('[IPC] Provider cancel failed:', err.message);
+        return { success: false, error: `Sztornó hiba (${invoice.provider}): ${err.message}` };
+      }
+    }
+
+    // Mark original as cancelled
+    execute('UPDATE invoices SET status = ? WHERE id = ?', ['cancelled', id]);
+
+    // Create storno invoice record if we got storno data from provider
+    if (stornoResult?.stornoInvoiceNumber) {
+      const stornoId = uuidv4();
+      const today = new Date().toISOString().slice(0, 10);
+      const negativeAmount = stornoResult.grossTotal
+        ? -Math.abs(stornoResult.grossTotal)
+        : -(invoice.amount || 0);
+
+      // Save storno PDF to client folder if available
+      let stornoFilePath: string | null = null;
+      if (stornoResult.pdfBase64 && invoice.client_id) {
+        try {
+          const client = queryOne('SELECT name FROM clients WHERE id = ?', [invoice.client_id]) as { name: string } | undefined;
+          if (client) {
+            const sanitizedClient = client.name.replace(/[<>:"/\\|?*]/g, '_').trim();
+            const invoicesDir = path.join(filesRoot, sanitizedClient, 'Számlák');
+            if (!fs.existsSync(invoicesDir)) {
+              fs.mkdirSync(invoicesDir, { recursive: true });
+            }
+            const safeName = `${stornoResult.stornoInvoiceNumber.replace(/\//g, '-')}.pdf`;
+            const fpth = path.join(invoicesDir, safeName);
+            fs.writeFileSync(fpth, Buffer.from(stornoResult.pdfBase64, 'base64'));
+            stornoFilePath = fpth;
+          }
+        } catch (err: any) {
+          console.warn('[IPC] Could not save storno PDF:', err.message);
+        }
+      }
+
+      execute(
+        `INSERT INTO invoices (id, project_id, client_id, file_path, invoice_number, amount, currency, issue_date, due_date, status, notes, type, provider, provider_invoice_id, provider_synced_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [stornoId, invoice.project_id, invoice.client_id, stornoFilePath, stornoResult.stornoInvoiceNumber, negativeAmount, invoice.currency || 'HUF', today, today, 'cancelled', `Sztornó: ${invoice.invoice_number || ''}`, 'invoice', invoice.provider, stornoResult.stornoInvoiceId || stornoResult.stornoInvoiceNumber, new Date().toISOString()]
+      );
+    }
+
     return { success: true };
   });
 
@@ -965,14 +1033,14 @@ export function registerIpcHandlers() {
     const avgHourlyRate = (queryOne(`SELECT COALESCE(AVG(i.amount / NULLIF(p.estimated_hours, 0)), 0) as rate FROM invoices i JOIN projects p ON i.project_id = p.id WHERE i.status = 'paid' AND p.estimated_hours > 0`) as Record<string, number>)?.rate ?? 0;
     const eligibleProjects = queryAll(
       `SELECT p.id, p.name, p.estimated_hours, p.status, c.name as client_name,
-        COALESCE((SELECT SUM(i.amount) FROM invoices i WHERE i.project_id = p.id), 0) as invoiced_total,
+        COALESCE((SELECT SUM(i.amount) FROM invoices i WHERE i.project_id = p.id AND i.status != 'cancelled'), 0) as invoiced_total,
         COALESCE((SELECT SUM(i.amount) FROM invoices i WHERE i.project_id = p.id AND i.status = 'paid'), 0) as paid_total
        FROM projects p LEFT JOIN clients c ON p.client_id = c.id
        WHERE p.status IN ('active', 'completed') AND p.estimated_hours > 0
          AND p.client_id IS NOT NULL AND p.client_id != ''
          AND NOT (
-           (SELECT COUNT(*) FROM invoices i WHERE i.project_id = p.id) > 0
-           AND (SELECT COUNT(*) FROM invoices i WHERE i.project_id = p.id AND i.status != 'paid') = 0
+           (SELECT COUNT(*) FROM invoices i WHERE i.project_id = p.id AND i.status != 'cancelled') > 0
+           AND (SELECT COUNT(*) FROM invoices i WHERE i.project_id = p.id AND i.status NOT IN ('paid', 'cancelled')) = 0
          )
        ORDER BY p.estimated_hours DESC`
     ) as { id: string; name: string; estimated_hours: number; status: string; client_name: string; invoiced_total: number; paid_total: number }[];
@@ -1026,6 +1094,29 @@ export function registerIpcHandlers() {
   ipcMain.handle('db:finance:enhanced', () => {
     const paidLastMonth = (queryOne(`SELECT COALESCE(SUM(amount), 0) as total FROM invoices WHERE status = 'paid' AND issue_date >= date('now', 'start of month', '-1 month') AND issue_date < date('now', 'start of month')`) as Record<string, number>)?.total ?? 0;
     const yearlyRevenue = (queryOne(`SELECT COALESCE(SUM(amount), 0) as total FROM invoices WHERE status = 'paid' AND issue_date >= date('now', 'start of year')`) as Record<string, number>)?.total ?? 0;
+    // ÁFA bontás: nettó YTD (amit a vállalkozás tényleges bevételeként könyvelhet)
+    // A migráció után minden számla net_amount/vat_amount mezője ki van töltve.
+    // Ha valamiért NULL, fallback: amount (bruttónak tekintjük, de áfa 0).
+    const vatRow = queryOne(
+      `SELECT
+         COALESCE(SUM(COALESCE(net_amount_huf, net_amount, amount_huf, amount)), 0) as net_ytd,
+         COALESCE(SUM(COALESCE(vat_amount_huf, vat_amount, 0)), 0) as vat_payable_ytd
+       FROM invoices
+       WHERE status = 'paid' AND issue_date >= date('now', 'start of year')`
+    ) as { net_ytd: number; vat_payable_ytd: number } | null;
+    const yearlyNetRevenue = Math.round(vatRow?.net_ytd ?? 0);
+    const vatPayable = Math.round(vatRow?.vat_payable_ytd ?? 0);
+    // Levonható áfa a vat_deductible = 1 kiadásokból, YTD
+    const vatDeductibleRow = queryOne(
+      `SELECT COALESCE(SUM(COALESCE(vat_amount_huf, vat_amount, 0)), 0) as total
+       FROM expenses
+       WHERE vat_deductible = 1
+         AND start_date >= date('now', 'start of year')
+         AND start_date <= date('now')`
+    ) as { total: number } | null;
+    const vatDeductible = Math.round(vatDeductibleRow?.total ?? 0);
+    const vatBalance = vatPayable - vatDeductible;
+    const vatStatus = ((queryOne('SELECT vat_status FROM user_settings LIMIT 1') as Record<string, string>)?.vat_status as 'exempt' | 'standard') || 'exempt';
     const yearlyMonthly = queryAll(
       `SELECT strftime('%Y-%m', issue_date) as month, SUM(amount) as total
        FROM invoices WHERE status = 'paid' AND issue_date >= date('now', 'start of year')
@@ -1041,64 +1132,232 @@ export function registerIpcHandlers() {
       `SELECT AVG(CAST(julianday(due_date) - julianday(issue_date) AS REAL)) as avg_days
        FROM invoices WHERE status = 'paid' AND issue_date IS NOT NULL AND due_date IS NOT NULL`
     ) as Record<string, number>)?.avg_days ?? 0;
-    const monthlySubscriptions = (queryOne(
-      `SELECT COALESCE(SUM(COALESCE(amount_huf, amount)), 0) as total FROM expenses
-       WHERE type = 'subscription' AND frequency = 'monthly'
-         AND (end_date IS NULL OR end_date >= date('now'))`
+
+    // ─── Expense actuals (no forecasting) ──────────────────────────────
+    // Load all expenses and compute:
+    //  - actualThisMonth: amount charged in the current calendar month
+    //  - actualYTD: amount actually paid year-to-date
+    //  - actualByCategoryYTD: YTD grouped by category
+    //  - actualTrend: per-month actuals for the last 12 months
+    const allExpenses = queryAll(
+      `SELECT id, category, type, frequency, amount, amount_huf, extra_amount, start_date, end_date FROM expenses`
+    ) as { id: string; category: string; type: string; frequency: 'monthly' | 'yearly' | 'one-time'; amount: number; amount_huf: number | null; extra_amount: number | null; start_date: string; end_date: string | null }[];
+
+    const hufOf = (e: typeof allExpenses[number]) => {
+      const base = e.amount_huf ?? e.amount;
+      const ratio = e.amount ? (e.amount_huf ?? e.amount) / e.amount : 1;
+      const extra = (e.extra_amount ?? 0) * ratio;
+      return base + extra;
+    };
+    const parseDate = (s: string) => { const d = new Date(s + 'T00:00:00'); return d; };
+    const monthKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    const monthsInclusive = (a: Date, b: Date) => {
+      if (b < a) return 0;
+      return (b.getFullYear() - a.getFullYear()) * 12 + (b.getMonth() - a.getMonth()) + 1;
+    };
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const yearStart = new Date(today.getFullYear(), 0, 1);
+    const currentMonthKey = monthKey(today);
+    const firstOfCurrentMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+
+    // Trend window: last 12 months including current
+    const trendMonths: { key: string; firstOfMonth: Date }[] = [];
+    for (let i = 11; i >= 0; i--) {
+      const d = new Date(today.getFullYear(), today.getMonth() - i, 1);
+      trendMonths.push({ key: monthKey(d), firstOfMonth: d });
+    }
+    const trendTotals = new Map(trendMonths.map(m => [m.key, 0]));
+
+    let actualThisMonth = 0;
+    let actualYTD = 0;
+    const byCategoryYTD = new Map<string, number>();
+
+    for (const e of allExpenses) {
+      const amt = hufOf(e);
+      const start = parseDate(e.start_date);
+      const end = e.end_date ? parseDate(e.end_date) : null;
+
+      // ─── CURRENT MONTH ACTUAL ───
+      if (e.frequency === 'monthly') {
+        // Active if start <= end-of-month AND (no end OR end >= first-of-month)
+        if (start <= today && (!end || end >= firstOfCurrentMonth)) {
+          actualThisMonth += amt;
+        }
+      } else if (e.frequency === 'yearly') {
+        // Counts only in its anniversary month (start_date's month)
+        if (
+          start <= today &&
+          start.getMonth() === today.getMonth() &&
+          (!end || end >= firstOfCurrentMonth)
+        ) {
+          actualThisMonth += amt;
+        }
+      } else if (e.frequency === 'one-time') {
+        if (monthKey(start) === currentMonthKey) {
+          actualThisMonth += amt;
+        }
+      }
+
+      // ─── YEAR-TO-DATE ACTUAL ───
+      let ytdForExpense = 0;
+      if (e.frequency === 'monthly') {
+        const effStart = start > yearStart ? start : yearStart;
+        const effEnd = end && end < today ? end : today;
+        const months = monthsInclusive(effStart, effEnd);
+        ytdForExpense = Math.max(0, months) * amt;
+      } else if (e.frequency === 'yearly') {
+        // Anniversary this year already passed?
+        const anniv = new Date(today.getFullYear(), start.getMonth(), start.getDate());
+        if (start <= today && anniv <= today && (!end || end >= anniv)) {
+          ytdForExpense = amt;
+        }
+      } else if (e.frequency === 'one-time') {
+        if (start >= yearStart && start <= today) {
+          ytdForExpense = amt;
+        }
+      }
+      if (ytdForExpense > 0) {
+        actualYTD += ytdForExpense;
+        byCategoryYTD.set(e.category, (byCategoryYTD.get(e.category) ?? 0) + ytdForExpense);
+      }
+
+      // ─── 12-MONTH TREND ───
+      for (const tm of trendMonths) {
+        const monthEnd = new Date(tm.firstOfMonth.getFullYear(), tm.firstOfMonth.getMonth() + 1, 0);
+        if (e.frequency === 'monthly') {
+          if (start <= monthEnd && (!end || end >= tm.firstOfMonth)) {
+            trendTotals.set(tm.key, (trendTotals.get(tm.key) ?? 0) + amt);
+          }
+        } else if (e.frequency === 'yearly') {
+          if (
+            start <= monthEnd &&
+            start.getMonth() === tm.firstOfMonth.getMonth() &&
+            (!end || end >= tm.firstOfMonth)
+          ) {
+            trendTotals.set(tm.key, (trendTotals.get(tm.key) ?? 0) + amt);
+          }
+        } else if (e.frequency === 'one-time') {
+          if (monthKey(start) === tm.key) {
+            trendTotals.set(tm.key, (trendTotals.get(tm.key) ?? 0) + amt);
+          }
+        }
+      }
+    }
+
+    const monthlyExpenses = Math.round(actualThisMonth);
+    // Team monthly payroll costs (aktív alkalmazottak bérköltsége HUF-ban)
+    const monthlyPayroll = (queryOne(
+      `SELECT COALESCE(SUM(COALESCE(salary_huf, monthly_salary, 0)), 0) as total
+       FROM team_members
+       WHERE employment_type = 'employee'
+         AND (status IS NULL OR status = 'active')
+         AND monthly_salary IS NOT NULL`
     ) as Record<string, number>)?.total ?? 0;
-    const yearlySubscriptions = (queryOne(
-      `SELECT COALESCE(SUM(COALESCE(amount_huf, amount) / 12.0), 0) as total FROM expenses
-       WHERE type = 'subscription' AND frequency = 'yearly'
-         AND (end_date IS NULL OR end_date >= date('now'))`
+    // Open contractor/freelancer fees on active projects (alvállalkozói díjak)
+    const openContractorFees = (queryOne(
+      `SELECT COALESCE(SUM(COALESCE(pa.fee_huf, pa.fee, 0)), 0) as total
+       FROM project_assignments pa
+       JOIN team_members tm ON pa.team_member_id = tm.id
+       JOIN projects p ON pa.project_id = p.id
+       WHERE tm.employment_type IN ('contractor', 'freelancer')
+         AND p.status = 'active'
+         AND pa.fee IS NOT NULL`
     ) as Record<string, number>)?.total ?? 0;
-    const monthlyExpenses = Math.round(monthlySubscriptions + yearlySubscriptions);
-    const yearlyExpenses = (queryOne(
-      `SELECT COALESCE(SUM(
-        CASE
-          WHEN frequency = 'monthly' THEN COALESCE(amount_huf, amount) * 12
-          WHEN frequency = 'yearly' THEN COALESCE(amount_huf, amount)
-          WHEN frequency = 'one-time' THEN COALESCE(amount_huf, amount)
-        END
-      ), 0) as total FROM expenses
-       WHERE (end_date IS NULL OR end_date >= date('now', 'start of year'))
-         AND start_date <= date('now')`
+    // Contractor fees assigned in the current month
+    const contractorFeesThisMonth = (queryOne(
+      `SELECT COALESCE(SUM(COALESCE(pa.fee_huf, pa.fee, 0)), 0) as total
+       FROM project_assignments pa
+       JOIN team_members tm ON pa.team_member_id = tm.id
+       WHERE tm.employment_type IN ('contractor', 'freelancer')
+         AND pa.fee IS NOT NULL
+         AND strftime('%Y-%m', pa.assigned_at) = strftime('%Y-%m', 'now')`
     ) as Record<string, number>)?.total ?? 0;
-    const revenueGoal = (queryOne('SELECT revenue_goal_yearly FROM user_settings LIMIT 1') as Record<string, number>)?.revenue_goal_yearly ?? 0;
-    const expensesByCategory = queryAll(
-      `SELECT category, COALESCE(SUM(
-        CASE
-          WHEN frequency = 'monthly' THEN COALESCE(amount_huf, amount) * 12
-          WHEN frequency = 'yearly' THEN COALESCE(amount_huf, amount)
-          WHEN frequency = 'one-time' THEN COALESCE(amount_huf, amount)
-        END
-      ), 0) as total FROM expenses
-       WHERE (end_date IS NULL OR end_date >= date('now', 'start of year'))
-         AND start_date <= date('now')
-       GROUP BY category ORDER BY total DESC`
-    ) as { category: string; total: number }[];
-    const monthlyExpensesTrend = queryAll(
-      `SELECT strftime('%Y-%m', start_date) as month, COALESCE(SUM(
-        CASE
-          WHEN frequency = 'monthly' THEN COALESCE(amount_huf, amount)
-          WHEN frequency = 'yearly' THEN COALESCE(amount_huf, amount) / 12.0
-          WHEN frequency = 'one-time' THEN COALESCE(amount_huf, amount)
-        END
-      ), 0) as total FROM expenses
-       WHERE start_date >= date('now', '-11 months', 'start of month')
-         AND (end_date IS NULL OR end_date >= date('now', '-11 months', 'start of month'))
-       GROUP BY month ORDER BY month ASC`
+    // Contractor fees assigned in the current year
+    const contractorFeesThisYear = (queryOne(
+      `SELECT COALESCE(SUM(COALESCE(pa.fee_huf, pa.fee, 0)), 0) as total
+       FROM project_assignments pa
+       JOIN team_members tm ON pa.team_member_id = tm.id
+       WHERE tm.employment_type IN ('contractor', 'freelancer')
+         AND pa.fee IS NOT NULL
+         AND strftime('%Y', pa.assigned_at) = strftime('%Y', 'now')`
+    ) as Record<string, number>)?.total ?? 0;
+    // Payroll already paid YTD (number of months elapsed this year × monthly payroll)
+    const monthsElapsedYTD = today.getMonth() + 1;
+    const payrollYTD = monthlyPayroll * monthsElapsedYTD;
+    // Team cost items for list display (all time — kész projektek is)
+    const teamCostItems = queryAll(
+      `SELECT pa.id, pa.assigned_at, pa.fee, pa.fee_currency, pa.fee_huf,
+              tm.name as member_name, tm.role as member_role, tm.employment_type,
+              p.name as project_name
+       FROM project_assignments pa
+       JOIN team_members tm ON pa.team_member_id = tm.id
+       JOIN projects p ON pa.project_id = p.id
+       WHERE tm.employment_type IN ('contractor', 'freelancer')
+         AND pa.fee IS NOT NULL
+       ORDER BY pa.assigned_at DESC`
+    ) as { id: string; assigned_at: string; fee: number; fee_currency: string; fee_huf: number | null; member_name: string; member_role: string | null; employment_type: string; project_name: string }[];
+    // Employee salary items for list display
+    const employeeSalaryItems = queryAll(
+      `SELECT id, name, role, monthly_salary, salary_currency, salary_huf
+       FROM team_members
+       WHERE employment_type = 'employee'
+         AND (status IS NULL OR status = 'active')
+         AND monthly_salary IS NOT NULL AND monthly_salary > 0
+       ORDER BY name ASC`
+    ) as { id: string; name: string; role: string | null; monthly_salary: number; salary_currency: string | null; salary_huf: number | null }[];
+    // Final totals
+    const monthlyExpensesTotal = Math.round(monthlyExpenses + monthlyPayroll + contractorFeesThisMonth);
+    const goalsRow = queryOne('SELECT revenue_goal_yearly, profit_goal_yearly FROM user_settings LIMIT 1') as Record<string, number> | null;
+    const revenueGoal = goalsRow?.revenue_goal_yearly ?? 0;
+    const profitGoal = goalsRow?.profit_goal_yearly ?? 0;
+    const yearlyExpenses = Math.round(actualYTD + payrollYTD + contractorFeesThisYear);
+    // Categories (YTD actuals) + virtual team categories
+    const expensesByCategory = Array.from(byCategoryYTD.entries())
+      .map(([category, total]) => ({ category, total: Math.round(total) }))
+      .sort((a, b) => b.total - a.total);
+    const virtualCats: { category: string; total: number }[] = [];
+    if (payrollYTD > 0) virtualCats.push({ category: 'berkoltseg', total: Math.round(payrollYTD) });
+    if (contractorFeesThisYear > 0) virtualCats.push({ category: 'alvallalkozo', total: Math.round(contractorFeesThisYear) });
+    const expensesByCategoryFull = [...virtualCats, ...expensesByCategory];
+    // Contractor fees per month for trend merging
+    const contractorFeesByMonth = queryAll(
+      `SELECT strftime('%Y-%m', pa.assigned_at) as month,
+              COALESCE(SUM(COALESCE(pa.fee_huf, pa.fee, 0)), 0) as total
+       FROM project_assignments pa
+       JOIN team_members tm ON pa.team_member_id = tm.id
+       WHERE tm.employment_type IN ('contractor', 'freelancer')
+         AND pa.fee IS NOT NULL
+         AND pa.assigned_at >= date('now', '-11 months', 'start of month')
+       GROUP BY month`
     ) as { month: string; total: number }[];
+    const feeByMonth = new Map(contractorFeesByMonth.map(r => [r.month, r.total]));
+    const monthlyExpensesTrend = trendMonths.map(tm => ({
+      month: tm.key,
+      total: Math.round((trendTotals.get(tm.key) ?? 0) + monthlyPayroll + (feeByMonth.get(tm.key) ?? 0)),
+    }));
     return {
       paidLastMonth,
       yearlyRevenue,
+      yearlyNetRevenue,
+      vatPayable,
+      vatDeductible,
+      vatBalance,
+      vatStatus,
       yearlyMonthly,
       topClients,
       avgPaymentDays: Math.round(avgPaymentDays),
-      monthlyExpenses,
-      yearlyExpenses: Math.round(yearlyExpenses),
+      monthlyExpenses: monthlyExpensesTotal,
+      yearlyExpenses,
+      monthlyPayroll: Math.round(monthlyPayroll),
+      openContractorFees: Math.round(openContractorFees),
       revenueGoal,
-      expensesByCategory,
+      profitGoal,
+      expensesByCategory: expensesByCategoryFull,
       monthlyExpensesTrend,
+      teamCostItems,
+      employeeSalaryItems,
     };
   });
 
@@ -1109,16 +1368,39 @@ export function registerIpcHandlers() {
 
   ipcMain.handle('db:expenses:create', (_event, data: Record<string, unknown>) => {
     const id = uuidv4();
-    const amountHuf = data.amount_huf ?? data.amount;
+    const amountHuf = (data.amount_huf as number | undefined) ?? (data.amount as number);
+    // ÁFA szétbontás
+    const user = queryOne('SELECT vat_status, vat_rate_default FROM user_settings LIMIT 1') as Record<string, unknown> | null;
+    const vatStatus = (user?.vat_status as string) || 'exempt';
+    const defaultRate = (user?.vat_rate_default as number) ?? 27;
+    const amount = Number(data.amount);
+    let vatRate = data.vat_rate as number | undefined;
+    let netAmount = data.net_amount as number | undefined;
+    let vatAmount = data.vat_amount as number | undefined;
+    let netAmountHuf = data.net_amount_huf as number | undefined;
+    let vatAmountHuf = data.vat_amount_huf as number | undefined;
+    if (vatRate === undefined) vatRate = vatStatus === 'exempt' ? 0 : defaultRate;
+    if (netAmount === undefined || vatAmount === undefined) {
+      const divisor = 1 + (vatRate / 100);
+      netAmount = Math.round((amount / divisor) * 100) / 100;
+      vatAmount = Math.round((amount - netAmount) * 100) / 100;
+    }
+    if (netAmountHuf === undefined || vatAmountHuf === undefined) {
+      const divisor = 1 + (vatRate / 100);
+      const ah = Number(amountHuf);
+      netAmountHuf = Math.round((ah / divisor) * 100) / 100;
+      vatAmountHuf = Math.round((ah - netAmountHuf) * 100) / 100;
+    }
+    const vatDeductible = (data.vat_deductible as number | undefined) ?? 1;
     execute(
-      `INSERT INTO expenses (id, name, amount, currency, amount_huf, category, type, frequency, start_date, end_date, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [id, data.name, data.amount, data.currency || 'HUF', amountHuf, data.category || 'other', data.type || 'subscription', data.frequency || 'monthly', data.start_date || new Date().toISOString().split('T')[0], data.end_date || null, data.notes || null]
+      `INSERT INTO expenses (id, name, amount, currency, amount_huf, vat_rate, net_amount, vat_amount, net_amount_huf, vat_amount_huf, vat_deductible, category, type, frequency, start_date, end_date, notes, extra_amount, extra_description) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [id, data.name, amount, data.currency || 'HUF', amountHuf, vatRate, netAmount, vatAmount, netAmountHuf, vatAmountHuf, vatDeductible, data.category || 'other', data.type || 'subscription', data.frequency || 'monthly', data.start_date || new Date().toISOString().split('T')[0], data.end_date || null, data.notes || null, data.extra_amount || null, data.extra_description || null]
     );
     return queryOne('SELECT * FROM expenses WHERE id = ?', [id]);
   });
 
   ipcMain.handle('db:expenses:update', (_event, id: string, data: Record<string, unknown>) => {
-    const allowedFields = ['name', 'amount', 'currency', 'amount_huf', 'category', 'type', 'frequency', 'start_date', 'end_date', 'notes'];
+    const allowedFields = ['name', 'amount', 'currency', 'amount_huf', 'vat_rate', 'net_amount', 'vat_amount', 'net_amount_huf', 'vat_amount_huf', 'vat_deductible', 'category', 'type', 'frequency', 'start_date', 'end_date', 'notes', 'extra_amount', 'extra_description'];
     const filteredData: Record<string, unknown> = {};
     for (const key of allowedFields) {
       if (key in data) filteredData[key] = data[key];
@@ -1330,6 +1612,22 @@ export function registerIpcHandlers() {
     return `${sanitizedClient}/${sanitizedProject}`;
   });
 
+  ipcMain.handle('files:saveToClientInvoices', (_event, clientName: string, fileName: string, base64Data: string) => {
+    const sanitizedClient = clientName.replace(/[<>:"/\\|?*]/g, '_').trim();
+    const invoicesDir = path.join(filesRoot, sanitizedClient, 'Számlák');
+    if (!fs.existsSync(invoicesDir)) {
+      fs.mkdirSync(invoicesDir, { recursive: true });
+    }
+    const safeName = fileName.replace(/[<>:"/\\|?*]/g, '_').trim();
+    const filePath = path.join(invoicesDir, safeName);
+    // Prevent directory traversal
+    if (!filePath.startsWith(invoicesDir)) {
+      throw new Error('Invalid file path');
+    }
+    fs.writeFileSync(filePath, Buffer.from(base64Data, 'base64'));
+    return { relativePath: `${sanitizedClient}/Számlák/${safeName}`, absolutePath: filePath };
+  });
+
   ipcMain.handle('files:renameFolder', (_event, oldRelPath: string, newRelPath: string) => {
     const oldPath = safeResolvePath(oldRelPath);
     const newPath = safeResolvePath(newRelPath);
@@ -1396,6 +1694,91 @@ export function registerIpcHandlers() {
     return result.filePaths;
   });
 
+  // Resolve relative path to absolute (for drag-out, clipboard)
+  ipcMain.handle('files:getAbsolutePath', (_event, relativePath: string) => {
+    return safeResolvePath(relativePath);
+  });
+
+  // Copy/cut files within the file manager
+  ipcMain.handle('files:moveFiles', (_event, sourcePaths: string[], targetRelPath: string) => {
+    const targetDir = safeResolvePath(targetRelPath);
+    if (!fs.existsSync(targetDir)) {
+      fs.mkdirSync(targetDir, { recursive: true });
+    }
+    const moved: string[] = [];
+    for (const relSrc of sourcePaths) {
+      const srcAbs = safeResolvePath(relSrc);
+      const name = path.basename(srcAbs);
+      const dest = path.join(targetDir, name);
+      if (srcAbs !== dest && fs.existsSync(srcAbs)) {
+        fs.renameSync(srcAbs, dest);
+        moved.push(name);
+      }
+    }
+    return { success: true, moved };
+  });
+
+  // Start native drag-out from the app (must use 'on' + 'send', not 'handle' + 'invoke')
+  ipcMain.on('files:startDrag', (event, relativePaths: string[]) => {
+    const absPaths = relativePaths.map(p => safeResolvePath(p));
+    const existing = absPaths.filter(p => fs.existsSync(p));
+    if (existing.length === 0) return;
+    const { nativeImage } = require('electron') as typeof import('electron');
+    // Create a minimal 1x1 transparent icon (required by startDrag)
+    const icon = nativeImage.createFromBuffer(
+      Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPj/HwADBwIAMCbHYQAAAABJRU5ErkJggg==', 'base64')
+    );
+    event.sender.startDrag({
+      file: existing[0],
+      files: existing,
+      icon,
+    });
+  });
+
+  // Copy files to OS clipboard for pasting into Explorer/Finder
+  ipcMain.handle('files:copyToClipboard', async (_event, relativePaths: string[]) => {
+    const absPaths = relativePaths.map(p => safeResolvePath(p));
+    const existing = absPaths.filter(p => fs.existsSync(p));
+    if (existing.length === 0) return { success: false };
+    if (process.platform === 'win32') {
+      // Use PowerShell Set-Clipboard -Path for proper CF_HDROP on Windows
+      const { exec } = require('child_process') as typeof import('child_process');
+      const escaped = existing.map(p => `'${p.replace(/'/g, "''")}'`).join(',');
+      await new Promise<void>((resolve) => {
+        exec(`powershell -NoProfile -Command "Set-Clipboard -Path ${escaped}"`, () => resolve());
+      });
+    } else {
+      // macOS/Linux: Write file URIs as text
+      const { clipboard } = require('electron') as typeof import('electron');
+      const uris = existing.map(p => `file://${p}`).join('\n');
+      clipboard.writeText(uris);
+    }
+    return { success: true };
+  });
+
+  // Duplicate files/folders in-place
+  ipcMain.handle('files:duplicate', (_event, relativePath: string) => {
+    const srcAbs = safeResolvePath(relativePath);
+    if (!fs.existsSync(srcAbs)) return { success: false };
+    const dir = path.dirname(srcAbs);
+    const ext = path.extname(srcAbs);
+    const base = path.basename(srcAbs, ext);
+    let suffix = 1;
+    let dest: string;
+    do {
+      const newName = `${base} (${suffix})${ext}`;
+      dest = path.join(dir, newName);
+      suffix++;
+    } while (fs.existsSync(dest));
+    const stat = fs.statSync(srcAbs);
+    if (stat.isDirectory()) {
+      copyDirRecursive(srcAbs, dest);
+    } else {
+      fs.copyFileSync(srcAbs, dest);
+    }
+    return { success: true, newName: path.basename(dest) };
+  });
+
   // ============ TEAM MEMBERS ============
 
   ipcMain.handle('db:team:getAll', () => {
@@ -1409,14 +1792,26 @@ export function registerIpcHandlers() {
   ipcMain.handle('db:team:create', (_event, data: Record<string, unknown>) => {
     const id = uuidv4();
     execute(
-      `INSERT INTO team_members (id, name, email, phone, role, hourly_rate, employment_type, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [id, data.name, data.email || null, data.phone || null, data.role || null, data.hourly_rate || null, data.employment_type || 'employee', data.notes || null]
+      `INSERT INTO team_members (id, name, email, phone, role, employment_type, status, monthly_salary, salary_currency, salary_huf, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id,
+        data.name,
+        data.email || null,
+        data.phone || null,
+        data.role || null,
+        data.employment_type || 'employee',
+        data.status || 'active',
+        data.monthly_salary ?? null,
+        data.salary_currency || 'HUF',
+        data.salary_huf ?? null,
+        data.notes || null,
+      ]
     );
     return queryOne('SELECT * FROM team_members WHERE id = ?', [id]);
   });
 
   ipcMain.handle('db:team:update', (_event, id: string, data: Record<string, unknown>) => {
-    const allowedFields = ['name', 'email', 'phone', 'role', 'hourly_rate', 'employment_type', 'notes'];
+    const allowedFields = ['name', 'email', 'phone', 'role', 'employment_type', 'status', 'monthly_salary', 'salary_currency', 'salary_huf', 'notes'];
     const filteredData: Record<string, unknown> = {};
     for (const key of allowedFields) {
       if (key in data) filteredData[key] = data[key];
@@ -1438,7 +1833,11 @@ export function registerIpcHandlers() {
 
   ipcMain.handle('db:team:getProjectAssignments', (_event, projectId: string) => {
     return queryAll(
-      `SELECT pa.*, tm.name as member_name, tm.email as member_email, tm.role as member_role
+      `SELECT pa.*,
+              tm.name as member_name,
+              tm.email as member_email,
+              tm.role as member_role,
+              tm.employment_type as member_employment_type
        FROM project_assignments pa
        JOIN team_members tm ON pa.team_member_id = tm.id
        WHERE pa.project_id = ?
@@ -1458,18 +1857,41 @@ export function registerIpcHandlers() {
     );
   });
 
-  ipcMain.handle('db:team:assignToProject', (_event, projectId: string, teamMemberId: string, notes?: string) => {
+  ipcMain.handle('db:team:assignToProject', (_event, projectId: string, teamMemberId: string, data?: { fee?: number | null; fee_currency?: string; fee_huf?: number | null; notes?: string | null }) => {
     const existing = queryOne(
       'SELECT id FROM project_assignments WHERE project_id = ? AND team_member_id = ?',
       [projectId, teamMemberId]
     );
     if (existing) return existing;
     const id = uuidv4();
+    const payload = data ?? {};
     execute(
-      'INSERT INTO project_assignments (id, project_id, team_member_id, notes) VALUES (?, ?, ?, ?)',
-      [id, projectId, teamMemberId, notes || null]
+      'INSERT INTO project_assignments (id, project_id, team_member_id, fee, fee_currency, fee_huf, notes) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [
+        id,
+        projectId,
+        teamMemberId,
+        payload.fee ?? null,
+        payload.fee_currency || 'HUF',
+        payload.fee_huf ?? null,
+        payload.notes || null,
+      ]
     );
     return queryOne('SELECT * FROM project_assignments WHERE id = ?', [id]);
+  });
+
+  ipcMain.handle('db:team:updateAssignment', (_event, assignmentId: string, data: Record<string, unknown>) => {
+    const allowedFields = ['fee', 'fee_currency', 'fee_huf', 'notes'];
+    const filteredData: Record<string, unknown> = {};
+    for (const key of allowedFields) {
+      if (key in data) filteredData[key] = data[key];
+    }
+    const fields = Object.keys(filteredData).map(k => `${k} = ?`).join(', ');
+    const values = Object.values(filteredData);
+    if (fields) {
+      execute(`UPDATE project_assignments SET ${fields} WHERE id = ?`, [...values, assignmentId]);
+    }
+    return queryOne('SELECT * FROM project_assignments WHERE id = ?', [assignmentId]);
   });
 
   ipcMain.handle('db:team:unassignFromProject', (_event, projectId: string, teamMemberId: string) => {
@@ -1513,5 +1935,907 @@ export function registerIpcHandlers() {
 
   ipcMain.handle('db:tax:getCalculationHistory', (_event, limit?: number) => {
     return taxService.getTaxCalculationHistory(limit);
+  });
+
+  // ── New tax module handlers ──
+
+  ipcMain.handle('db:tax:getParameters', (_event, year: number) => {
+    return taxService.getTaxParameters(year);
+  });
+
+  ipcMain.handle('db:tax:getProfile', (_event, userId?: string) => {
+    return taxService.getBusinessProfile(userId);
+  });
+
+  ipcMain.handle('db:tax:saveProfile', (_event, profile: import('./tax-types').BusinessProfile) => {
+    taxService.saveBusinessProfile(profile);
+    taxService.syncTaxDeadlinesToCalendar(profile.userId);
+    return { success: true };
+  });
+
+  ipcMain.handle('db:tax:searchHipa', (_event, query: string) => {
+    return taxService.searchHipaRates(query);
+  });
+
+  ipcMain.handle('db:tax:getHipaRate', (_event, megye: string, telepules: string) => {
+    return taxService.getHipaRate(megye, telepules);
+  });
+
+  ipcMain.handle('db:tax:fullEstimate', (_event, userId: string | undefined, adoev: number, evesBevétel: number) => {
+    return taxService.getFullTaxEstimate(userId, adoev, evesBevétel);
+  });
+
+  ipcMain.handle('db:tax:getDeadlines', (_event, userId: string | undefined, adoev: number) => {
+    return taxService.getTaxDeadlines(userId, adoev);
+  });
+
+  ipcMain.handle('db:tax:getWarnings', (_event, userId: string | undefined, bevétel: number, adoev: number) => {
+    return taxService.getTaxWarnings(userId, bevétel, adoev);
+  });
+
+  ipcMain.handle('db:tax:compareForms', (_event, bevétel: number, koltsegek: number, adoev: number, hipaKulcs: number, kivet?: number) => {
+    return taxService.compareTaxFormsService(bevétel, koltsegek, adoev, hipaKulcs, kivet);
+  });
+
+  // ============ BILLING / INVOICING CONFIG ============
+
+  ipcMain.handle('billing:set-config', (_event, data: { platform: string; apiKey?: string; url?: string }) => {
+    setBillingConfig(data.platform, data.apiKey, data.url);
+    return { success: true };
+  });
+
+  ipcMain.handle('billing:get-config', () => {
+    return getBillingConfig();
+  });
+
+  ipcMain.handle('billing:test-connection', async (_event, data: { platform: string }) => {
+    const apiKey = getBillingApiKey();
+
+    if (data.platform === 'billingo') {
+      if (!apiKey) return { success: false, error: 'Nincs mentett API kulcs' };
+      try {
+        const res = await fetch('https://api.billingo.hu/v3/utils/time', {
+          headers: { 'X-API-KEY': apiKey },
+        });
+        if (res.ok) return { success: true };
+        if (res.status === 401 || res.status === 403) return { success: false, error: 'Hibás API kulcs' };
+        return { success: false, error: `Hiba: ${res.status}` };
+      } catch (err: any) {
+        return { success: false, error: err.message || 'Hálózati hiba' };
+      }
+    }
+
+    if (data.platform === 'szamlazz') {
+      if (!apiKey) return { success: false, error: 'Nincs mentett agent kulcs' };
+      if (apiKey.length < 32) return { success: false, error: 'Az agent kulcs túl rövid (legalább 32 karakter)' };
+      return { success: true };
+    }
+
+    return { success: false, error: 'Ismeretlen platform' };
+  });
+
+  ipcMain.handle('billing:clear-config', () => {
+    clearBillingConfig();
+    return { success: true };
+  });
+
+  // ============ BILLINGO ADAPTER ============
+
+  ipcMain.handle('billing:billingo:get-blocks', async () => {
+    try {
+      return { success: true, data: await billingoAdapter.getDocumentBlocks() };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('billing:billingo:get-banks', async () => {
+    try {
+      return { success: true, data: await billingoAdapter.getBankAccounts() };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('billing:billingo:ensure-partner', async (_event, clientData: any) => {
+    try {
+      const partnerId = await billingoAdapter.ensurePartner(clientData);
+      return { success: true, partnerId };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('billing:billingo:create-invoice', async (_event, request: any) => {
+    try {
+      const result = await billingoAdapter.createInvoice(request);
+      return { success: true, data: result };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('billing:billingo:get-pdf', async (_event, invoiceId: number) => {
+    try {
+      const buffer = await billingoAdapter.getInvoicePdf(invoiceId);
+      return { success: true, data: buffer.toString('base64') };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('billing:billingo:cancel', async (_event, invoiceId: number) => {
+    try {
+      await billingoAdapter.cancelInvoice(invoiceId);
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('billing:billingo:get-status', async (_event, invoiceId: number) => {
+    try {
+      const status = await billingoAdapter.getInvoiceStatus(invoiceId);
+      return { success: true, status };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  // ============ SZÁMLÁZZ.HU ADAPTER ============
+
+  ipcMain.handle('billing:szamlazz:create-invoice', async (_event, request: any) => {
+    try {
+      const result = await szamlazzAdapter.createInvoice(request);
+      return { success: true, data: result };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('billing:szamlazz:get-by-external-id', async (_event, externalId: string) => {
+    try {
+      const result = await szamlazzAdapter.getInvoiceByExternalId(externalId);
+      return { success: true, data: result };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('billing:szamlazz:cancel', async (_event, invoiceNumber: string) => {
+    try {
+      await szamlazzAdapter.cancelInvoice(invoiceNumber);
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  // ============ UNIFIED BILLING SERVICE ============
+
+  ipcMain.handle('billing:get-active-provider', () => {
+    return { provider: billingService.getActiveProvider() };
+  });
+
+  ipcMain.handle('billing:create-invoice', async (_event, request: any) => {
+    try {
+      const result = await billingService.createInvoice(request);
+      return { success: true, data: result };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  // ============ BILLING SYNC ============
+
+  ipcMain.handle('billing:sync-invoices', async () => {
+    try {
+      const result = await syncService.syncAll();
+      return { success: true, data: result };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('billing:mark-invoice-paid', async (_event, providerInvoiceId: string, provider: string, amount?: number) => {
+    try {
+      await billingService.markInvoicePaid(providerInvoiceId, provider, amount);
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('billing:get-last-sync-time', () => {
+    return { time: syncService.getLastSyncTime() };
+  });
+
+  // ============ GOOGLE ADS - AUTH & CREDENTIALS ============
+
+  ipcMain.handle('ads:save-credentials', async (_event, config: {
+    developerToken: string;
+    clientId: string;
+    clientSecret: string;
+    mccId?: string;
+  }) => {
+    try {
+      saveGoogleCredentials(config);
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('ads:get-credentials', () => {
+    const creds = getGoogleCredentials();
+    // Never return secrets to renderer — only hasCredentials + mccId
+    return {
+      hasCredentials: creds.hasCredentials,
+      mccId: creds.mccId,
+      clientId: creds.clientId,
+    };
+  });
+
+  ipcMain.handle('ads:clear-credentials', () => {
+    clearGoogleCredentials();
+    return { success: true };
+  });
+
+  ipcMain.handle('ads:start-oauth', async () => {
+    try {
+      const { accessToken, refreshToken } = await startOAuthFlow();
+      // List accessible accounts
+      const customerIds = await listAccessibleAccounts(accessToken);
+      // Get info for each account
+      const accounts = await Promise.all(
+        customerIds.map(async (cid) => {
+          try {
+            return await getAccountInfo(accessToken, cid);
+          } catch {
+            return { customerId: cid, name: `Account ${cid}`, currency: 'HUF', timezone: 'Europe/Budapest', isMcc: false };
+          }
+        }),
+      );
+
+      // For MCC accounts, also fetch their client accounts
+      const mccAccounts = accounts.filter(a => a.isMcc);
+      const clientAccountSets = await Promise.all(
+        mccAccounts.map(mcc => listMccClientAccounts(accessToken, mcc.customerId)),
+      );
+
+      // Build combined list: MCC accounts + all client accounts (deduplicated)
+      const seen = new Set(accounts.map(a => a.customerId.replace(/-/g, '')));
+      const allAccounts = [...accounts];
+      for (const clientAccounts of clientAccountSets) {
+        for (const client of clientAccounts) {
+          const cleanId = client.customerId.replace(/-/g, '');
+          if (!seen.has(cleanId)) {
+            seen.add(cleanId);
+            allAccounts.push(client);
+          }
+        }
+      }
+
+      return { success: true, data: { accounts: allAccounts, refreshToken } };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('ads:connect-account', async (_event, account: {
+    customerId: string;
+    name: string;
+    currency: string;
+    timezone: string;
+    isMcc: boolean;
+    refreshToken: string;
+  }) => {
+    try {
+      const cleanCustomerId = account.customerId.replace(/-/g, '');
+
+      // Check if this customer_id already exists (e.g. previously disconnected)
+      const existing = queryOne(
+        `SELECT id, status FROM ads_accounts WHERE customer_id = ?`,
+        [cleanCustomerId],
+      );
+
+      let id: string;
+      if (existing) {
+        // Reactivate existing record
+        id = existing.id as string;
+        saveAccountRefreshToken(id, account.refreshToken);
+        execute(
+          `UPDATE ads_accounts SET name = ?, currency = ?, timezone = ?, is_mcc = ?, status = 'active', updated_at = datetime('now') WHERE id = ?`,
+          [account.name, account.currency, account.timezone, account.isMcc ? 1 : 0, id],
+        );
+      } else {
+        // Insert new record
+        id = uuidv4();
+        saveAccountRefreshToken(id, account.refreshToken);
+        execute(
+          `INSERT INTO ads_accounts (id, customer_id, name, currency, timezone, is_mcc, status, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, 'active', datetime('now'), datetime('now'))`,
+          [id, cleanCustomerId, account.name, account.currency, account.timezone, account.isMcc ? 1 : 0],
+        );
+      }
+
+      return { success: true, data: { id } };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('ads:disconnect-account', async (_event, accountId: string) => {
+    try {
+      removeAccountRefreshToken(accountId);
+      execute(`UPDATE ads_accounts SET status = 'disconnected', updated_at = datetime('now') WHERE id = ?`, [accountId]);
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('ads:get-accounts', () => {
+    try {
+      const accounts = queryAll(`SELECT id, customer_id, name, currency, timezone, is_mcc, parent_mcc_id, status, last_sync_at, client_id, created_at, updated_at FROM ads_accounts WHERE status != 'disconnected' ORDER BY created_at DESC`);
+      return { success: true, data: accounts };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('ads:link-account', (_event, accountId: string, clientId: string | null) => {
+    try {
+      execute(`UPDATE ads_accounts SET client_id = ? WHERE id = ?`, [clientId, accountId]);
+      saveDb();
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('ads:get-client-ads-summary', (_event, clientId: string) => {
+    try {
+      const today = new Date().toISOString().slice(0, 10);
+      const d30 = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+      const d60 = new Date(Date.now() - 60 * 86400000).toISOString().slice(0, 10);
+
+      const accounts = queryAll(
+        `SELECT id, customer_id, name FROM ads_accounts WHERE client_id = ? AND status = 'active'`,
+        [clientId],
+      );
+      if (accounts.length === 0) return { success: true, data: null };
+
+      const accountIds = accounts.map(a => a.id as string);
+      const placeholders = accountIds.map(() => '?').join(',');
+
+      // Current 30d KPIs
+      const kpi = queryOne(
+        `SELECT SUM(impressions) as impressions, SUM(clicks) as clicks, SUM(cost_micros) as cost_micros,
+                SUM(conversions) as conversions, SUM(conversions_value) as conversions_value
+         FROM ads_daily_metrics
+         WHERE account_id IN (${placeholders}) AND entity_type = 'campaign' AND date BETWEEN ? AND ?`,
+        [...accountIds, d30, today],
+      );
+
+      // Previous 30d for delta
+      const prevKpi = queryOne(
+        `SELECT SUM(cost_micros) as cost_micros, SUM(conversions) as conversions
+         FROM ads_daily_metrics
+         WHERE account_id IN (${placeholders}) AND entity_type = 'campaign' AND date BETWEEN ? AND ?`,
+        [...accountIds, d60, d30],
+      );
+
+      // Campaigns
+      const campaigns = queryAll(
+        `SELECT c.campaign_id, c.name, c.type, c.status,
+                SUM(m.impressions) as impressions, SUM(m.clicks) as clicks,
+                SUM(m.cost_micros) as cost_micros, SUM(m.conversions) as conversions,
+                SUM(m.conversions_value) as conversions_value
+         FROM ads_campaigns c
+         LEFT JOIN ads_daily_metrics m ON m.entity_id = c.campaign_id AND m.entity_type = 'campaign'
+           AND m.account_id = c.account_id AND m.date BETWEEN ? AND ?
+         WHERE c.account_id IN (${placeholders})
+         GROUP BY c.id ORDER BY cost_micros DESC LIMIT 10`,
+        [d30, today, ...accountIds],
+      );
+
+      // Daily cost for sparkline (last 30 days)
+      const dailyCost = queryAll(
+        `SELECT date, SUM(cost_micros) as cost_micros
+         FROM ads_daily_metrics
+         WHERE account_id IN (${placeholders}) AND entity_type = 'campaign' AND date BETWEEN ? AND ?
+         GROUP BY date ORDER BY date`,
+        [...accountIds, d30, today],
+      );
+
+      return {
+        success: true,
+        data: {
+          accounts,
+          kpi: {
+            impressions: Number(kpi?.impressions || 0),
+            clicks: Number(kpi?.clicks || 0),
+            cost_micros: Number(kpi?.cost_micros || 0),
+            conversions: Number(kpi?.conversions || 0),
+            conversions_value: Number(kpi?.conversions_value || 0),
+          },
+          prevCostMicros: Number(prevKpi?.cost_micros || 0),
+          prevConversions: Number(prevKpi?.conversions || 0),
+          campaigns,
+          dailyCost,
+        },
+      };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('ads:get-total-spend-summary', () => {
+    try {
+      const today = new Date().toISOString().slice(0, 10);
+      const d30 = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+      const d60 = new Date(Date.now() - 60 * 86400000).toISOString().slice(0, 10);
+
+      const current = queryOne(
+        `SELECT SUM(cost_micros) as cost_micros FROM ads_daily_metrics
+         WHERE entity_type = 'campaign' AND date BETWEEN ? AND ?`,
+        [d30, today],
+      );
+      const previous = queryOne(
+        `SELECT SUM(cost_micros) as cost_micros FROM ads_daily_metrics
+         WHERE entity_type = 'campaign' AND date BETWEEN ? AND ?`,
+        [d60, d30],
+      );
+      const accountCount = queryOne(
+        `SELECT COUNT(*) as cnt FROM ads_accounts WHERE status = 'active'`,
+      );
+      return {
+        success: true,
+        data: {
+          currentSpend: Number(current?.cost_micros || 0),
+          previousSpend: Number(previous?.cost_micros || 0),
+          accountCount: Number(accountCount?.cnt || 0),
+        },
+      };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('ads:get-spend-by-client', () => {
+    try {
+      const today = new Date().toISOString().slice(0, 10);
+      const d30 = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+      const d60 = new Date(Date.now() - 60 * 86400000).toISOString().slice(0, 10);
+
+      const rows = queryAll(
+        `SELECT a.id as account_id, a.name as account_name, a.client_id,
+                c.name as client_name, c.color as client_color,
+                COALESCE(curr.cost_micros, 0) as current_spend,
+                COALESCE(prev.cost_micros, 0) as previous_spend
+         FROM ads_accounts a
+         LEFT JOIN clients c ON c.id = a.client_id
+         LEFT JOIN (
+           SELECT account_id, SUM(cost_micros) as cost_micros
+           FROM ads_daily_metrics WHERE entity_type = 'campaign' AND date BETWEEN ? AND ?
+           GROUP BY account_id
+         ) curr ON curr.account_id = a.id
+         LEFT JOIN (
+           SELECT account_id, SUM(cost_micros) as cost_micros
+           FROM ads_daily_metrics WHERE entity_type = 'campaign' AND date BETWEEN ? AND ?
+           GROUP BY account_id
+         ) prev ON prev.account_id = a.id
+         WHERE a.status = 'active'
+         ORDER BY curr.cost_micros DESC`,
+        [d30, today, d60, d30],
+      );
+      return { success: true, data: rows };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('ads:list-accounts', async () => {
+    try {
+      // Re-use stored refresh token from existing account to get accessible customers
+      const accounts = queryAll(`SELECT id FROM ads_accounts WHERE status = 'active' LIMIT 1`);
+      if (accounts.length === 0) {
+        return { success: false, error: 'No connected accounts. Start OAuth flow first.' };
+      }
+      const refreshToken = getAccountRefreshToken(accounts[0].id as string);
+      if (!refreshToken) {
+        return { success: false, error: 'No refresh token found.' };
+      }
+      const accessToken = await refreshAccessToken(refreshToken);
+      const customerIds = await listAccessibleAccounts(accessToken);
+      const accountInfos = await Promise.all(
+        customerIds.map(async (cid) => {
+          try {
+            return await getAccountInfo(accessToken, cid);
+          } catch {
+            return { customerId: cid, name: `Account ${cid}`, currency: 'HUF', timezone: 'Europe/Budapest', isMcc: false };
+          }
+        }),
+      );
+
+      // For MCC accounts, also fetch their client accounts
+      const mccAccounts = accountInfos.filter(a => a.isMcc);
+      const clientAccountSets = await Promise.all(
+        mccAccounts.map(mcc => listMccClientAccounts(accessToken, mcc.customerId)),
+      );
+
+      const seen = new Set(accountInfos.map(a => a.customerId.replace(/-/g, '')));
+      const allAccounts = [...accountInfos];
+      for (const clientAccounts of clientAccountSets) {
+        for (const client of clientAccounts) {
+          const cleanId = client.customerId.replace(/-/g, '');
+          if (!seen.has(cleanId)) {
+            seen.add(cleanId);
+            allAccounts.push(client);
+          }
+        }
+      }
+
+      return { success: true, data: allAccounts };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  // Google Ads Sync
+  ipcMain.handle('ads:sync-account', async (_event, accountId: string, syncType?: 'full' | 'incremental' | 'catchup') => {
+    try {
+      const records = await syncAccount(accountId, syncType || 'incremental');
+      return { success: true, data: { records } };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('ads:sync-all', async (_event, syncType?: 'full' | 'incremental' | 'catchup') => {
+    try {
+      const result = await syncAllAccounts(syncType || 'incremental');
+      return { success: true, data: result };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('ads:get-sync-log', (_event, accountId: string, limit?: number) => {
+    try {
+      const logs = getSyncLog(accountId, limit);
+      return { success: true, data: logs };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('ads:get-last-sync', (_event, accountId: string) => {
+    try {
+      const time = getLastSync(accountId);
+      return { success: true, data: { time } };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  // ── Google Ads Data Queries ──
+
+  ipcMain.handle('ads:get-campaigns', (_event, accountId: string) => {
+    try {
+      const rows = queryAll(
+        `SELECT * FROM ads_campaigns WHERE account_id = ? ORDER BY name`,
+        [accountId],
+      );
+      return { success: true, data: rows };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('ads:get-ad-groups', (_event, accountId: string, campaignId?: string) => {
+    try {
+      const sql = campaignId
+        ? `SELECT * FROM ads_ad_groups WHERE account_id = ? AND campaign_id = ? ORDER BY name`
+        : `SELECT * FROM ads_ad_groups WHERE account_id = ? ORDER BY name`;
+      const params = campaignId ? [accountId, campaignId] : [accountId];
+      return { success: true, data: queryAll(sql, params) };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('ads:get-keywords', (_event, accountId: string, adGroupId?: string) => {
+    try {
+      const sql = adGroupId
+        ? `SELECT * FROM ads_keywords WHERE account_id = ? AND ad_group_id = ? ORDER BY keyword_text`
+        : `SELECT * FROM ads_keywords WHERE account_id = ? ORDER BY keyword_text`;
+      const params = adGroupId ? [accountId, adGroupId] : [accountId];
+      return { success: true, data: queryAll(sql, params) };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('ads:get-daily-metrics', (_event, accountId: string, entityType: string, entityId: string | null, startDate: string, endDate: string) => {
+    try {
+      let sql: string;
+      let params: unknown[];
+      if (entityId) {
+        sql = `SELECT * FROM ads_daily_metrics WHERE account_id = ? AND entity_type = ? AND entity_id = ? AND date BETWEEN ? AND ? ORDER BY date`;
+        params = [accountId, entityType, entityId, startDate, endDate];
+      } else {
+        sql = `SELECT date,
+          SUM(impressions) as impressions, SUM(clicks) as clicks, SUM(cost_micros) as cost_micros,
+          SUM(conversions) as conversions, SUM(conversions_value) as conversions_value
+        FROM ads_daily_metrics WHERE account_id = ? AND entity_type = ? AND date BETWEEN ? AND ?
+        GROUP BY date ORDER BY date`;
+        params = [accountId, entityType, startDate, endDate];
+      }
+      return { success: true, data: queryAll(sql, params) };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('ads:get-kpi-summary', (_event, accountId: string, startDate: string, endDate: string) => {
+    try {
+      const row = queryOne(
+        `SELECT
+          SUM(impressions) as impressions,
+          SUM(clicks) as clicks,
+          SUM(cost_micros) as cost_micros,
+          SUM(conversions) as conversions,
+          SUM(conversions_value) as conversions_value
+        FROM ads_daily_metrics
+        WHERE account_id = ? AND entity_type = 'campaign' AND date BETWEEN ? AND ?`,
+        [accountId, startDate, endDate],
+      );
+      return { success: true, data: row || { impressions: 0, clicks: 0, cost_micros: 0, conversions: 0, conversions_value: 0 } };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('ads:get-campaign-metrics', (_event, accountId: string, startDate: string, endDate: string) => {
+    try {
+      const rows = queryAll(
+        `SELECT c.id, c.campaign_id, c.name, c.type, c.status, c.budget_amount_micros, c.budget_type,
+          SUM(m.impressions) as impressions, SUM(m.clicks) as clicks, SUM(m.cost_micros) as cost_micros,
+          SUM(m.conversions) as conversions, SUM(m.conversions_value) as conversions_value
+        FROM ads_campaigns c
+        LEFT JOIN ads_daily_metrics m ON m.entity_id = c.campaign_id AND m.entity_type = 'campaign'
+          AND m.account_id = c.account_id AND m.date BETWEEN ? AND ?
+        WHERE c.account_id = ?
+        GROUP BY c.id
+        ORDER BY cost_micros DESC`,
+        [startDate, endDate, accountId],
+      );
+      return { success: true, data: rows };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  // ── Google Ads AI Analysis ──
+
+  ipcMain.handle('ads:run-analysis', async (_event, accountId: string, analysisType: string, customPrompt?: string) => {
+    try {
+      const result = await runAnalysis(accountId, analysisType as AnalysisType, customPrompt);
+      return { success: true, data: result };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('ads:get-analyses', (_event, accountId: string, limit?: number) => {
+    try {
+      return { success: true, data: getAnalyses(accountId, limit) };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('ads:get-analysis', (_event, id: string) => {
+    try {
+      const analysis = getAnalysis(id);
+      return analysis ? { success: true, data: analysis } : { success: false, error: 'Not found' };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  // ── Google Ads Knowledge Base ──
+
+  ipcMain.handle('ads:kb-getAll', () => {
+    try {
+      return { success: true, data: getKnowledgeBase() };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('ads:kb-create', (_event, title: string, content: string, category?: string) => {
+    try {
+      const id = createKnowledgeEntry(title, content, category);
+      return { success: true, data: { id } };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('ads:kb-update', (_event, id: string, title: string, content: string, category?: string) => {
+    try {
+      updateKnowledgeEntry(id, title, content, category);
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('ads:kb-delete', (_event, id: string) => {
+    try {
+      deleteKnowledgeEntry(id);
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  // ── Google Ads Alerts ──
+
+  ipcMain.handle('ads:get-alerts', (_event, accountId: string) => {
+    try {
+      const alerts = getAlerts(accountId);
+      return { success: true, data: alerts };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('ads:dismiss-alert', (_event, alertId: string) => {
+    try {
+      dismissAlert(alertId);
+      // Notify renderer so sidebar badge updates
+      const count = getAlertCount();
+      const win = BrowserWindow.getAllWindows()[0];
+      if (win && !win.isDestroyed()) {
+        win.webContents.send('ads:alerts-updated', { accountId: '', alertCount: count });
+      }
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('ads:get-all-alerts', () => {
+    try {
+      const alerts = getAllAlerts();
+      return { success: true, data: alerts };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('ads:get-alert-count', () => {
+    try {
+      const count = getAlertCount();
+      return { success: true, data: { count } };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  // ── Google Ads Campaign Detail Data ──
+
+  ipcMain.handle('ads:get-ad-group-ads', (_event, accountId: string, campaignId: string) => {
+    try {
+      const rows = queryAll(
+        `SELECT * FROM ads_ad_group_ads WHERE account_id = ? AND campaign_id = ? ORDER BY clicks DESC`,
+        [accountId, campaignId],
+      );
+      return { success: true, data: rows };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('ads:get-negative-keywords', (_event, accountId: string, campaignId: string) => {
+    try {
+      const rows = queryAll(
+        `SELECT * FROM ads_negative_keywords WHERE account_id = ? AND campaign_id = ? ORDER BY keyword_text`,
+        [accountId, campaignId],
+      );
+      return { success: true, data: rows };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('ads:get-search-terms', async (_event, accountId: string, campaignId: string) => {
+    try {
+      const { fetchSearchTerms } = await import('./ads-api');
+      const data = await fetchSearchTerms(accountId, campaignId);
+      return { success: true, data };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('ads:get-asset-groups', (_event, accountId: string, campaignId: string) => {
+    try {
+      const rows = queryAll(
+        `SELECT * FROM ads_asset_groups WHERE account_id = ? AND campaign_id = ? ORDER BY cost_micros DESC`,
+        [accountId, campaignId],
+      );
+      return { success: true, data: rows };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('ads:get-asset-group-assets', (_event, accountId: string, campaignId: string) => {
+    try {
+      const rows = queryAll(
+        `SELECT aga.* FROM ads_asset_group_assets aga
+         JOIN ads_asset_groups ag ON ag.asset_group_id = aga.asset_group_id AND ag.account_id = aga.account_id
+         WHERE ag.account_id = ? AND ag.campaign_id = ?
+         ORDER BY aga.field_type, aga.performance_label`,
+        [accountId, campaignId],
+      );
+      return { success: true, data: rows };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('ads:get-shopping-performance', (_event, accountId: string, campaignId: string) => {
+    try {
+      const rows = queryAll(
+        `SELECT * FROM ads_shopping_performance WHERE account_id = ? AND campaign_id = ? ORDER BY cost_micros DESC`,
+        [accountId, campaignId],
+      );
+      return { success: true, data: rows };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('ads:get-placements', (_event, accountId: string, campaignId: string) => {
+    try {
+      const rows = queryAll(
+        `SELECT * FROM ads_placements WHERE account_id = ? AND campaign_id = ? ORDER BY impressions DESC`,
+        [accountId, campaignId],
+      );
+      return { success: true, data: rows };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('ads:get-keywords-with-metrics', (_event, accountId: string, campaignId: string) => {
+    try {
+      const endDate = new Date().toISOString().slice(0, 10);
+      const startDate = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+      const rows = queryAll(
+        `SELECT k.id, k.keyword_text, k.match_type, k.status, k.quality_score,
+                k.expected_ctr, k.ad_relevance, k.landing_page_experience,
+                COALESCE(SUM(m.clicks), 0) as clicks,
+                COALESCE(SUM(m.cost_micros), 0) as cost_micros,
+                COALESCE(SUM(m.conversions), 0) as conversions
+         FROM ads_keywords k
+         JOIN ads_ad_groups ag ON ag.ad_group_id = k.ad_group_id AND ag.account_id = k.account_id
+         LEFT JOIN ads_daily_metrics m ON m.entity_id = k.criterion_id AND m.entity_type = 'keyword'
+           AND m.account_id = k.account_id AND m.date BETWEEN ? AND ?
+         WHERE k.account_id = ? AND ag.campaign_id = ?
+         GROUP BY k.id
+         ORDER BY clicks DESC`,
+        [startDate, endDate, accountId, campaignId],
+      );
+      return { success: true, data: rows };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
   });
 }

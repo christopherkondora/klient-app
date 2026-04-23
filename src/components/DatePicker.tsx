@@ -26,6 +26,8 @@ interface DatePickerProps {
 export default function DatePicker({ value, onChange, placeholder = 'Válassz dátumot...', required, className }: DatePickerProps) {
   const [open, setOpen] = useState(false);
   const [viewMonth, setViewMonth] = useState(() => value ? parseISO(value) : new Date());
+  const [openUp, setOpenUp] = useState(false);
+  const [dropdownStyle, setDropdownStyle] = useState<React.CSSProperties>({});
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -61,7 +63,20 @@ export default function DatePicker({ value, onChange, placeholder = 'Válassz d�
 
       <button
         type="button"
-        onClick={() => setOpen(!open)}
+        onClick={() => {
+          if (!open && ref.current) {
+            const rect = ref.current.getBoundingClientRect();
+            const spaceBelow = window.innerHeight - rect.bottom;
+            const up = spaceBelow < 320;
+            setOpenUp(up);
+            const left = Math.max(8, Math.min(rect.left, window.innerWidth - 264));
+            setDropdownStyle(up
+              ? { top: 'auto', bottom: `${window.innerHeight - rect.top + 4}px`, left: `${left}px` }
+              : { top: `${rect.bottom + 4}px`, bottom: 'auto', left: `${left}px` }
+            );
+          }
+          setOpen(!open);
+        }}
         className="w-full flex items-center justify-between px-3 py-2 bg-surface-900 border border-teal/10 rounded-lg text-sm text-left focus:outline-none focus:ring-2 focus:ring-teal/30 transition-colors"
       >
         <span className={value ? 'text-cream' : 'text-steel/50'}>
@@ -71,7 +86,7 @@ export default function DatePicker({ value, onChange, placeholder = 'Válassz d�
       </button>
 
       {open && (
-        <div className="absolute top-full left-0 mt-1 w-64 bg-surface-800 border border-teal/15 rounded-lg shadow-xl z-[100] p-3">
+        <div className="fixed w-64 bg-surface-800 border border-teal/15 rounded-lg shadow-xl z-[100] p-3" style={dropdownStyle}>
           {/* Month navigation */}
           <div className="flex items-center justify-between mb-2">
             <button type="button" onClick={() => setViewMonth(subMonths(viewMonth, 1))} className="p-1 hover:bg-teal/10 rounded text-steel hover:text-cream">

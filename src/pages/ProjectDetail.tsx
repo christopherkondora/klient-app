@@ -1,15 +1,18 @@
 import { useEffect, useState, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, Clock, Calendar, StickyNote, Receipt, FileText,
   Plus, Check, AlertTriangle, Trash2, Pencil, User, ArrowRight, FolderOpen, Settings2, X,
-  ChevronLeft, ChevronRight, Users, UserMinus,
+  ChevronLeft, ChevronRight, Users, UserMinus, Ban, Landmark,
 } from 'lucide-react';
 import { format, parseISO, startOfMonth, endOfMonth, startOfWeek, endOfWeek, addDays, addMonths, subMonths, isSameMonth, isSameDay } from 'date-fns';
 import { hu } from 'date-fns/locale';
 import { useAuth } from '../contexts/AuthContext';
+import { fmtNum, parseNum } from '../utils/numberFormat';
 import { ProjectForm, TimeSlot } from './Projects';
 import InvoiceUploadModal from '../components/InvoiceUploadModal';
+import InvoiceGenerateModal from '../components/InvoiceGenerateModal';
 import InvoicePdfViewer from '../components/InvoicePdfViewer';
 import TimePicker from '../components/TimePicker';
 import { useThemedColor } from '../utils/colors';
@@ -29,6 +32,8 @@ export default function ProjectDetail() {
   const [showNoteForm, setShowNoteForm] = useState(false);
   const [showCloseForm, setShowCloseForm] = useState(false);
   const [showInvoiceForm, setShowInvoiceForm] = useState(false);
+  const [showGenerateInvoice, setShowGenerateInvoice] = useState(false);
+  const [activeProvider, setActiveProvider] = useState<string | null>(null);
   const [showCloseConfirm, setShowCloseConfirm] = useState(false);
   const [showEditForm, setShowEditForm] = useState(false);
   const [showManageHours, setShowManageHours] = useState(false);
@@ -37,11 +42,18 @@ export default function ProjectDetail() {
   const [projectAssignments, setProjectAssignments] = useState<ProjectAssignment[]>([]);
   const [allTeamMembers, setAllTeamMembers] = useState<TeamMember[]>([]);
   const [showAssignModal, setShowAssignModal] = useState(false);
+  const [assigningMember, setAssigningMember] = useState<TeamMember | null>(null);
+  const [editingAssignment, setEditingAssignment] = useState<ProjectAssignment | null>(null);
+  const [stornoConfirmId, setStornoConfirmId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (id) loadData();
   }, [id]);
+
+  useEffect(() => {
+    window.electronAPI.getActiveProvider().then(result => setActiveProvider(result.provider)).catch(() => {});
+  }, []);
 
   async function loadData() {
     try {
@@ -192,13 +204,13 @@ export default function ProjectDetail() {
                   <Pencil width={13} height={13} /> Szerkesztés
                 </button>
                 {hasInvoicing && (
-                  invoices.length > 0 ? (
+                  invoices.some(i => i.status !== 'cancelled') ? (
                     <span className="flex items-center gap-1.5 px-3 py-1.5 bg-teal/15 text-teal rounded-lg text-xs font-medium">
                       <Check width={13} height={13} /> Számlázva
                     </span>
                   ) : (
                     <button
-                      onClick={() => setShowInvoiceForm(true)}
+                      onClick={() => activeProvider ? setShowGenerateInvoice(true) : setShowInvoiceForm(true)}
                       className="flex items-center gap-1.5 px-3 py-1.5 bg-steel/20 text-cream rounded-lg text-xs font-medium hover:bg-steel/30"
                     >
                       <Receipt width={13} height={13} /> Számlázás
@@ -214,13 +226,13 @@ export default function ProjectDetail() {
               </>
             )}
             {project.status === 'completed' && hasInvoicing && (
-              invoices.length > 0 ? (
+              invoices.some(i => i.status !== 'cancelled') ? (
                 <span className="flex items-center gap-1.5 px-3 py-1.5 bg-teal/15 text-teal rounded-lg text-xs font-medium">
                   <Check width={13} height={13} /> Számlázva
                 </span>
               ) : (
                 <button
-                  onClick={() => setShowInvoiceForm(true)}
+                  onClick={() => activeProvider ? setShowGenerateInvoice(true) : setShowInvoiceForm(true)}
                   className="flex items-center gap-1.5 px-3 py-1.5 bg-steel/20 text-cream rounded-lg text-xs font-medium hover:bg-steel/30"
                 >
                   <Receipt width={13} height={13} /> Számlázás
@@ -397,39 +409,52 @@ export default function ProjectDetail() {
           {invoices.length === 0 ? (
             <p className="text-sm text-steel/60 italic text-center py-8">Még nincsenek számlák ehhez a projekthez.</p>
           ) : (
-            invoices.map(invoice => (
-              <div key={invoice.id} className="bg-surface-800/50 rounded-lg border border-teal/10 p-4 flex items-center justify-between group">
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-md bg-green-500/10 flex items-center justify-center">
-                    <FileText width={14} height={14} className="text-green-400" />
+            invoices.map(invoice => {
+              const isCancelled = invoice.status === 'cancelled';
+              const isStorno = isCancelled && invoice.amount < 0;
+              return (
+                <div key={invoice.id} className={`bg-surface-800/50 rounded-lg border p-4 flex items-center justify-between group ${isCancelled ? 'border-steel/5 opacity-60' : 'border-teal/10'}`}>
+                  <div className="flex items-center gap-3">
+                    <div className={`w-8 h-8 rounded-md flex items-center justify-center ${isStorno ? 'bg-red-500/10' : isCancelled ? 'bg-steel/10' : 'bg-green-500/10'}`}>
+                      <FileText width={14} height={14} className={isStorno ? 'text-red-400' : isCancelled ? 'text-steel/40' : 'text-green-400'} />
+                    </div>
+                    <div>
+                      <h3 className={`font-medium text-sm ${isCancelled ? 'text-steel/60 line-through' : 'text-cream'}`}>
+                        {isStorno ? `Sztornó: ${invoice.invoice_number || ''}` : invoice.invoice_number || 'Számla'}
+                      </h3>
+                      <p className="text-xs text-steel">{format(parseISO(invoice.created_at), 'yyyy. MM. dd.')}</p>
+                    </div>
                   </div>
-                  <div>
-                    <h3 className="font-medium text-cream text-sm">{invoice.invoice_number || 'Számla'}</h3>
-                    <p className="text-xs text-steel">{format(parseISO(invoice.created_at), 'yyyy. MM. dd.')}</p>
+                  <div className="flex items-center gap-3">
+                    <span className={`text-lg font-bold ${isStorno ? 'text-red-400' : isCancelled ? 'text-steel/40 line-through' : 'text-green-400'}`}>
+                      {new Intl.NumberFormat('hu-HU', { style: 'currency', currency: invoice.currency, maximumFractionDigits: 0 }).format(invoice.amount)}
+                    </span>
+                    {isCancelled && (
+                      <span className={`text-[9px] px-1.5 py-0.5 rounded font-medium ${isStorno ? 'bg-red-500/10 text-red-400' : 'bg-steel/15 text-steel/50'}`}>
+                        {isStorno ? 'Sztornó számla' : 'Sztornózva'}
+                      </span>
+                    )}
+                    {invoice.file_path && (
+                      <button
+                        onClick={() => setViewingInvoice(invoice)}
+                        className="px-2 py-1 text-xs text-steel hover:text-cream hover:bg-teal/10 rounded opacity-0 group-hover:opacity-100 transition-all"
+                      >
+                        PDF megnyitása
+                      </button>
+                    )}
+                    {!isCancelled && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setStornoConfirmId(invoice.id); }}
+                        className="p-1.5 rounded hover:bg-red-500/10 text-steel/40 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all cursor-pointer"
+                        title="Sztornó"
+                      >
+                        <Ban width={13} height={13} />
+                      </button>
+                    )}
                   </div>
                 </div>
-                <div className="flex items-center gap-3">
-                  <span className="text-lg font-bold text-green-400">
-                    {new Intl.NumberFormat('hu-HU', { style: 'currency', currency: invoice.currency, maximumFractionDigits: 0 }).format(invoice.amount)}
-                  </span>
-                  {invoice.file_path && (
-                    <button
-                      onClick={() => setViewingInvoice(invoice)}
-                      className="px-2 py-1 text-xs text-steel hover:text-cream hover:bg-teal/10 rounded opacity-0 group-hover:opacity-100 transition-all"
-                    >
-                      PDF megnyitása
-                    </button>
-                  )}
-                  <button
-                    onClick={async (e) => { e.stopPropagation(); await window.electronAPI.deleteInvoice(invoice.id); loadData(); }}
-                    className="p-1.5 rounded hover:bg-red-500/10 text-steel/40 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all cursor-pointer"
-                    title="Számla törlése"
-                  >
-                    <Trash2 width={13} height={13} />
-                  </button>
-                </div>
-              </div>
-            ))
+              );
+            })
           )}
         </div>
       )}
@@ -450,76 +475,202 @@ export default function ProjectDetail() {
               <p className="text-steel/60 text-sm">Még nincsenek csapattagok hozzárendelve ehhez a projekthez.</p>
             </div>
           ) : (
-            projectAssignments.map(a => (
-              <div key={a.id} className="bg-surface-800/50 rounded-lg border border-teal/10 p-4 flex items-center justify-between group">
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-lg bg-teal/15 border border-teal/20 flex items-center justify-center text-teal font-bold text-xs">
-                    {a.member_name?.charAt(0) || '?'}
-                  </div>
-                  <div>
-                    <h3 className="font-medium text-cream text-sm">{a.member_name}</h3>
-                    <div className="flex items-center gap-2 text-[11px] text-steel">
-                      {a.member_role && <span>{a.member_role}</span>}
-                      {a.member_email && <span>· {a.member_email}</span>}
+            <>
+              {projectAssignments.map(a => {
+                const isExternal = a.member_employment_type === 'contractor' || a.member_employment_type === 'freelancer';
+                const hasFee = a.fee != null && a.fee > 0;
+                const feeLabel = a.member_employment_type === 'contractor' ? 'Alvállalkozói díj' : 'Megbízási díj';
+                return (
+                  <div key={a.id} className="bg-surface-800/50 rounded-lg border border-teal/10 p-4 flex items-center justify-between group">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="w-8 h-8 rounded-lg bg-teal/15 border border-teal/20 flex items-center justify-center text-teal font-bold text-xs shrink-0">
+                        {a.member_name?.charAt(0) || '?'}
+                      </div>
+                      <div className="min-w-0">
+                        <h3 className="font-medium text-cream text-sm truncate">{a.member_name}</h3>
+                        <div className="flex items-center gap-2 text-[11px] text-steel">
+                          {a.member_role && <span>{a.member_role}</span>}
+                          {a.member_email && <span>· {a.member_email}</span>}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3 shrink-0">
+                      {isExternal ? (
+                        hasFee ? (
+                          <button
+                            onClick={() => setEditingAssignment(a)}
+                            className="flex flex-col items-end px-3 py-1.5 rounded-lg hover:bg-teal/5 transition-colors text-right cursor-pointer"
+                            title={`${feeLabel} – kattints a módosításhoz`}
+                          >
+                            <span className="text-sm font-semibold text-cream">
+                              {new Intl.NumberFormat('hu-HU').format(a.fee!)} {a.fee_currency || 'HUF'}
+                            </span>
+                            <span className="text-[10px] text-steel/50">{feeLabel}</span>
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => setEditingAssignment(a)}
+                            className="flex items-center gap-1.5 text-[11px] text-amber-400/80 hover:text-amber-400 px-2.5 py-1 rounded-lg bg-amber-400/10 hover:bg-amber-400/15 transition-colors"
+                          >
+                            <Landmark width={11} height={11} />
+                            Díj beállítása
+                          </button>
+                        )
+                      ) : (
+                        <span className="text-[11px] text-steel/40 italic">Alkalmazott</span>
+                      )}
+                      <button
+                        onClick={async () => {
+                          try {
+                            await window.electronAPI.unassignFromProject(id!, a.team_member_id);
+                            loadData();
+                          } catch (err) {
+                            console.error('Failed to unassign member:', err);
+                          }
+                        }}
+                        className="p-1.5 rounded hover:bg-red-500/10 text-steel/40 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all"
+                        title="Eltávolítás a projektből"
+                      >
+                        <UserMinus width={14} height={14} />
+                      </button>
                     </div>
                   </div>
-                </div>
-                <button
-                  onClick={async () => {
-                    await window.electronAPI.unassignFromProject(id!, a.team_member_id);
-                    loadData();
-                  }}
-                  className="p-1.5 rounded hover:bg-red-500/10 text-steel/40 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all"
-                  title="Eltávolítás a projektből"
-                >
-                  <UserMinus width={14} height={14} />
-                </button>
-              </div>
-            ))
+                );
+              })}
+              {(() => {
+                const externalWithFee = projectAssignments.filter(
+                  a => (a.member_employment_type === 'contractor' || a.member_employment_type === 'freelancer') && a.fee != null && a.fee > 0
+                );
+                if (externalWithFee.length === 0) return null;
+                const totalHuf = externalWithFee.reduce((sum, a) => sum + (a.fee_huf ?? a.fee ?? 0), 0);
+                return (
+                  <div className="flex items-center justify-between px-4 py-2.5 bg-surface-900/60 rounded-lg border border-teal/8 text-xs">
+                    <span className="text-steel/60">Alvállalkozói / megbízási díjak ({externalWithFee.length})</span>
+                    <span className="font-medium text-cream">{new Intl.NumberFormat('hu-HU').format(Math.round(totalHuf))} Ft</span>
+                  </div>
+                );
+              })()}
+            </>
           )}
         </div>
       )}
 
       {/* Assign Team Member Modal */}
       {showAssignModal && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={() => setShowAssignModal(false)}>
-          <div className="bg-surface-800 rounded-xl border border-teal/15 p-6 w-full max-w-sm shadow-2xl" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="font-pixel text-[14px] text-cream">Csapattag hozzárendelése</h2>
-              <button onClick={() => setShowAssignModal(false)} className="p-1 rounded hover:bg-teal/10 text-steel hover:text-cream">
-                <X width={14} height={14} />
-              </button>
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={() => { setShowAssignModal(false); setAssigningMember(null); }}>
+          <div className="bg-surface-800 rounded-xl ring-1 ring-inset ring-teal/15 w-full max-w-sm shadow-2xl overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="h-1 bg-teal" />
+            <div className="p-5">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="font-pixel text-[14px] text-cream">
+                  {assigningMember ? 'Díj megállapítása' : 'Csapattag hozzárendelése'}
+                </h2>
+                <button onClick={() => { setShowAssignModal(false); setAssigningMember(null); }} className="p-1 rounded hover:bg-teal/10 text-steel hover:text-cream">
+                  <X width={14} height={14} />
+                </button>
+              </div>
+
+              {assigningMember ? (
+                <AssignmentFeeForm
+                  member={assigningMember}
+                  onCancel={() => setAssigningMember(null)}
+                  onSubmit={async (feeData) => {
+                    try {
+                      await window.electronAPI.assignToProject(id!, assigningMember.id, feeData);
+                      setShowAssignModal(false);
+                      setAssigningMember(null);
+                      loadData();
+                    } catch (err) {
+                      console.error('Failed to assign member:', err);
+                    }
+                  }}
+                />
+              ) : (
+                (() => {
+                  const assignedIds = new Set(projectAssignments.map(a => a.team_member_id));
+                  const available = allTeamMembers.filter(m => !assignedIds.has(m.id) && m.status !== 'inactive');
+                  if (available.length === 0) {
+                    return <p className="text-sm text-steel/60 text-center py-4">Minden csapattag hozzá van rendelve ehhez a projekthez.</p>;
+                  }
+                  return (
+                    <div className="space-y-1.5 max-h-64 overflow-y-auto">
+                      {available.map(m => {
+                        const isExternal = m.employment_type === 'contractor' || m.employment_type === 'freelancer';
+                        return (
+                          <button
+                            key={m.id}
+                            onClick={async () => {
+                              if (isExternal) {
+                                setAssigningMember(m);
+                              } else {
+                                try {
+                                  await window.electronAPI.assignToProject(id!, m.id);
+                                  setShowAssignModal(false);
+                                  loadData();
+                                } catch (err) {
+                                  console.error('Failed to assign member:', err);
+                                }
+                              }
+                            }}
+                            className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg border border-teal/10 hover:border-teal/25 hover:bg-teal/5 transition-colors text-left"
+                          >
+                            <div className="w-8 h-8 rounded-lg bg-teal/15 border border-teal/20 flex items-center justify-center text-teal font-bold text-xs shrink-0">
+                              {m.name.charAt(0)}
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <div className="text-sm text-cream font-medium truncate">{m.name}</div>
+                              <div className="text-[11px] text-steel">
+                                {m.role && <span>{m.role}</span>}
+                                {m.role && <span> · </span>}
+                                <span className="text-steel/50">
+                                  {m.employment_type === 'employee' ? 'Alkalmazott' : m.employment_type === 'contractor' ? 'Alvállalkozó' : 'Megbízott'}
+                                </span>
+                              </div>
+                            </div>
+                            {isExternal && <ArrowRight width={12} height={12} className="text-steel/40 shrink-0" />}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  );
+                })()
+              )}
             </div>
-            {(() => {
-              const assignedIds = new Set(projectAssignments.map(a => a.team_member_id));
-              const available = allTeamMembers.filter(m => !assignedIds.has(m.id));
-              if (available.length === 0) {
-                return <p className="text-sm text-steel/60 text-center py-4">Minden csapattag hozzá van rendelve ehhez a projekthez.</p>;
-              }
-              return (
-                <div className="space-y-1.5 max-h-64 overflow-y-auto">
-                  {available.map(m => (
-                    <button
-                      key={m.id}
-                      onClick={async () => {
-                        await window.electronAPI.assignToProject(id!, m.id);
-                        setShowAssignModal(false);
-                        loadData();
-                      }}
-                      className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg border border-teal/10 hover:border-teal/25 hover:bg-teal/5 transition-colors text-left"
-                    >
-                      <div className="w-8 h-8 rounded-lg bg-teal/15 border border-teal/20 flex items-center justify-center text-teal font-bold text-xs shrink-0">
-                        {m.name.charAt(0)}
-                      </div>
-                      <div className="min-w-0">
-                        <div className="text-sm text-cream font-medium truncate">{m.name}</div>
-                        {m.role && <div className="text-[11px] text-steel">{m.role}</div>}
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              );
-            })()}
+          </div>
+        </div>
+      )}
+
+      {/* Edit Assignment Fee Modal */}
+      {editingAssignment && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={() => setEditingAssignment(null)}>
+          <div className="bg-surface-800 rounded-xl ring-1 ring-inset ring-teal/15 w-full max-w-sm shadow-2xl overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="h-1 bg-teal" />
+            <div className="p-5">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="font-pixel text-[14px] text-cream">Díj szerkesztése</h2>
+                <button onClick={() => setEditingAssignment(null)} className="p-1 rounded hover:bg-teal/10 text-steel hover:text-cream">
+                  <X width={14} height={14} />
+                </button>
+              </div>
+              <AssignmentFeeForm
+                member={{
+                  id: editingAssignment.team_member_id,
+                  name: editingAssignment.member_name ?? '',
+                  employment_type: editingAssignment.member_employment_type ?? 'contractor',
+                } as TeamMember}
+                initial={{ fee: editingAssignment.fee, fee_currency: editingAssignment.fee_currency ?? 'HUF', notes: editingAssignment.notes }}
+                onCancel={() => setEditingAssignment(null)}
+                onSubmit={async (feeData) => {
+                  try {
+                    await window.electronAPI.updateAssignment(editingAssignment.id, feeData);
+                    setEditingAssignment(null);
+                    loadData();
+                  } catch (err) {
+                    console.error('Failed to update assignment:', err);
+                  }
+                }}
+              />
+            </div>
           </div>
         </div>
       )}
@@ -546,6 +697,23 @@ export default function ProjectDetail() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Invoice Generate Modal */}
+      {showGenerateInvoice && project && (
+        <InvoiceGenerateModal
+          project={project}
+          client={allClients.find(c => c.id === project.client_id) || null}
+          onClose={() => setShowGenerateInvoice(false)}
+          onSuccess={(invoiceNumber) => {
+            setShowGenerateInvoice(false);
+            loadData();
+          }}
+          onSwitchToUpload={() => {
+            setShowGenerateInvoice(false);
+            setShowInvoiceForm(true);
+          }}
+        />
       )}
 
       {/* Invoice Modal */}
@@ -582,6 +750,49 @@ export default function ProjectDetail() {
           onClose={() => setShowManageHours(false)}
           onRefresh={loadData}
         />
+      )}
+
+      {/* Storno confirmation */}
+      {stornoConfirmId && createPortal(
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="bg-surface-800 border border-teal/15 rounded-xl p-6 w-full max-w-sm shadow-2xl">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="p-2 rounded-lg bg-red-500/10">
+                <Ban width={20} height={20} className="text-red-400" />
+              </div>
+              <h3 className="font-pixel text-sm text-cream">Számla sztornó</h3>
+            </div>
+            <p className="text-sm text-steel mb-1">Biztosan sztornózod ezt a számlát?</p>
+            <p className="text-xs text-steel/50 mb-6">
+              {invoices.find(i => i.id === stornoConfirmId)?.provider
+                ? 'A sztornó számla automatikusan létrejön a számlázó szolgáltatóban is.'
+                : 'Ez a művelet nem vonható vissza.'}
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setStornoConfirmId(null)}
+                className="px-4 py-2 text-sm text-steel hover:text-cream rounded-lg hover:bg-surface-700 transition-colors cursor-pointer"
+              >
+                Mégsem
+              </button>
+              <button
+                onClick={async () => {
+                  const result = await window.electronAPI.deleteInvoice(stornoConfirmId);
+                  setStornoConfirmId(null);
+                  if (!result.success) {
+                    alert(result.error || 'Sztornó sikertelen');
+                    return;
+                  }
+                  loadData();
+                }}
+                className="px-4 py-2 text-sm bg-red-500/15 text-red-400 hover:bg-red-500/25 rounded-lg font-medium transition-colors cursor-pointer"
+              >
+                Sztornózás
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
       )}
     </div>
   );
@@ -708,8 +919,8 @@ function ManageHoursModal({ project, calendarEvents: projectEvents, onClose, onR
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onDoubleClick={handleDone}>
-      <div className="bg-surface-800 rounded-2xl border border-teal/15 w-full max-w-lg shadow-2xl max-h-[85vh] flex flex-col overflow-hidden" onDoubleClick={e => e.stopPropagation()}>
-        <div className="h-1 bg-gradient-to-r from-teal via-steel to-teal/30" />
+      <div className="bg-surface-800 rounded-2xl ring-1 ring-inset ring-teal/15 w-full max-w-lg shadow-2xl max-h-[85vh] flex flex-col overflow-hidden" onDoubleClick={e => e.stopPropagation()}>
+        <div className="h-1 bg-teal" />
         <div className="p-5 flex flex-col flex-1 min-h-0">
           {/* Header */}
           <div className="flex items-center justify-between mb-3">
@@ -963,6 +1174,108 @@ function NoteFormModal({ onSubmit, onClose }: {
         </form>
       </div>
     </div>
+  );
+}
+
+const FEE_CURRENCIES = ['HUF', 'EUR', 'USD'] as const;
+
+function AssignmentFeeForm({
+  member,
+  initial,
+  onSubmit,
+  onCancel,
+}: {
+  member: Pick<TeamMember, 'id' | 'name' | 'employment_type'>;
+  initial?: { fee: number | null; fee_currency: string; notes: string | null };
+  onSubmit: (data: { fee: number | null; fee_currency: string; fee_huf: number | null; notes: string | null }) => void;
+  onCancel: () => void;
+}) {
+  const [fee, setFee] = useState(initial?.fee != null ? String(initial.fee) : '');
+  const [currency, setCurrency] = useState(initial?.fee_currency ?? 'HUF');
+  const [notes, setNotes] = useState(initial?.notes ?? '');
+  const [exchangeRate, setExchangeRate] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (currency === 'HUF') { setExchangeRate(null); return; }
+    let cancelled = false;
+    window.electronAPI.getExchangeRate(currency, 'HUF')
+      .then(rate => { if (!cancelled) setExchangeRate(rate); })
+      .catch(() => { if (!cancelled) setExchangeRate(null); });
+    return () => { cancelled = true; };
+  }, [currency]);
+
+  const feeNum = parseFloat(fee);
+  const feeHuf = !fee || isNaN(feeNum) ? null : currency === 'HUF' ? feeNum : exchangeRate ? Math.round(feeNum * exchangeRate) : null;
+  const feeLabel = member.employment_type === 'contractor' ? 'Alvállalkozói díj' : 'Megbízási díj';
+
+  return (
+    <form
+      onSubmit={e => {
+        e.preventDefault();
+        onSubmit({
+          fee: fee ? feeNum : null,
+          fee_currency: currency,
+          fee_huf: feeHuf,
+          notes: notes.trim() || null,
+        });
+      }}
+    >
+      <div className="flex items-center gap-3 mb-5 p-3 bg-surface-900/60 rounded-lg border border-teal/8">
+        <div className="w-9 h-9 rounded-lg bg-teal/15 border border-teal/20 flex items-center justify-center text-teal font-bold text-sm shrink-0">
+          {member.name.charAt(0)}
+        </div>
+        <div className="min-w-0">
+          <div className="text-sm text-cream font-medium truncate">{member.name}</div>
+          <div className="text-[11px] text-steel/60">{feeLabel}</div>
+        </div>
+      </div>
+
+      <div className="mb-4">
+        <span className="text-[10px] text-steel tracking-wider uppercase mb-1.5 block">Megállapodott díj (teljes projekt)</span>
+        <div className="flex items-center gap-2 border-b border-teal/15 py-1.5">
+          <Landmark width={13} height={13} className="text-steel/60 shrink-0" />
+          <input
+            type="text"
+            inputMode="numeric"
+            value={fmtNum(fee)}
+            onChange={e => setFee(parseNum(e.target.value))}
+            className="flex-1 min-w-0 bg-transparent text-base text-cream focus:outline-none placeholder:text-steel/40"
+            placeholder="50 000"
+            autoFocus
+          />
+          <select
+            value={currency}
+            onChange={e => setCurrency(e.target.value)}
+            className="bg-transparent text-xs text-steel/80 focus:outline-none cursor-pointer"
+          >
+            {FEE_CURRENCIES.map(c => <option key={c} value={c} className="bg-surface-800">{c}</option>)}
+          </select>
+        </div>
+        {currency !== 'HUF' && feeHuf != null && (
+          <p className="text-[10px] text-steel/50 mt-1">≈ {new Intl.NumberFormat('hu-HU').format(feeHuf)} Ft</p>
+        )}
+      </div>
+
+      <div className="mb-5">
+        <span className="text-[10px] text-steel tracking-wider uppercase mb-1 block">Megjegyzés</span>
+        <textarea
+          value={notes}
+          onChange={e => setNotes(e.target.value)}
+          className="w-full px-0 py-1.5 bg-transparent border-b border-teal/8 text-sm text-cream focus:outline-none focus:border-teal/25 placeholder:text-steel/40 transition-colors resize-none"
+          rows={2}
+          placeholder="Megállapodás részletei..."
+        />
+      </div>
+
+      <div className="flex justify-end gap-2">
+        <button type="button" onClick={onCancel} className="px-4 py-2 text-xs text-steel hover:text-cream transition-colors">
+          Vissza
+        </button>
+        <button type="submit" className="px-5 py-2 bg-teal text-cream rounded-lg text-xs font-medium hover:bg-teal/80 transition-colors">
+          {initial ? 'Mentés' : 'Hozzárendelés'}
+        </button>
+      </div>
+    </form>
   );
 }
 

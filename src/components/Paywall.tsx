@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useSubscription } from '../contexts/SubscriptionContext';
+import { useAuth } from '../contexts/AuthContext';
 import { Crown, Zap, Check, Loader2, Sparkles, X, CreditCard } from 'lucide-react';
 
 const PLANS = [
@@ -42,6 +43,7 @@ const CONFETTI_PARTICLES = Array.from({ length: 40 }, (_, i) => ({
 
 export default function Paywall({ overlay, onClose }: { overlay?: boolean; onClose?: () => void } = {}) {
   const { subscription, openCheckout, refresh, isActive, setCelebratingPayment } = useSubscription();
+  const { logout } = useAuth();
   const [error, setError] = useState('');
   const [checkingOut, setCheckingOut] = useState<string | null>(null);
   const [checkoutUrl, setCheckoutUrl] = useState<string | null>(null);
@@ -52,8 +54,6 @@ export default function Paywall({ overlay, onClose }: { overlay?: boolean; onClo
   const minTimeRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const postCheckoutTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const successHandled = useRef(false);
-  const webviewRef = useRef<HTMLWebViewElement | null>(null);
-  const webviewListenersAttached = useRef(false);
 
   const isPaidActive = subscription?.status === 'active' && subscription?.plan !== 'trial';
 
@@ -85,8 +85,6 @@ export default function Paywall({ overlay, onClose }: { overlay?: boolean; onClo
   const closeCheckout = () => {
     stopPolling();
     setCheckoutUrl(null);
-    webviewRef.current = null;
-    webviewListenersAttached.current = false;
     // Enter post-checkout mode: poll aggressively for 45s
     setPostCheckout(true);
     refresh();
@@ -143,7 +141,10 @@ export default function Paywall({ overlay, onClose }: { overlay?: boolean; onClo
   const isTrialExpired = subscription?.status === 'expired' && subscription?.plan === 'trial';
 
   return (
-    <div className="h-full flex flex-col">
+    <div className="min-h-screen bg-ink flex flex-col">
+      {/* Custom title bar area — only in standalone mode */}
+      {!overlay && <div className="h-8 bg-ink [-webkit-app-region:drag] flex-shrink-0" />}
+
       {/* Close button for overlay mode */}
       {overlay && onClose && (
         <div className="flex justify-end px-4 pt-3 shrink-0">
@@ -156,7 +157,7 @@ export default function Paywall({ overlay, onClose }: { overlay?: boolean; onClo
         </div>
       )}
 
-      <div className="flex-1 flex flex-col items-center justify-center px-6">
+      <div className="flex-1 flex flex-col items-center justify-center px-6 py-10 overflow-y-auto">
         {/* Header */}
         <div className="text-center mb-10">
           <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-teal/20 mb-4">
@@ -248,6 +249,15 @@ export default function Paywall({ overlay, onClose }: { overlay?: boolean; onClo
           Már fizettél? Kattints az állapot frissítéséhez
         </button>
 
+        {/* Logout — only in standalone mode */}
+        {!overlay && (
+          <button
+            onClick={logout}
+            className="mt-6 text-steel/60 text-xs hover:text-steel transition-colors"
+          >
+            Kijelentkezés
+          </button>
+        )}
       </div>
 
       {/* Stripe Checkout webview modal */}
@@ -281,41 +291,14 @@ export default function Paywall({ overlay, onClose }: { overlay?: boolean; onClo
                 // @ts-expect-error webview events
                 onDidFinishLoad={() => setWebviewLoading(false)}
                 ref={(el: HTMLWebViewElement | null) => {
-                  if (el && el !== webviewRef.current) {
-                    webviewRef.current = el;
-                    webviewListenersAttached.current = false;
-                  }
-                  if (el && !webviewListenersAttached.current) {
-                    webviewListenersAttached.current = true;
+                  if (el) {
                     el.addEventListener('did-finish-load', () => setWebviewLoading(false));
                     el.addEventListener('did-fail-load', () => setWebviewLoading(false));
-                    // When Stripe redirects to /success, inject a thank-you page into the webview
                     el.addEventListener('did-navigate', (e: any) => {
-                      if (e.url?.includes('/success')) {
-                        // Inject success page content directly into the webview
-                        (el as any).executeJavaScript(`
-                          document.documentElement.innerHTML = \`
-                            <head><style>
-                              * { margin:0; padding:0; box-sizing:border-box; }
-                              body { background:#0a0e14; display:flex; align-items:center; justify-content:center; min-height:100vh; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; }
-                              .wrap { text-align:center; max-width:400px; padding:2rem; }
-                              .icon { width:80px; height:80px; border-radius:50%; background:rgba(16,185,129,0.15); border:2px solid rgba(16,185,129,0.4); display:flex; align-items:center; justify-content:center; margin:0 auto 1.5rem; }
-                              .icon svg { width:40px; height:40px; color:#34d399; }
-                              h1 { color:#f0e6d3; font-size:1.5rem; margin-bottom:0.5rem; }
-                              p { color:#8a9bb5; font-size:0.95rem; line-height:1.5; }
-                              .countdown { color:rgba(138,155,181,0.5); font-size:0.75rem; margin-top:1.5rem; }
-                            </style></head>
-                            <body><div class="wrap">
-                              <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></div>
-                              <h1>Köszönjük, hogy előfizettél!</h1>
-                              <p>Az előfizetésed hamarosan aktív lesz.</p>
-                              <div class="countdown" id="cd">Az ablak 3 másodperc múlva bezáródik...</div>
-                            </div></body>\`;
-                          let s=3; setInterval(()=>{ s--; if(s>0) document.getElementById('cd').textContent='Az ablak '+s+' másodperc múlva bezáródik...'; },1000);
-                        `).catch(() => {});
-                        // Close after showing the success message
-                        setTimeout(() => closeCheckout(), 3500);
-                      }
+                      if (e.url?.includes('/success')) closeCheckout();
+                    });
+                    el.addEventListener('will-navigate', (e: any) => {
+                      if (e.url?.includes('/success')) closeCheckout();
                     });
                   }
                 }}

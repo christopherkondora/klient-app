@@ -1,6 +1,25 @@
 import { queryAll, queryOne, execute } from './db-helpers';
 import { v4 as uuidv4 } from 'uuid';
 import { getCurrentUserId } from './database';
+import {
+  calculateAtalanyado,
+  calculateVszja,
+  calculateTao,
+  calculateKiva,
+  calculateFullEstimate,
+  generateTaxDeadlines,
+  generateTaxWarnings,
+  compareTaxForms,
+} from './tax-engine';
+import type {
+  TaxParameters,
+  BusinessProfile,
+  TaxEstimate,
+  TaxDeadline,
+  TaxWarning,
+  TaxFormComparison,
+  HipaRate,
+} from './tax-types';
 
 export interface TaxRuleRow {
   id: string;
@@ -131,10 +150,10 @@ export function calculateTax(input: TaxCalcInput): TaxCalcResult {
 
   switch (businessType) {
     case 'kiva': {
-      // KIVA: 11% on special tax basis (personnel costs + profit adjustments)
+      // KIVA: 10% on special tax basis (personnel costs + profit adjustments)
       // Simplified: revenue - expenses as base
       const baseRule = rules.find(r => r.rate_label === 'base');
-      appliedRate = baseRule?.rate_percent ?? 11;
+      appliedRate = baseRule?.rate_percent ?? 10;
       taxableBase = Math.max(revenue - expenses, 0);
       taxAmount = taxableBase * (appliedRate / 100);
       appliedRateLabel = 'base';
@@ -161,15 +180,25 @@ export function calculateTax(input: TaxCalcInput): TaxCalcResult {
     }
 
     case 'atalanyadozas': {
-      // Flat-rate: deemed cost percentage deducted from revenue, then SZJA on remainder
-      const generalRule = rules.find(r => r.rate_label === 'deemed_cost_general');
-      const szjaRule = rules.find(r => r.rate_label === 'szja_rate');
-      const deemedCostPct = generalRule?.rate_percent ?? 40;
-      const deemedCost = revenue * (deemedCostPct / 100);
-      taxableBase = revenue - deemedCost;
-      appliedRate = szjaRule?.rate_percent ?? 15;
-      taxAmount = taxableBase * (appliedRate / 100);
-      appliedRateLabel = 'deemed_cost_general';
+      // Use the new engine for comprehensive calculation
+      const taxParams = getTaxParameters(year);
+      if (taxParams) {
+        const profilData = { koltseghanyad: taxParams.atalanyAltalanos, foglalkozas: 'fofoglalkozasu' as const, szakkepzettseg: false };
+        const result = calculateAtalanyado(revenue, taxParams, profilData);
+        taxAmount = result.osszesen;
+        taxableBase = result.adokotelesJovedelem;
+        appliedRate = taxParams.szjaKulcs * 100;
+        appliedRateLabel = 'deemed_cost_general';
+      } else {
+        // Fallback: simple calculation
+        const generalRule = rules.find(r => r.rate_label === 'deemed_cost_general');
+        const deemedCostPct = generalRule?.rate_percent ?? 45;
+        const deemedCost = revenue * (deemedCostPct / 100);
+        taxableBase = revenue - deemedCost;
+        appliedRate = 15;
+        taxAmount = taxableBase * (appliedRate / 100);
+        appliedRateLabel = 'deemed_cost_general';
+      }
       break;
     }
 
@@ -180,17 +209,6 @@ export function calculateTax(input: TaxCalcInput): TaxCalcResult {
       taxableBase = Math.max(revenue - expenses, 0);
       taxAmount = taxableBase * (appliedRate / 100);
       appliedRateLabel = 'base';
-      break;
-    }
-
-    case 'kata': {
-      // KATA: fixed monthly amount (stored as rate_percent but is actually Ft/month)
-      const flatRule = rules.find(r => r.rate_label === 'monthly_flat');
-      const monthlyAmount = flatRule?.rate_percent ?? 50000;
-      appliedRate = monthlyAmount;
-      taxableBase = 0; // Not revenue-based
-      taxAmount = monthlyAmount * 12;
-      appliedRateLabel = 'monthly_flat';
       break;
     }
 
@@ -312,4 +330,214 @@ export function getTaxCalculationHistory(limit: number = 50) {
     'SELECT * FROM tax_calculations WHERE user_id = ? ORDER BY created_at DESC LIMIT ?',
     [userId, limit]
   );
+}
+
+// ── New service functions ──
+
+/** Get tax parameters for a given year */
+export function getTaxParameters(year: number): TaxParameters | null {
+  const row = queryOne('SELECT * FROM tax_parameters WHERE year = ?', [year]);
+  if (!row) return null;
+  return {
+    year: row.year as number,
+    minimalberHavi: row.minimalber_havi as number,
+    garantaltBerminimumHavi: row.garantalt_berminimum_havi as number,
+    szjaKulcs: row.szja_kulcs as number,
+    tbKulcs: row.tb_kulcs as number,
+    szochoKulcs: row.szocho_kulcs as number,
+    taoKulcs: row.tao_kulcs as number,
+    kivaKulcs: row.kiva_kulcs as number,
+    aamLimit: row.aam_limit as number,
+    atalanyAltalanos: row.atalany_altalanos as number,
+    atalanySpecialis: row.atalany_specialis as number,
+    atalanyKisker: row.atalany_kisker as number,
+    atalanyLimitSzorzo: row.atalany_limit_szorzo as number,
+    atalanyAdomentesSzorzo: row.atalany_adomentes_szorzo as number,
+    szochoPlafonSzorzo: row.szocho_plafon_szorzo as number,
+    hipaMaxKulcs: row.hipa_max_kulcs as number,
+    afaStandard: row.afa_standard as number,
+    afaReduced: row.afa_reduced as number,
+    afaSuperReduced: row.afa_super_reduced as number,
+  };
+}
+
+/** Get business profile for a user */
+export function getBusinessProfile(userId?: string): BusinessProfile | null {
+  const uid = userId ?? getCurrentUserId();
+  if (!uid) return null;
+  const row = queryOne('SELECT * FROM business_profile WHERE user_id = ?', [uid]);
+  if (!row) return null;
+  return {
+    userId: row.user_id as string,
+    vallalkozasTipus: row.vallalkozas_tipus as BusinessProfile['vallalkozasTipus'],
+    adozasForma: row.adozas_forma as BusinessProfile['adozasForma'],
+    foglalkozas: row.foglalkozas as BusinessProfile['foglalkozas'],
+    koltseghanyad: row.koltseghanyad as number,
+    szakkepzettseg: !!(row.szakkepzettseg as number),
+    aamValasztott: !!(row.aam_valasztott as number),
+    afaBevallas: row.afa_bevallas as BusinessProfile['afaBevallas'],
+    hipaKulcs: row.hipa_kulcs as number,
+    hipaTelepules: row.hipa_telepules as string,
+    hipaEgyszeru: !!(row.hipa_egyszeru as number),
+    adoev: row.adoev as number,
+    beallitva: !!(row.beallitva as number),
+  };
+}
+
+/** Save (upsert) business profile */
+export function saveBusinessProfile(profile: BusinessProfile): void {
+  const uid = profile.userId || getCurrentUserId();
+  if (!uid) throw new Error('No user logged in');
+
+  const existing = queryOne('SELECT user_id FROM business_profile WHERE user_id = ?', [uid]);
+
+  if (existing) {
+    execute(
+      `UPDATE business_profile SET
+        vallalkozas_tipus = ?, adozas_forma = ?, foglalkozas = ?,
+        koltseghanyad = ?, szakkepzettseg = ?, aam_valasztott = ?,
+        afa_bevallas = ?, hipa_kulcs = ?, hipa_telepules = ?,
+        hipa_egyszeru = ?, adoev = ?, beallitva = 1,
+        updated_at = datetime('now')
+      WHERE user_id = ?`,
+      [
+        profile.vallalkozasTipus, profile.adozasForma, profile.foglalkozas,
+        profile.koltseghanyad, profile.szakkepzettseg ? 1 : 0, profile.aamValasztott ? 1 : 0,
+        profile.afaBevallas, profile.hipaKulcs, profile.hipaTelepules,
+        profile.hipaEgyszeru ? 1 : 0, profile.adoev, uid,
+      ]
+    );
+  } else {
+    execute(
+      `INSERT INTO business_profile (
+        user_id, vallalkozas_tipus, adozas_forma, foglalkozas,
+        koltseghanyad, szakkepzettseg, aam_valasztott,
+        afa_bevallas, hipa_kulcs, hipa_telepules,
+        hipa_egyszeru, adoev, beallitva
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+      [
+        uid, profile.vallalkozasTipus, profile.adozasForma, profile.foglalkozas,
+        profile.koltseghanyad, profile.szakkepzettseg ? 1 : 0, profile.aamValasztott ? 1 : 0,
+        profile.afaBevallas, profile.hipaKulcs, profile.hipaTelepules,
+        profile.hipaEgyszeru ? 1 : 0, profile.adoev,
+      ]
+    );
+  }
+}
+
+/** Search HIPA rates by settlement name (LIKE query, max 10) */
+export function searchHipaRates(query: string): HipaRate[] {
+  const rows = queryAll(
+    'SELECT megye, telepules, kulcs FROM hipa_rates WHERE telepules LIKE ? COLLATE NOCASE ORDER BY telepules LIMIT 10',
+    [`%${query}%`]
+  );
+  return rows.map(r => ({
+    megye: r.megye as string,
+    telepules: r.telepules as string,
+    kulcs: r.kulcs as number,
+  }));
+}
+
+/** Get exact HIPA rate for a settlement */
+export function getHipaRate(megye: string, telepules: string): HipaRate | null {
+  const row = queryOne(
+    'SELECT megye, telepules, kulcs FROM hipa_rates WHERE megye = ? AND telepules = ?',
+    [megye, telepules]
+  );
+  if (!row) return null;
+  return { megye: row.megye as string, telepules: row.telepules as string, kulcs: row.kulcs as number };
+}
+
+/** Get full tax estimate for a user */
+export function getFullTaxEstimate(userId: string | undefined, adoev: number, evesBevétel: number): TaxEstimate | null {
+  const uid = userId ?? getCurrentUserId();
+  if (!uid) return null;
+
+  const profil = getBusinessProfile(uid);
+  if (!profil || !profil.beallitva) return null;
+
+  const params = getTaxParameters(adoev);
+  if (!params) return null;
+
+  return calculateFullEstimate(evesBevétel, profil, params);
+}
+
+/** Get tax deadlines for a user */
+export function getTaxDeadlines(userId: string | undefined, adoev: number): TaxDeadline[] {
+  const uid = userId ?? getCurrentUserId();
+  if (!uid) return [];
+
+  const profil = getBusinessProfile(uid);
+  if (!profil || !profil.beallitva) return [];
+
+  return generateTaxDeadlines(profil, adoev);
+}
+
+/** Get tax warnings for a user */
+export function getTaxWarnings(userId: string | undefined, bevétel: number, adoev: number): TaxWarning[] {
+  const uid = userId ?? getCurrentUserId();
+  if (!uid) return [];
+
+  const profil = getBusinessProfile(uid);
+  if (!profil || !profil.beallitva) return [];
+
+  const params = getTaxParameters(adoev);
+  if (!params) return [];
+
+  return generateTaxWarnings(bevétel, profil, params);
+}
+
+/** Compare tax forms for a user */
+export function compareTaxFormsService(
+  bevétel: number,
+  koltsegek: number,
+  adoev: number,
+  hipaKulcs: number,
+  kivet?: number
+): TaxFormComparison[] {
+  const params = getTaxParameters(adoev);
+  if (!params) return [];
+
+  const uid = getCurrentUserId();
+  const profil = uid ? getBusinessProfile(uid) : null;
+  const profilFields = profil
+    ? { foglalkozas: profil.foglalkozas, szakkepzettseg: profil.szakkepzettseg, koltseghanyad: profil.koltseghanyad }
+    : { foglalkozas: 'fofoglalkozasu' as const, szakkepzettseg: false, koltseghanyad: params.atalanyAltalanos };
+
+  return compareTaxForms(bevétel, koltsegek, params, hipaKulcs, profilFields, kivet);
+}
+
+/** Sync tax deadlines into calendar_events.
+ *  Deletes all existing [TAX] events for the given year range, then inserts fresh ones.
+ */
+export function syncTaxDeadlinesToCalendar(userId: string | undefined): void {
+  const uid = userId ?? getCurrentUserId();
+  if (!uid) return;
+
+  const profil = getBusinessProfile(uid);
+  if (!profil || !profil.beallitva) {
+    // No profile → just delete old tax events
+    execute(`DELETE FROM calendar_events WHERE title LIKE '[TAX]%'`);
+    return;
+  }
+
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  // Generate for current year and next year
+  const deadlines = [
+    ...generateTaxDeadlines(profil, currentYear),
+    ...generateTaxDeadlines(profil, currentYear + 1),
+  ];
+
+  // Delete old tax events
+  execute(`DELETE FROM calendar_events WHERE title LIKE '[TAX]%'`);
+
+  // Insert new
+  for (const d of deadlines) {
+    const id = uuidv4();
+    execute(
+      `INSERT INTO calendar_events (id, title, description, date, type, color) VALUES (?, ?, ?, ?, 'deadline', ?)`,
+      [id, `[TAX] ${d.description}`, d.type, d.date, d.color]
+    );
+  }
 }

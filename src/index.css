@@ -106,8 +106,9 @@
 [data-theme="ash-soft"] {
   --color-emerald-400: #059669;
   --color-emerald-500: #047857;
-  --color-amber-400: #d97706;
-  --color-amber-500: #b45309;
+  --color-amber-300: #b45309;
+  --color-amber-400: #92400e;
+  --color-amber-500: #78350f;
   --color-orange-400: #ea580c;
   --color-orange-500: #c2410c;
   --color-green-400: #16a34a;
@@ -125,6 +126,19 @@
 /* Base styles */
 * {
   font-family: var(--font-body);
+}
+
+/* Shared text tiers for denser dark surfaces */
+.text-muted-strong {
+  color: color-mix(in srgb, var(--color-cream) 72%, var(--color-steel) 28%);
+}
+
+.text-muted {
+  color: color-mix(in srgb, var(--color-cream) 62%, var(--color-steel) 38%);
+}
+
+.text-muted-soft {
+  color: color-mix(in srgb, var(--color-cream) 54%, var(--color-steel) 46%);
 }
 
 /* Heading font utility */
@@ -194,6 +208,16 @@ input[type="number"]::-webkit-outer-spin-button {
 
 /* ===== Micro-animations ===== */
 
+/* Page transition — eliminates the hard "pop-in" flash on route changes */
+@keyframes page-enter {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.page-enter {
+  animation: page-enter 0.12s ease-out both;
+}
+
 /* Modal entrance */
 @keyframes modal-in {
   from { opacity: 0; transform: scale(0.97) translateY(4px); }
@@ -238,22 +262,12 @@ button:active:not(:disabled) {
   transform: scale(0.97);
 }
 
-/* Sidebar nav item slide-in */
+/* Sidebar nav item slide-in — DISABLED: was re-running on every route change,
+   contributing to the "flash" feeling. The AnimatePresence page fade is enough. */
 @keyframes slide-right {
   from { opacity: 0; transform: translateX(-4px); }
   to { opacity: 1; transform: translateX(0); }
 }
-
-aside nav a {
-  animation: slide-right 0.15s ease-out both;
-}
-
-aside nav a:nth-child(1) { animation-delay: 0.02s; }
-aside nav a:nth-child(2) { animation-delay: 0.035s; }
-aside nav a:nth-child(3) { animation-delay: 0.05s; }
-aside nav a:nth-child(4) { animation-delay: 0.065s; }
-aside nav a:nth-child(5) { animation-delay: 0.08s; }
-aside nav a:nth-child(6) { animation-delay: 0.095s; }
 
 /* Stat card entrance */
 @keyframes fade-up {
@@ -261,27 +275,9 @@ aside nav a:nth-child(6) { animation-delay: 0.095s; }
   to { opacity: 1; transform: translateY(0); }
 }
 
-.grid > .bg-surface-800\/50 {
-  animation: fade-up 0.18s ease-out both;
-}
-
-.grid > .bg-surface-800\/50:nth-child(1) { animation-delay: 0.02s; }
-.grid > .bg-surface-800\/50:nth-child(2) { animation-delay: 0.04s; }
-.grid > .bg-surface-800\/50:nth-child(3) { animation-delay: 0.06s; }
-.grid > .bg-surface-800\/50:nth-child(4) { animation-delay: 0.08s; }
-
-/* Progress bar fill animation */
+/* Progress bar fill animation — applied via inline style on specific bars only */
 @keyframes bar-fill {
   from { width: 0; }
-}
-
-.rounded-full.h-full, .h-full.rounded-full {
-  animation: bar-fill 0.2s ease-out;
-}
-
-/* Finance page — staggered section entrance */
-.max-w-6xl.space-y-6 > * {
-  animation: fade-up 0.18s ease-out both;
 }
 
 .space-y-6 > :nth-child(1) { animation-delay: 0s; }
@@ -293,16 +289,12 @@ aside nav a:nth-child(6) { animation-delay: 0.095s; }
 .space-y-6 > :nth-child(7) { animation-delay: 0.18s; }
 .space-y-6 > :nth-child(8) { animation-delay: 0.21s; }
 
-/* Card hover lift (finance cards) */
-.bg-surface-800\/50.rounded-xl,
-.bg-surface-800\/50.rounded-2xl {
-  transition: transform 0.15s ease-out, box-shadow 0.15s ease-out;
+/* Search / text input hover */
+input.bg-surface-800\/50 {
+  transition: border-color 0.15s ease-out;
 }
-
-.bg-surface-800\/50.rounded-xl:hover,
-.bg-surface-800\/50.rounded-2xl:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+input.bg-surface-800\/50:hover {
+  border-color: color-mix(in srgb, var(--color-teal) 30%, transparent);
 }
 
 /* Shortcut grid item hover */
@@ -336,6 +328,36 @@ button.rounded-full[style*="background-color"] {
 
 .animate-spin {
   animation: smooth-spin 0.7s linear infinite;
+}
+
+/* ===== Goal picker modal animations ===== */
+@keyframes goal-stagger-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.96); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.goal-preset {
+  opacity: 0;
+  animation: goal-stagger-in 0.35s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+}
+
+@keyframes goal-number-pop {
+  0% { transform: scale(0.92); opacity: 0.6; }
+  60% { transform: scale(1.04); }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+.goal-number-pop {
+  animation: goal-number-pop 0.28s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+@keyframes goal-glow-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(89, 131, 146, 0), 0 8px 24px -8px rgba(18, 69, 89, 0.55); }
+  50% { box-shadow: 0 0 0 4px rgba(89, 131, 146, 0.12), 0 10px 30px -8px rgba(18, 69, 89, 0.75); }
+}
+
+.goal-preset-selected {
+  animation: goal-glow-pulse 2.2s ease-in-out infinite;
 }
 
 /* ===== Payment celebration ===== */

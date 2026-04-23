@@ -8,6 +8,7 @@ import InvoiceUploadModal from '../components/InvoiceUploadModal';
 import InvoicePdfViewer from '../components/InvoicePdfViewer';
 import ManualRevenueModal from '../components/ManualRevenueModal';
 import ExpenseModal from '../components/ExpenseModal';
+import TaxSection from '../components/TaxSection';
 import { useThemedColor } from '../utils/colors';
 
 const CATEGORY_META: Record<string, { label: string; icon: typeof Monitor; color: string; chartColor: string }> = {
@@ -62,10 +63,6 @@ export default function Finances() {
   const [showExpectedTooltip, setShowExpectedTooltip] = useState(false);
   const expectedCardRef = useRef<HTMLDivElement>(null);
   const [tooltipPos, setTooltipPos] = useState<{ top: number; left: number } | null>(null);
-
-  // Revenue goal editing
-  const [editingGoal, setEditingGoal] = useState(false);
-  const [goalInput, setGoalInput] = useState('');
 
   function handleExpectedHover(show: boolean) {
     setShowExpectedTooltip(show);
@@ -134,15 +131,6 @@ export default function Finances() {
     loadData();
   }
 
-  async function saveRevenueGoal() {
-    const val = parseInt(goalInput, 10);
-    if (user && !isNaN(val) && val >= 0) {
-      await window.electronAPI.updateUser(user.id, { revenue_goal_yearly: val });
-      setEditingGoal(false);
-      loadData();
-    }
-  }
-
   // Pending invoices sorted by urgency
   const pendingInvoices = useMemo(() => {
     const now = new Date();
@@ -200,13 +188,6 @@ export default function Finances() {
     return { current, prev, pct };
   }, [financeStats, enhanced]);
 
-  // Revenue goal progress
-  const goalProgress = useMemo(() => {
-    if (!enhanced || !enhanced.revenueGoal || enhanced.revenueGoal <= 0) return null;
-    const pct = Math.min(Math.round((enhanced.yearlyRevenue / enhanced.revenueGoal) * 100), 100);
-    return { target: enhanced.revenueGoal, current: enhanced.yearlyRevenue, pct };
-  }, [enhanced]);
-
   // Daily motivational quote (rotates each day)
   const dailyQuote = useMemo(() => {
     const now = new Date();
@@ -234,7 +215,7 @@ export default function Finances() {
   }
 
   return (
-    <div className="max-w-6xl mx-auto space-y-6">
+    <div className="max-w-7xl mx-auto space-y-8">
       {/* ── Header ── */}
       <div className="flex items-end justify-between">
         <div>
@@ -262,59 +243,56 @@ export default function Finances() {
       </div>
 
       {/* ══════════════════════════════════════════════════════════
-          HERO — Yearly Revenue + Cumulative Sparkline
+          HERO — Nettó árbevétel (ÁFA-mentes) + Cumulative Sparkline
          ══════════════════════════════════════════════════════════ */}
       <div className="relative bg-surface-800/50 rounded-2xl border-l-[3px] border-teal p-6 overflow-hidden">
         {/* Background glow */}
         <div className="absolute -top-20 -right-20 w-72 h-72 bg-teal/5 rounded-full blur-3xl pointer-events-none" />
         <div className="relative flex items-start justify-between">
-          <div className="flex-1">
-            <p className="text-xs text-steel tracking-[0.15em] font-medium mb-1">ÉVES BEVÉTEL • {new Date().getFullYear()}</p>
-            <p className="text-4xl font-bold text-cream tracking-tight">{formatCurrency(enhanced?.yearlyRevenue ?? 0)}</p>
-            {enhanced && enhanced.yearlyExpenses > 0 && (
-              <p className="text-xs text-steel/60 mt-1">
-                Kiadások: {formatCurrency(enhanced.yearlyExpenses)} • Profit: <span className="text-emerald-400">{formatCurrency((enhanced.yearlyRevenue) - enhanced.yearlyExpenses)}</span>
-              </p>
-            )}
-            {/* Revenue goal bar */}
-            {goalProgress ? (
-              <div className="mt-4 max-w-sm">
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-xs text-steel/60 flex items-center gap-1">
-                    <Target width={11} height={11} />
-                    Éves cél: {formatCurrency(goalProgress.target)}
+          <div className="flex-1 min-w-0">
+            <p className="text-xs text-steel tracking-[0.15em] font-medium mb-1">
+              {enhanced?.vatStatus === 'standard' ? 'NETTÓ ÁRBEVÉTEL' : 'ÉVES ÁRBEVÉTEL'} • {new Date().getFullYear()}
+            </p>
+            <p className="text-5xl font-bold text-cream tracking-tight">
+              {formatCurrency(
+                enhanced?.vatStatus === 'standard'
+                  ? (enhanced?.yearlyNetRevenue ?? enhanced?.yearlyRevenue ?? 0)
+                  : (enhanced?.yearlyRevenue ?? 0)
+              )}
+            </p>
+            {enhanced && (
+              <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-1.5 text-xs">
+                {enhanced.vatStatus === 'standard' && (
+                  <span className="text-steel/60">
+                    Bruttó: <span className="text-steel">{formatCurrency(enhanced.yearlyRevenue)}</span>
                   </span>
-                  <span className="text-xs font-bold text-cream">{goalProgress.pct}%</span>
-                </div>
-                <div className="h-2 bg-surface-900/60 rounded-full overflow-hidden">
-                  <div
-                    className="h-full rounded-full transition-all duration-200 ease-out"
-                    style={{
-                      width: `${goalProgress.pct}%`,
-                      background: goalProgress.pct >= 100
-                        ? 'linear-gradient(90deg, #10b981, #34d399)'
-                        : goalProgress.pct >= 60
-                        ? 'linear-gradient(90deg, #124559, #598392)'
-                        : 'linear-gradient(90deg, #f59e0b, #fbbf24)',
-                    }}
-                  />
-                </div>
+                )}
+                <span className="text-steel/60">
+                  Kiadás: <span className="text-steel">{formatCurrency(enhanced.yearlyExpenses)}</span>
+                </span>
+                {(() => {
+                  const net = enhanced.vatStatus === 'standard'
+                    ? (enhanced.yearlyNetRevenue ?? enhanced.yearlyRevenue)
+                    : enhanced.yearlyRevenue;
+                  const profit = net - enhanced.yearlyExpenses;
+                  const margin = net > 0 ? Math.round((profit / net) * 100) : 0;
+                  return (
+                    <>
+                      <span className="text-steel/60">
+                        Nyereség: <span className={profit >= 0 ? 'text-emerald-400' : 'text-red-400'}>{formatCurrency(profit)}</span>
+                      </span>
+                      <span className="text-steel/60">
+                        Árrés: <span className={margin >= 0 ? 'text-cream' : 'text-red-400'}>{margin}%</span>
+                      </span>
+                    </>
+                  );
+                })()}
+                {enhanced.vatStatus === 'standard' && typeof enhanced.vatBalance === 'number' && (
+                  <span className="text-steel/60">
+                    ÁFA egyenleg: <span className={enhanced.vatBalance > 0 ? 'text-cream' : 'text-emerald-400'}>{formatCurrency(enhanced.vatBalance)}</span>
+                  </span>
+                )}
               </div>
-            ) : (
-              <button
-                onClick={() => { setEditingGoal(true); setGoalInput(String(enhanced?.revenueGoal || '')); }}
-                className="mt-3 text-xs text-steel/40 hover:text-steel transition-colors duration-150 ease-out cursor-pointer flex items-center gap-1"
-              >
-                <Target width={11} height={11} /> Éves cél beállítása
-              </button>
-            )}
-            {goalProgress && (
-              <button
-                onClick={() => { setEditingGoal(true); setGoalInput(String(goalProgress.target)); }}
-                className="mt-1 text-[10px] text-steel/30 hover:text-steel/50 transition-colors duration-150 ease-out cursor-pointer"
-              >
-                Cél módosítása
-              </button>
             )}
           </div>
 
@@ -377,24 +355,20 @@ export default function Finances() {
             </div>
           )}
         </div>
-
-        {/* Revenue goal inline editor */}
-        {editingGoal && (
-          <div className="mt-3 flex items-center gap-2 max-w-xs">
-            <input
-              type="number"
-              value={goalInput}
-              onChange={e => setGoalInput(e.target.value)}
-              placeholder="Éves cél (Ft)"
-              className="flex-1 px-3 py-1.5 text-sm bg-surface-900 border border-teal/15 rounded-lg text-cream focus:outline-none focus:ring-1 focus:ring-teal/40"
-              autoFocus
-              onKeyDown={e => { if (e.key === 'Enter') saveRevenueGoal(); if (e.key === 'Escape') setEditingGoal(false); }}
-            />
-            <button onClick={saveRevenueGoal} className="px-3 py-1.5 text-xs bg-teal text-cream rounded-lg hover:bg-teal/80 cursor-pointer">Mentés</button>
-            <button onClick={() => setEditingGoal(false)} className="px-2 py-1.5 text-xs text-steel hover:text-cream cursor-pointer">Mégsem</button>
-          </div>
-        )}
       </div>
+
+      {/* ══════════════════════════════════════════════════════════
+          ADÓZÁS — ÁFA státusz + becsült adók
+         ══════════════════════════════════════════════════════════ */}
+      <TaxSection
+        yearlyRevenue={enhanced?.yearlyRevenue ?? 0}
+        yearlyNetRevenue={enhanced?.yearlyNetRevenue}
+        vatPayable={enhanced?.vatPayable}
+        vatDeductible={enhanced?.vatDeductible}
+        vatBalance={enhanced?.vatBalance}
+        vatStatus={enhanced?.vatStatus}
+        onVatChanged={loadData}
+      />
 
       {/* ══════════════════════════════════════════════════════════
           ROW 2 — Monthly comparison · Várható/Függő · Mutatók

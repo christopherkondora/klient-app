@@ -23,6 +23,7 @@ import {
 import { hu } from 'date-fns/locale';
 import DatePicker from '../components/DatePicker';
 import TimePicker from '../components/TimePicker';
+import PageHeader from '../components/PageHeader';
 import { useThemedColor } from '../utils/colors';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -40,7 +41,9 @@ function timesOverlap(s1: string, e1: string, s2: string, e2: string) {
   return start1 < end2 && start2 < end1;
 }
 
-function eventAccentColor(type?: string): string {
+function eventAccentColor(type?: string, title?: string, color?: string): string {
+  // Tax deadline events carry their own color
+  if (title?.startsWith('[TAX]') && color) return color;
   switch (type) {
     case 'deadline': return 'var(--color-orange-400, #ea580c)';
     case 'meeting': return 'var(--color-amber-400, #d97706)';
@@ -242,13 +245,11 @@ export default function Calendar() {
 
   return (
     <div className={`mx-auto space-y-6 ${viewMode === 'week' ? 'max-w-full' : 'max-w-7xl'}`}>
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="font-pixel text-xl text-cream">Naptár</h1>
-          <p className="text-steel text-sm mt-2">Munkaórák elosztása és időbeosztás</p>
-        </div>
-        <div className="flex items-center gap-3">
+      <PageHeader
+        title="Naptár"
+        subtitle="Munkaórák elosztása és időbeosztás"
+        actions={(
+          <>
           {/* Filter Toggle */}
           <div className="relative">
             <button
@@ -319,8 +320,9 @@ export default function Calendar() {
           >
             <Plus width={18} height={18} />
           </button>
-        </div>
-      </div>
+          </>
+        )}
+      />
 
       <div className={`grid gap-6 ${viewMode === 'week' ? 'grid-cols-1' : 'grid-cols-1 lg:grid-cols-3'}`}>
         {/* Calendar Grid */}
@@ -371,6 +373,7 @@ export default function Calendar() {
                           const isCompleted = project?.status === 'completed';
                           const assignments = event.project_id ? projectAssignments.get(event.project_id) : undefined;
                           const hasAssignments = assignments && assignments.length > 0;
+                          const isTax = event.title?.startsWith('[TAX]');
                           return (
                             <div
                               key={event.id}
@@ -379,12 +382,13 @@ export default function Calendar() {
                               style={{
                                 backgroundColor: `color-mix(in srgb, ${isCompleted ? 'var(--color-steel)' : (event.color ? tc(event.color) : 'var(--color-teal)')} 25%, transparent)`,
                                 color: isCompleted ? 'var(--color-steel)' : 'var(--color-cream)',
-                                borderLeft: `2px solid ${hasAssignments ? 'var(--color-amber-400)' : isCompleted ? 'var(--color-steel)' : eventAccentColor(event.type)}`,
+                                borderLeft: `2px solid ${hasAssignments ? 'var(--color-amber-400)' : isCompleted ? 'var(--color-steel)' : eventAccentColor(event.type, event.title, event.color)}`,
+                                ...(isTax && event.color ? { boxShadow: `inset 0 0 0 1px ${event.color}40` } : {}),
                               }}
-                              title={hasAssignments ? `Hozzárendelve: ${assignments.map(a => a.member_name).join(', ')}` : undefined}
+                              title={isTax ? event.title.replace('[TAX] ', '') : hasAssignments ? `Hozzárendelve: ${assignments.map(a => a.member_name).join(', ')}` : undefined}
                             >
                               {event.start_time && <span className="mr-0.5">{event.start_time.slice(0, 5)}</span>}
-                              {event.title}
+                              {isTax ? event.title.replace('[TAX] ', '📋 ') : event.title}
                             </div>
                           );
                         })}
@@ -484,6 +488,46 @@ export default function Calendar() {
                     </button>
                   ))}
                 </div>
+                {/* All-day / untimed events row */}
+                {(() => {
+                  const hasAnyAllDay = weekDays.some(day => {
+                    const ds = format(day, 'yyyy-MM-dd');
+                    return filteredEvents.some(e => e.date === ds && !e.start_time);
+                  });
+                  if (!hasAnyAllDay) return null;
+                  return (
+                    <div className="grid grid-cols-[50px_repeat(7,1fr)] border-b border-teal/20">
+                      <div className="text-[10px] text-steel/50 text-right pr-2 py-1">Egész nap</div>
+                      {weekDays.map((day, i) => {
+                        const ds = format(day, 'yyyy-MM-dd');
+                        const allDay = filteredEvents.filter(e => e.date === ds && !e.start_time);
+                        return (
+                          <div key={i} className="border-l border-teal/10 px-0.5 py-1 space-y-0.5">
+                            {allDay.map(event => {
+                              const isTax = event.title?.startsWith('[TAX]');
+                              return (
+                                <div
+                                  key={event.id}
+                                  onDoubleClick={() => openEditEvent(event)}
+                                  className="text-[8px] pl-1.5 pr-1 py-0.5 rounded truncate font-medium cursor-pointer hover:opacity-80"
+                                  style={{
+                                    backgroundColor: `color-mix(in srgb, ${event.color ? tc(event.color) : 'var(--color-teal)'} 25%, transparent)`,
+                                    color: 'var(--color-cream)',
+                                    borderLeft: `2px solid ${event.color || 'var(--color-teal)'}`,
+                                    ...(isTax && event.color ? { boxShadow: `inset 0 0 0 1px ${event.color}40` } : {}),
+                                  }}
+                                  title={isTax ? event.title.replace('[TAX] ', '') : event.title}
+                                >
+                                  {isTax ? event.title.replace('[TAX] ', '📋 ') : event.title}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
                 {/* Time grid */}
                 <div className="grid grid-cols-[50px_repeat(7,1fr)] relative" style={{ height: 24 * HOUR_H }}>
                   {/* Hour labels + lines */}
@@ -512,6 +556,7 @@ export default function Calendar() {
                       {dayColumns[di].map(({ event, col, totalCols, top, height }) => {
                         const project = allProjects.find(p => p.id === event.project_id);
                         const isCompleted = project?.status === 'completed';
+                        const isTax = event.title?.startsWith('[TAX]');
                         return (
                           <div
                             key={event.id}
@@ -525,11 +570,12 @@ export default function Calendar() {
                               width: `${(1 / totalCols) * 100 - 1}%`,
                               backgroundColor: `color-mix(in srgb, ${isCompleted ? 'var(--color-steel)' : (event.color ? tc(event.color) : 'var(--color-teal)')} 25%, transparent)`,
                               color: isCompleted ? 'var(--color-steel)' : 'var(--color-cream)',
-                              borderLeft: `2px solid ${isCompleted ? 'var(--color-steel)' : eventAccentColor(event.type)}`,
+                              borderLeft: `2px solid ${isCompleted ? 'var(--color-steel)' : eventAccentColor(event.type, event.title, event.color)}`,
+                              ...(isTax && event.color ? { boxShadow: `inset 0 0 0 1px ${event.color}40` } : {}),
                               zIndex: 5,
                             }}
                           >
-                            {event.start_time?.slice(0, 5)} {event.title}
+                            {event.start_time?.slice(0, 5)} {isTax ? event.title.replace('[TAX] ', '📋 ') : event.title}
                           </div>
                         );
                       })}
@@ -583,8 +629,39 @@ export default function Calendar() {
               placed.push(item);
             });
 
+            const allDayEvts = filteredEvents.filter(e => e.date === dayStr && !e.start_time);
+
             return (
-              <div className="overflow-auto max-h-[600px]">
+              <div>
+                {/* All-day / untimed events (e.g. tax deadlines) */}
+                {allDayEvts.length > 0 && (
+                  <div className="mb-3 space-y-1">
+                    {allDayEvts.map(event => {
+                      const isTax = event.title?.startsWith('[TAX]');
+                      const displayTitle = isTax ? event.title.replace('[TAX] ', '') : event.title;
+                      return (
+                        <div
+                          key={event.id}
+                          onDoubleClick={() => openEditEvent(event)}
+                          className="text-xs px-3 py-2 rounded-lg font-medium flex items-center gap-2 cursor-pointer hover:opacity-80"
+                          style={{
+                            backgroundColor: `color-mix(in srgb, ${event.color ? tc(event.color) : 'var(--color-teal)'} 20%, transparent)`,
+                            color: 'var(--color-cream)',
+                            borderLeft: `3px solid ${event.color || 'var(--color-teal)'}`,
+                            ...(isTax && event.color ? { boxShadow: `inset 0 0 0 1px ${event.color}40` } : {}),
+                          }}
+                        >
+                          {isTax && <span>📋</span>}
+                          <span>{displayTitle}</span>
+                          {isTax && (
+                            <span className="ml-auto text-[10px] px-1.5 py-0.5 rounded bg-teal/10 text-teal border border-teal/20">Adó</span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+                <div className="overflow-auto max-h-[600px]">
                 <div className="grid grid-cols-[60px_1fr] relative" style={{ height: 24 * DAY_HOUR_H }}>
                   {hours.map(hour => (
                     <div key={hour} className="contents">
@@ -607,6 +684,7 @@ export default function Calendar() {
                       const dur = event.start_time && event.end_time ? calcDurationFromTimes(event.start_time, event.end_time) : 1;
                       const assignments = event.project_id ? projectAssignments.get(event.project_id) : undefined;
                       const hasAssignments = assignments && assignments.length > 0;
+                      const isTax = event.title?.startsWith('[TAX]');
                       return (
                         <div
                           key={event.id}
@@ -619,14 +697,15 @@ export default function Calendar() {
                             left: `${(col / totalCols) * 100}%`,
                             width: `${(1 / totalCols) * 100 - 1}%`,
                             backgroundColor: `color-mix(in srgb, ${isCompleted ? 'var(--color-steel)' : (event.color ? tc(event.color) : 'var(--color-teal)')} 20%, transparent)`,
-                            borderLeft: `3px solid ${hasAssignments ? 'var(--color-amber-400)' : isCompleted ? 'var(--color-steel)' : eventAccentColor(event.type)}`,
+                            borderLeft: `3px solid ${hasAssignments ? 'var(--color-amber-400)' : isCompleted ? 'var(--color-steel)' : eventAccentColor(event.type, event.title, event.color)}`,
+                            ...(isTax && event.color ? { boxShadow: `inset 0 0 0 1px ${event.color}40` } : {}),
                             zIndex: 5,
                           }}
-                          title={hasAssignments ? `Hozzárendelve: ${assignments.map(a => a.member_name).join(', ')}` : undefined}
+                          title={isTax ? event.title.replace('[TAX] ', '') : hasAssignments ? `Hozzárendelve: ${assignments.map(a => a.member_name).join(', ')}` : undefined}
                         >
                           <div className="flex items-center justify-between">
                             <span className="text-xs font-medium" style={{ color: isCompleted ? 'var(--color-steel)' : 'var(--color-cream)' }}>
-                              {event.start_time?.slice(0, 5)} – {event.end_time?.slice(0, 5)} • {event.title}
+                              {event.start_time?.slice(0, 5)} – {event.end_time?.slice(0, 5)} • {isTax ? event.title.replace('[TAX] ', '📋 ') : event.title}
                             </span>
                             <span className="text-[10px] text-steel">{dur.toFixed(1)}h</span>
                           </div>
@@ -643,6 +722,7 @@ export default function Calendar() {
                     })}
                   </div>
                 </div>
+              </div>
               </div>
             );
           })()}
@@ -666,10 +746,13 @@ export default function Calendar() {
                 const isCompleted = project?.status === 'completed';
                 const assignments = event.project_id ? projectAssignments.get(event.project_id) : undefined;
                 const hasAssignments = assignments && assignments.length > 0;
+                const isTax = event.title?.startsWith('[TAX]');
+                const displayTitle = isTax ? event.title.replace('[TAX] ', '') : event.title;
                 return (
                   <div
                     key={event.id}
-                    className={`p-3 rounded-lg border group ${isCompleted ? 'opacity-50' : ''} ${event.project_id ? 'cursor-pointer hover:border-teal/25' : ''} ${hasAssignments ? 'border-l-2 border-l-amber-400 border-teal/10' : 'border-teal/10'}`}
+                    className={`p-3 rounded-lg border group ${isCompleted ? 'opacity-50' : ''} ${event.project_id ? 'cursor-pointer hover:border-teal/25' : ''} ${hasAssignments ? 'border-l-2 border-l-amber-400 border-teal/10' : isTax && event.color ? 'border-teal/10' : 'border-teal/10'}`}
+                    style={isTax && event.color ? { borderLeft: `2px solid ${event.color}` } : undefined}
                     onDoubleClick={() => openEditEvent(event)}
                   >
                     <div className="flex items-start justify-between">
@@ -680,7 +763,12 @@ export default function Calendar() {
                         />
                         <div>
                           <div className="flex items-center gap-2">
-                            <h4 className="text-sm font-medium text-cream">{event.title}</h4>
+                            <h4 className="text-sm font-medium text-cream">{isTax ? `📋 ${displayTitle}` : event.title}</h4>
+                            {isTax && (
+                              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-teal/10 text-teal border border-teal/20">
+                                Adó
+                              </span>
+                            )}
                             {hasAssignments && (
                               <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-400/10 text-amber-400 border border-amber-400/20">
                                 {assignments[0].member_name}

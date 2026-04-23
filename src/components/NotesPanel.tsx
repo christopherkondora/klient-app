@@ -111,6 +111,8 @@ export default function NotesPanel({ open, onClose }: NotesPanelProps) {
     editorProps: {
       attributes: {
         class: 'prose prose-sm prose-invert max-w-none focus:outline-none min-h-[120px] px-1 py-2 text-cream/90',
+        lang: 'hu',
+        spellcheck: 'true',
       },
       handleClick: (view, _pos, event) => {
         const target = event.target as HTMLElement;
@@ -464,7 +466,7 @@ export default function NotesPanel({ open, onClose }: NotesPanelProps) {
     <div
       ref={panelRef}
       className="fixed z-50 flex flex-col bg-surface-900 border border-teal/15 rounded-xl shadow-2xl shadow-black/40 overflow-hidden select-none"
-      style={{ transform: `translate(${pos.x}px, ${pos.y}px)`, width: size.w, height: size.h, left: 0, top: 0 }}
+      style={{ transform: `translate(${pos.x}px, ${pos.y}px)`, width: size.w, height: size.h, left: 0, top: 0, WebkitAppRegion: 'no-drag' } as React.CSSProperties}
     >
       {/* Draggable header */}
       <div

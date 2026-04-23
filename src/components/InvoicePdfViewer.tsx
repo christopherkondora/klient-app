@@ -18,9 +18,10 @@ export default function InvoicePdfViewer({ invoice, onClose }: {
             <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
               invoice.status === 'paid' ? 'bg-emerald-500/15 text-emerald-400' :
               invoice.status === 'pending' ? 'bg-amber-500/15 text-amber-400' :
+              invoice.status === 'cancelled' ? 'bg-steel/15 text-steel/60' :
               'bg-red-500/15 text-red-400'
             }`}>
-              {invoice.status === 'paid' ? 'Fizetve' : invoice.status === 'pending' ? 'Függő' : 'Lejárt'}
+              {invoice.status === 'paid' ? 'Fizetve' : invoice.status === 'pending' ? 'Függő' : invoice.status === 'cancelled' ? 'Sztornózva' : 'Lejárt'}
             </span>
           </div>
           <button

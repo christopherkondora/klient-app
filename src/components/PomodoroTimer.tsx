@@ -254,23 +254,23 @@ export default function PomodoroTimer() {
       {/* Toggle button */}
       <button
         onClick={() => setOpen(v => !v)}
-        className={`fixed bottom-6 right-[5.5rem] z-30 w-14 h-14 rounded-full flex items-center justify-center shadow-lg transition-all ${
+        className={`flex h-12 w-12 items-center justify-center rounded-full border transition-colors ${
           running
-            ? 'bg-teal text-cream animate-pulse shadow-teal/30'
-            : 'bg-teal text-cream shadow-teal/25 hover:bg-teal/80 hover:scale-105'
+            ? 'border-teal/40 bg-teal text-cream animate-pulse'
+            : 'border-teal/15 bg-surface-800/92 text-teal hover:border-teal/30 hover:bg-surface-700/95 hover:text-cream'
         }`}
         title="Pomodoro"
       >
         {running ? (
-          <span className="text-sm font-bold font-mono">{displayMin}:{String(displaySec).padStart(2, '0')}</span>
+          <span className="text-[11px] font-bold font-mono">{displayMin}:{String(displaySec).padStart(2, '0')}</span>
         ) : (
-          <Timer size={22} />
+          <Timer size={18} />
         )}
       </button>
 
       {/* Panel */}
       {open && (
-        <div className="fixed bottom-24 right-[5.5rem] z-30 w-72 bg-surface-900/95 backdrop-blur-md border border-teal/15 rounded-2xl shadow-2xl overflow-hidden">
+        <div className="fixed bottom-24 right-6 z-30 w-72 bg-surface-900/95 backdrop-blur-md border border-teal/15 rounded-2xl shadow-2xl overflow-hidden">
           {/* Header */}
           <div className="flex items-center justify-between px-4 py-3 border-b border-teal/10">
             <div className="flex items-center gap-2">
