@@ -1,10 +1,12 @@
 import { useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '../contexts/ThemeContext';
-import { ArrowRight, ArrowLeft, Check, Loader2, Receipt, Target, Palette, BarChart3, Calendar, FolderOpen, FileText, Mic, Eye, EyeOff, Mail, RefreshCw, Percent } from 'lucide-react';
+import { ArrowRight, ArrowLeft, Check, Loader2, Receipt, Target, Palette, BarChart3, Calendar, FolderOpen, FileText, Mic, Eye, EyeOff, Mail, RefreshCw, Percent, Building2, User as UserIcon, Briefcase } from 'lucide-react';
 
-type Step = 'auth' | 'confirm-email' | 'platform' | 'goal' | 'vat' | 'theme' | 'done';
+type Step = 'auth' | 'confirm-email' | 'platform' | 'tax_profile' | 'company_data' | 'goal' | 'theme' | 'done';
 type AuthMode = 'login' | 'register' | 'reset';
+type BizType = 'EV' | 'Kft' | 'Bt' | 'Kkt';
+type TaxForm = 'atalany' | 'vszja' | 'TAO' | 'KIVA';
 
 const INVOICE_PLATFORMS = [
   { id: 'szamlazz', label: 'Számlázz.hu' },
@@ -70,6 +72,14 @@ export default function Onboarding() {
   const [revenueGoal, setRevenueGoal] = useState(10_000_000);
   const [vatStatus, setVatStatus] = useState<'exempt' | 'standard'>('exempt');
   const [vatRateDefault, setVatRateDefault] = useState<number>(27);
+  // Tax profile
+  const [bizType, setBizType] = useState<BizType>('EV');
+  const [taxForm, setTaxForm] = useState<TaxForm>('atalany');
+  // Company data
+  const [companyName, setCompanyName] = useState('');
+  const [taxNumber, setTaxNumber] = useState('');
+  const [companyAddress, setCompanyAddress] = useState('');
+  const [bankAccount, setBankAccount] = useState('');
 
   const strength = getPasswordStrength(password);
 
@@ -156,25 +166,65 @@ export default function Onboarding() {
   const handleFinish = async () => {
     setSubmitting(true);
     try {
-      await updateUser({
+      const userPayload: Partial<UserSettings> = {
         invoice_platform: platform,
         revenue_goal_yearly: revenueGoal,
         vat_status: vatStatus,
         vat_rate_default: vatRateDefault,
         onboarding_complete: 1,
-      });
+      };
+      if (companyName.trim()) userPayload.company_name = companyName.trim();
+      if (taxNumber.trim()) userPayload.tax_number = taxNumber.trim();
+      if (companyAddress.trim()) userPayload.address = companyAddress.trim();
+      if (bankAccount.trim()) userPayload.bank_account = bankAccount.trim();
+      await updateUser(userPayload);
+
+      // Save tax profile (business type + tax form + AAM choice)
+      try {
+        await window.electronAPI.saveTaxProfile({
+          userId: '',
+          vallalkozasTipus: bizType,
+          adozasForma: taxForm,
+          foglalkozas: 'fofoglalkozasu',
+          koltseghanyad: taxForm === 'atalany' ? 0.40 : 0,
+          szakkepzettseg: false,
+          aamValasztott: vatStatus === 'exempt',
+          afaBevallas: 'negyedeves',
+          hipaKulcs: 0,
+          hipaTelepules: '',
+          hipaEgyszeru: false,
+          adoev: new Date().getFullYear(),
+          beallitva: true,
+        });
+      } catch { /* tax profile save optional */ }
     } catch { /* continue anyway */ }
     setSubmitting(false);
     animateStep('done');
   };
 
+  // When bizType changes, reset taxForm to a valid value
+  const handleBizTypeChange = (t: BizType) => {
+    setBizType(t);
+    if (t === 'EV') {
+      if (taxForm !== 'atalany' && taxForm !== 'vszja') setTaxForm('atalany');
+    } else {
+      if (taxForm !== 'TAO' && taxForm !== 'KIVA') setTaxForm('TAO');
+    }
+  };
+
   const formatGoal = (v: number) => {
     if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(v % 1_000_000 === 0 ? 0 : 1)}M Ft`;
-    return `${(v / 1000).toFixed(0)}e Ft`;
+    return `${(v / 1000).toFixed(0)} eFt`;
+  };
+
+  const formatMonthly = (v: number) => {
+    const monthly = Math.round(v / 12);
+    if (monthly >= 1_000_000) return `${(monthly / 1_000_000).toFixed(1)}M Ft/hó`;
+    return `${new Intl.NumberFormat('hu-HU').format(monthly)} Ft/hó`;
   };
 
   // Steps that show in step dots (only setup steps, not auth or done)
-  const setupSteps: Step[] = ['platform', 'goal', 'vat', 'theme'];
+  const setupSteps: Step[] = ['platform', 'tax_profile', 'company_data', 'goal', 'theme'];
 
   const stepContent: Record<Step, React.ReactNode> = {
     // ─── STEP 1: AUTH ───
@@ -501,7 +551,7 @@ export default function Onboarding() {
         </div>
 
         <button
-          onClick={() => animateStep('goal')}
+          onClick={() => animateStep('tax_profile')}
           className="w-full py-2.5 bg-teal text-cream text-sm font-medium rounded-lg hover:bg-teal/80 flex items-center justify-center gap-2 transition-colors"
         >
           Tovább
@@ -526,7 +576,7 @@ export default function Onboarding() {
             {formatGoal(revenueGoal)}
           </div>
           <p className="text-steel/60 text-xs mt-1">
-            ~{formatGoal(Math.round(revenueGoal / 12))}/hó
+            ~{formatMonthly(revenueGoal)}
           </p>
         </div>
 
@@ -558,13 +608,13 @@ export default function Onboarding() {
 
         <div className="flex gap-3">
           <button
-            onClick={() => animateStep('platform')}
+            onClick={() => animateStep('company_data')}
             className="px-4 py-2.5 text-sm text-steel hover:text-cream transition-colors"
           >
             <ArrowLeft width={16} height={16} />
           </button>
           <button
-            onClick={() => animateStep('vat')}
+            onClick={() => animateStep('theme')}
             className="flex-1 py-2.5 bg-teal text-cream text-sm font-medium rounded-lg hover:bg-teal/80 flex items-center justify-center gap-2 transition-colors"
           >
             Tovább
@@ -574,79 +624,215 @@ export default function Onboarding() {
       </div>
     ),
 
-    // ─── STEP 3.5: VAT ───
-    vat: (
-      <div className="space-y-6">
+    // ─── STEP 3: TAX PROFILE (business type + tax form + VAT) ───
+    tax_profile: (
+      <div className="space-y-5">
         <div className="text-center">
           <div className="w-10 h-10 rounded-xl bg-teal/15 border border-teal/20 flex items-center justify-center mx-auto mb-3">
-            <Percent width={20} height={20} className="text-teal" />
+            <Briefcase width={20} height={20} className="text-teal" />
           </div>
-          <h2 className="font-pixel text-base text-cream">Áfa státusz</h2>
-          <p className="text-steel text-sm mt-1.5">Hogyan kezeled az áfát a vállalkozásodban?</p>
+          <h2 className="font-pixel text-base text-cream">Adózási profil</h2>
+          <p className="text-steel text-sm mt-1.5">Ezt az app a számlázáshoz és pénzügyi kimutatásokhoz használja.</p>
         </div>
 
-        <div className="space-y-2">
-          <button
-            onClick={() => setVatStatus('exempt')}
-            className={`w-full text-left px-4 py-3 rounded-lg border transition-colors ${
-              vatStatus === 'exempt'
-                ? 'border-teal bg-teal/15'
-                : 'border-teal/10 bg-surface-800/50 hover:border-teal/25'
-            }`}
-          >
-            <div className="flex items-center justify-between mb-0.5">
-              <span className={`text-sm font-medium ${vatStatus === 'exempt' ? 'text-cream' : 'text-steel'}`}>Alanyi áfa mentes (AAM)</span>
-              {vatStatus === 'exempt' && <Check width={14} height={14} className="text-teal" />}
-            </div>
-            <p className="text-xs text-steel/60">Nem számlázol áfát, és nem is vonhatsz le. Éves bevételi limit: 12M Ft.</p>
-          </button>
-          <button
-            onClick={() => setVatStatus('standard')}
-            className={`w-full text-left px-4 py-3 rounded-lg border transition-colors ${
-              vatStatus === 'standard'
-                ? 'border-teal bg-teal/15'
-                : 'border-teal/10 bg-surface-800/50 hover:border-teal/25'
-            }`}
-          >
-            <div className="flex items-center justify-between mb-0.5">
-              <span className={`text-sm font-medium ${vatStatus === 'standard' ? 'text-cream' : 'text-steel'}`}>Áfakörös</span>
-              {vatStatus === 'standard' && <Check width={14} height={14} className="text-teal" />}
-            </div>
-            <p className="text-xs text-steel/60">Áfát számlázol a vevőknek, a beszerzésekből visszaigényelhetsz.</p>
-          </button>
+        <div>
+          <p className="text-xs text-steel mb-2">Vállalkozás típusa</p>
+          <div className="grid grid-cols-4 gap-2">
+            {([
+              { val: 'EV' as const, icon: UserIcon, label: 'EV' },
+              { val: 'Kft' as const, icon: Building2, label: 'Kft' },
+              { val: 'Bt' as const, icon: Building2, label: 'Bt' },
+              { val: 'Kkt' as const, icon: Building2, label: 'Kkt' },
+            ]).map(opt => (
+              <button
+                key={opt.val}
+                onClick={() => handleBizTypeChange(opt.val)}
+                className={`flex flex-col items-center gap-1 px-2 py-2.5 rounded-lg border text-xs font-medium transition-colors ${
+                  bizType === opt.val
+                    ? 'border-teal bg-teal/15 text-cream'
+                    : 'border-teal/10 bg-surface-800/50 text-steel hover:border-teal/25 hover:text-ash'
+                }`}
+              >
+                <opt.icon width={14} height={14} />
+                {opt.label}
+              </button>
+            ))}
+          </div>
         </div>
 
-        {vatStatus === 'standard' && (
-          <div>
-            <p className="text-xs text-steel mb-2">Alapértelmezett áfa kulcs</p>
-            <div className="flex gap-2">
-              {[27, 18, 5, 0].map(r => (
-                <button
-                  key={r}
-                  onClick={() => setVatRateDefault(r)}
-                  className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors ${
-                    vatRateDefault === r
-                      ? 'bg-teal text-cream'
-                      : 'bg-surface-800/50 text-steel border border-teal/10 hover:border-teal/25'
-                  }`}
-                >
-                  {r}%
-                </button>
-              ))}
-            </div>
-            <p className="text-[11px] text-steel/50 mt-2">Ezt később számlánként felülbírálhatod.</p>
+        <div>
+          <p className="text-xs text-steel mb-2">Adózási forma</p>
+          <div className="grid grid-cols-2 gap-2">
+            {(bizType === 'EV'
+              ? [
+                  { val: 'atalany' as const, label: 'Átalányadó', desc: 'Bevétel %-a az adóalap' },
+                  { val: 'vszja' as const, label: 'Vállalkozói SZJA', desc: 'Tételes költségek' },
+                ]
+              : [
+                  { val: 'TAO' as const, label: 'Társasági adó', desc: '9% TAO' },
+                  { val: 'KIVA' as const, label: 'KIVA', desc: 'Kisvállalati adó' },
+                ]
+            ).map(opt => (
+              <button
+                key={opt.val}
+                onClick={() => setTaxForm(opt.val)}
+                className={`text-left px-3 py-2.5 rounded-lg border transition-colors ${
+                  taxForm === opt.val
+                    ? 'border-teal bg-teal/15'
+                    : 'border-teal/10 bg-surface-800/50 hover:border-teal/25'
+                }`}
+              >
+                <div className={`text-sm font-medium ${taxForm === opt.val ? 'text-cream' : 'text-steel'}`}>{opt.label}</div>
+                <div className="text-[11px] text-steel/60 mt-0.5">{opt.desc}</div>
+              </button>
+            ))}
           </div>
-        )}
+        </div>
+
+        <div>
+          <div className="flex items-center gap-1.5 mb-2">
+            <Percent width={12} height={12} className="text-steel" />
+            <p className="text-xs text-steel">ÁFA státusz</p>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              onClick={() => setVatStatus('exempt')}
+              className={`text-left px-3 py-2.5 rounded-lg border transition-colors ${
+                vatStatus === 'exempt'
+                  ? 'border-teal bg-teal/15'
+                  : 'border-teal/10 bg-surface-800/50 hover:border-teal/25'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <span className={`text-sm font-medium ${vatStatus === 'exempt' ? 'text-cream' : 'text-steel'}`}>AAM</span>
+                {vatStatus === 'exempt' && <Check width={12} height={12} className="text-teal" />}
+              </div>
+              <div className="text-[11px] text-steel/60 mt-0.5">Alanyi mentes – max 18M Ft/év</div>
+            </button>
+            <button
+              onClick={() => setVatStatus('standard')}
+              className={`text-left px-3 py-2.5 rounded-lg border transition-colors ${
+                vatStatus === 'standard'
+                  ? 'border-teal bg-teal/15'
+                  : 'border-teal/10 bg-surface-800/50 hover:border-teal/25'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <span className={`text-sm font-medium ${vatStatus === 'standard' ? 'text-cream' : 'text-steel'}`}>Áfakörös</span>
+                {vatStatus === 'standard' && <Check width={12} height={12} className="text-teal" />}
+              </div>
+              <div className="text-[11px] text-steel/60 mt-0.5">Áfás számla, visszaigénylés</div>
+            </button>
+          </div>
+          {vatStatus === 'standard' && (
+            <div className="mt-3">
+              <p className="text-[11px] text-steel/70 mb-1.5">Alapértelmezett áfa kulcs</p>
+              <div className="flex gap-1.5">
+                {[27, 18, 5, 0].map(r => (
+                  <button
+                    key={r}
+                    onClick={() => setVatRateDefault(r)}
+                    className={`flex-1 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                      vatRateDefault === r
+                        ? 'bg-teal text-cream'
+                        : 'bg-surface-800/50 text-steel border border-teal/10 hover:border-teal/25'
+                    }`}
+                  >
+                    {r}%
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
 
         <div className="flex gap-3">
           <button
-            onClick={() => animateStep('goal')}
+            onClick={() => animateStep('platform')}
             className="px-4 py-2.5 text-sm text-steel hover:text-cream transition-colors"
           >
             <ArrowLeft width={16} height={16} />
           </button>
           <button
-            onClick={() => animateStep('theme')}
+            onClick={() => animateStep('company_data')}
+            className="flex-1 py-2.5 bg-teal text-cream text-sm font-medium rounded-lg hover:bg-teal/80 flex items-center justify-center gap-2 transition-colors"
+          >
+            Tovább
+            <ArrowRight width={16} height={16} />
+          </button>
+        </div>
+      </div>
+    ),
+
+    // ─── STEP 4: COMPANY DATA (optional) ───
+    company_data: (
+      <div className="space-y-5">
+        <div className="text-center">
+          <div className="w-10 h-10 rounded-xl bg-teal/15 border border-teal/20 flex items-center justify-center mx-auto mb-3">
+            <Building2 width={20} height={20} className="text-teal" />
+          </div>
+          <h2 className="font-pixel text-base text-cream">Vállalkozói adatok</h2>
+          <p className="text-steel text-sm mt-1.5">Számlázáshoz és szerződésekhez szükségesek. Később is kitölthetőek.</p>
+        </div>
+
+        <div className="space-y-3">
+          <div>
+            <label className="block text-xs font-medium text-steel mb-1.5">Cégnév / Vállalkozó neve</label>
+            <input
+              type="text"
+              value={companyName}
+              onChange={e => setCompanyName(e.target.value)}
+              placeholder="Pl. Kovács János EV"
+              className="w-full px-3.5 py-2.5 bg-surface-800 border border-teal/15 rounded-lg text-sm text-cream placeholder:text-steel/40 focus:outline-none focus:border-teal/50 focus:ring-1 focus:ring-teal/20"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-steel mb-1.5">Adószám</label>
+            <input
+              type="text"
+              value={taxNumber}
+              onChange={e => setTaxNumber(e.target.value)}
+              placeholder="12345678-1-42"
+              className="w-full px-3.5 py-2.5 bg-surface-800 border border-teal/15 rounded-lg text-sm text-cream placeholder:text-steel/40 focus:outline-none focus:border-teal/50 focus:ring-1 focus:ring-teal/20"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-steel mb-1.5">Székhely / Lakcím</label>
+            <input
+              type="text"
+              value={companyAddress}
+              onChange={e => setCompanyAddress(e.target.value)}
+              placeholder="1011 Budapest, Példa utca 1."
+              className="w-full px-3.5 py-2.5 bg-surface-800 border border-teal/15 rounded-lg text-sm text-cream placeholder:text-steel/40 focus:outline-none focus:border-teal/50 focus:ring-1 focus:ring-teal/20"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-steel mb-1.5">Bankszámlaszám</label>
+            <input
+              type="text"
+              value={bankAccount}
+              onChange={e => setBankAccount(e.target.value)}
+              placeholder="12345678-12345678-12345678"
+              className="w-full px-3.5 py-2.5 bg-surface-800 border border-teal/15 rounded-lg text-sm text-cream placeholder:text-steel/40 focus:outline-none focus:border-teal/50 focus:ring-1 focus:ring-teal/20"
+            />
+          </div>
+        </div>
+
+        <div className="flex gap-2">
+          <button
+            onClick={() => animateStep('tax_profile')}
+            className="px-3 py-2.5 text-sm text-steel hover:text-cream transition-colors"
+          >
+            <ArrowLeft width={16} height={16} />
+          </button>
+          <button
+            onClick={() => animateStep('goal')}
+            className="px-3 py-2.5 text-xs text-steel/60 hover:text-steel transition-colors"
+          >
+            Most nem
+          </button>
+          <button
+            onClick={() => animateStep('goal')}
             className="flex-1 py-2.5 bg-teal text-cream text-sm font-medium rounded-lg hover:bg-teal/80 flex items-center justify-center gap-2 transition-colors"
           >
             Tovább
@@ -698,7 +884,7 @@ export default function Onboarding() {
 
         <div className="flex gap-3">
           <button
-            onClick={() => animateStep('vat')}
+            onClick={() => animateStep('goal')}
             className="px-4 py-2.5 text-sm text-steel hover:text-cream transition-colors"
           >
             <ArrowLeft width={16} height={16} />

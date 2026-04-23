@@ -9,6 +9,7 @@ import InvoicePdfViewer from '../components/InvoicePdfViewer';
 import ManualRevenueModal from '../components/ManualRevenueModal';
 import ExpenseModal from '../components/ExpenseModal';
 import TaxSection from '../components/TaxSection';
+import PageHeader from '../components/PageHeader';
 import { useThemedColor } from '../utils/colors';
 
 const CATEGORY_META: Record<string, { label: string; icon: typeof Monitor; color: string; chartColor: string }> = {
@@ -216,31 +217,30 @@ export default function Finances() {
 
   return (
     <div className="max-w-7xl mx-auto space-y-8">
-      {/* ── Header ── */}
-      <div className="flex items-end justify-between">
-        <div>
-          <h1 className="font-pixel text-xl text-cream">Pénzügyek</h1>
-          <p className="text-steel text-sm mt-1">{hasInvoicing ? 'Cash flow és számlakezelés' : 'Bevételi nyilvántartás'}</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setShowManualModal(true)}
-            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium cursor-pointer transition-colors duration-150 ease-out bg-steel/20 text-cream hover:bg-steel/30"
-          >
-            <Plus width={16} height={16} />
-            Bevétel
-          </button>
-          {hasInvoicing && (
+      <PageHeader
+        title="Pénzügyek"
+        subtitle={hasInvoicing ? 'Cash flow és számlakezelés' : 'Bevételi nyilvántartás'}
+        actions={(
+          <>
             <button
-              onClick={() => setShowUploadModal(true)}
-              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium cursor-pointer transition-colors duration-150 ease-out bg-teal text-cream hover:bg-teal/80"
+              onClick={() => setShowManualModal(true)}
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium cursor-pointer transition-colors duration-150 ease-out bg-steel/20 text-cream hover:bg-steel/30"
             >
-              <FileText width={16} height={16} />
-              Számla beolvasása
+              <Plus width={16} height={16} />
+              Bevétel
             </button>
-          )}
-        </div>
-      </div>
+            {hasInvoicing && (
+              <button
+                onClick={() => setShowUploadModal(true)}
+                className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium cursor-pointer transition-colors duration-150 ease-out bg-teal text-cream hover:bg-teal/80"
+              >
+                <FileText width={16} height={16} />
+                Számla beolvasása
+              </button>
+            )}
+          </>
+        )}
+      />
 
       {/* ══════════════════════════════════════════════════════════
           HERO — Nettó árbevétel (ÁFA-mentes) + Cumulative Sparkline
