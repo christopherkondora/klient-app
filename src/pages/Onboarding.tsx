@@ -9,11 +9,10 @@ type BizType = 'EV' | 'Kft' | 'Bt' | 'Kkt';
 type TaxForm = 'atalany' | 'vszja' | 'TAO' | 'KIVA';
 
 const INVOICE_PLATFORMS = [
-  { id: 'szamlazz', label: 'Számlázz.hu' },
-  { id: 'billingo', label: 'Billingo' },
-  { id: 'nav', label: 'NAV Online Számla' },
-  { id: 'kulcs', label: 'Kulcs-Soft' },
-  { id: 'none', label: 'Nincs / Egyéb' },
+  { id: 'billingo', label: 'Billingo', desc: 'Mély integráció API kulccsal' },
+  { id: 'szamlazz', label: 'Számlázz.hu', desc: 'Mély integráció API kulccsal' },
+  { id: 'egyeb', label: 'Egyéb', desc: 'Egyszerű link megnyitás' },
+  { id: 'none', label: 'Nincs számlázó', desc: 'Nem használok számlázó rendszert' },
 ];
 
 const GOAL_PRESETS = [
@@ -68,8 +67,7 @@ export default function Onboarding() {
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [name, setName] = useState('');
-  const [platform, setPlatform] = useState('none');
-  const [revenueGoal, setRevenueGoal] = useState(10_000_000);
+  const [platform, setPlatform] = useState('none');  const [revenueGoal, setRevenueGoal] = useState(10_000_000);
   const [vatStatus, setVatStatus] = useState<'exempt' | 'standard'>('exempt');
   const [vatRateDefault, setVatRateDefault] = useState<number>(27);
   // Tax profile
@@ -539,13 +537,14 @@ export default function Onboarding() {
             <button
               key={p.id}
               onClick={() => setPlatform(p.id)}
-              className={`w-full px-4 py-3 rounded-lg border text-sm text-left font-medium transition-colors ${
+              className={`w-full px-4 py-3 rounded-lg border text-left transition-colors ${
                 platform === p.id
-                  ? 'border-teal bg-teal/15 text-cream'
-                  : 'border-teal/10 bg-surface-800/50 text-steel hover:border-teal/25 hover:text-ash'
+                  ? 'border-teal bg-teal/15'
+                  : 'border-teal/10 bg-surface-800/50 hover:border-teal/25'
               }`}
             >
-              {p.label}
+              <div className={`text-sm font-medium ${platform === p.id ? 'text-cream' : 'text-steel'}`}>{p.label}</div>
+              <div className="text-[11px] text-steel/60 mt-0.5">{p.desc}</div>
             </button>
           ))}
         </div>
@@ -626,7 +625,7 @@ export default function Onboarding() {
 
     // ─── STEP 3: TAX PROFILE (business type + tax form + VAT) ───
     tax_profile: (
-      <div className="space-y-5">
+      <div className="space-y-6">
         <div className="text-center">
           <div className="w-10 h-10 rounded-xl bg-teal/15 border border-teal/20 flex items-center justify-center mx-auto mb-3">
             <Briefcase width={20} height={20} className="text-teal" />
@@ -766,7 +765,7 @@ export default function Onboarding() {
 
     // ─── STEP 4: COMPANY DATA (optional) ───
     company_data: (
-      <div className="space-y-5">
+      <div className="space-y-6">
         <div className="text-center">
           <div className="w-10 h-10 rounded-xl bg-teal/15 border border-teal/20 flex items-center justify-center mx-auto mb-3">
             <Building2 width={20} height={20} className="text-teal" />
@@ -791,7 +790,14 @@ export default function Onboarding() {
             <input
               type="text"
               value={taxNumber}
-              onChange={e => setTaxNumber(e.target.value)}
+              onChange={e => {
+                const raw = e.target.value.replace(/[^\d]/g, '').slice(0, 11);
+                let f = raw;
+                if (raw.length > 8) f = raw.slice(0, 8) + '-' + raw.slice(8);
+                if (raw.length > 9) f = raw.slice(0, 8) + '-' + raw.slice(8, 9) + '-' + raw.slice(9);
+                setTaxNumber(f);
+              }}
+              maxLength={13}
               placeholder="12345678-1-42"
               className="w-full px-3.5 py-2.5 bg-surface-800 border border-teal/15 rounded-lg text-sm text-cream placeholder:text-steel/40 focus:outline-none focus:border-teal/50 focus:ring-1 focus:ring-teal/20"
             />
@@ -801,7 +807,12 @@ export default function Onboarding() {
             <input
               type="text"
               value={companyAddress}
-              onChange={e => setCompanyAddress(e.target.value)}
+              onChange={e => {
+                let val = e.target.value;
+                const m = val.match(/^(\d{4})(\S)/);
+                if (m) val = m[1] + ' ' + val.slice(4);
+                setCompanyAddress(val);
+              }}
               placeholder="1011 Budapest, Példa utca 1."
               className="w-full px-3.5 py-2.5 bg-surface-800 border border-teal/15 rounded-lg text-sm text-cream placeholder:text-steel/40 focus:outline-none focus:border-teal/50 focus:ring-1 focus:ring-teal/20"
             />
@@ -811,7 +822,14 @@ export default function Onboarding() {
             <input
               type="text"
               value={bankAccount}
-              onChange={e => setBankAccount(e.target.value)}
+              onChange={e => {
+                const raw = e.target.value.replace(/[^\d]/g, '').slice(0, 24);
+                let f = raw;
+                if (raw.length > 8) f = raw.slice(0, 8) + '-' + raw.slice(8);
+                if (raw.length > 16) f = raw.slice(0, 8) + '-' + raw.slice(8, 16) + '-' + raw.slice(16);
+                setBankAccount(f);
+              }}
+              maxLength={26}
               placeholder="12345678-12345678-12345678"
               className="w-full px-3.5 py-2.5 bg-surface-800 border border-teal/15 rounded-lg text-sm text-cream placeholder:text-steel/40 focus:outline-none focus:border-teal/50 focus:ring-1 focus:ring-teal/20"
             />
