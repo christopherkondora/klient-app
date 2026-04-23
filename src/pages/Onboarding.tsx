@@ -73,6 +73,7 @@ export default function Onboarding() {
   // Tax profile
   const [bizType, setBizType] = useState<BizType>('EV');
   const [taxForm, setTaxForm] = useState<TaxForm>('atalany');
+  const [foglalkozas, setFoglalkozas] = useState<'fofoglalkozasu' | 'mellekfoglalkozasu'>('fofoglalkozasu');
   // Company data
   const [companyName, setCompanyName] = useState('');
   const [taxNumber, setTaxNumber] = useState('');
@@ -183,7 +184,7 @@ export default function Onboarding() {
           userId: '',
           vallalkozasTipus: bizType,
           adozasForma: taxForm,
-          foglalkozas: 'fofoglalkozasu',
+          foglalkozas: bizType === 'EV' ? foglalkozas : 'fofoglalkozasu',
           koltseghanyad: taxForm === 'atalany' ? 0.40 : 0,
           szakkepzettseg: false,
           aamValasztott: vatStatus === 'exempt',
@@ -687,6 +688,36 @@ export default function Onboarding() {
             ))}
           </div>
         </div>
+
+        {bizType === 'EV' && (
+          <div>
+            <p className="text-xs text-steel mb-2">Foglalkoztatás jellege</p>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                onClick={() => setFoglalkozas('fofoglalkozasu')}
+                className={`text-left px-3 py-2.5 rounded-lg border transition-colors ${
+                  foglalkozas === 'fofoglalkozasu'
+                    ? 'border-teal bg-teal/15'
+                    : 'border-teal/10 bg-surface-800/50 hover:border-teal/25'
+                }`}
+              >
+                <div className={`text-sm font-medium ${foglalkozas === 'fofoglalkozasu' ? 'text-cream' : 'text-steel'}`}>Főfoglalkozású</div>
+                <div className="text-[11px] text-steel/60 mt-0.5">Minimum TB-járulékok</div>
+              </button>
+              <button
+                onClick={() => setFoglalkozas('mellekfoglalkozasu')}
+                className={`text-left px-3 py-2.5 rounded-lg border transition-colors ${
+                  foglalkozas === 'mellekfoglalkozasu'
+                    ? 'border-teal bg-teal/15'
+                    : 'border-teal/10 bg-surface-800/50 hover:border-teal/25'
+                }`}
+              >
+                <div className={`text-sm font-medium ${foglalkozas === 'mellekfoglalkozasu' ? 'text-cream' : 'text-steel'}`}>Mellékfoglalkozású</div>
+                <div className="text-[11px] text-steel/60 mt-0.5">Munkaviszony / nyugdíj mellett</div>
+              </button>
+            </div>
+          </div>
+        )}
 
         <div>
           <div className="flex items-center gap-1.5 mb-2">
