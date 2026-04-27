@@ -9,7 +9,7 @@ on:
 jobs:
   release:
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 180
+    timeout-minutes: 480
     permissions:
       contents: write
     strategy:
@@ -44,7 +44,7 @@ jobs:
 
       - name: Sign, notarize and publish (macOS)
         if: matrix.os == 'macos-latest'
-        timeout-minutes: 150
+        timeout-minutes: 420
         env:
           # Code signing
           CSC_LINK: ${{ secrets.APPLE_CERTIFICATE }}
@@ -53,7 +53,7 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          NOTARIZE_TIMEOUT_MINUTES: 120
+          NOTARIZE_TIMEOUT_MINUTES: 360
           NOTARIZE_POLL_INTERVAL_SECONDS: 60
           # Auto-update publishing
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
