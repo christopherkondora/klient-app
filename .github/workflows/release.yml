@@ -9,6 +9,7 @@ on:
 jobs:
   release:
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
     permissions:
       contents: write
     strategy:
@@ -31,8 +32,19 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build & publish (macOS — signed + notarized)
+      - name: Build app (macOS)
         if: matrix.os == 'macos-latest'
+        timeout-minutes: 15
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
+        run: npm run build
+
+      - name: Sign, notarize and publish (macOS)
+        if: matrix.os == 'macos-latest'
+        timeout-minutes: 60
         env:
           # Code signing
           CSC_LINK: ${{ secrets.APPLE_CERTIFICATE }}
@@ -41,17 +53,15 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          NOTARIZE_TIMEOUT_MINUTES: 45
+          DEBUG: electron-notarize,@electron/notarize
           # Auto-update publishing
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Runtime keys baked into the build
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
-        run: npm run build && npx electron-builder --mac --publish always
+        run: npx electron-builder --mac --publish always
 
       - name: Build & publish (Windows)
         if: matrix.os == 'windows-latest'
+        timeout-minutes: 30
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
