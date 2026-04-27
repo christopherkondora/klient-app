@@ -15,7 +15,7 @@ import {
   Heading1, Heading2, List, ListOrdered, Highlighter,
   Mic, MicOff, Search, StickyNote, ChevronLeft,
   GripHorizontal, CheckSquare, Save, ImagePlus, Link2,
-  AlignLeft, AlignCenter, AlignRight, MoreHorizontal,
+  AlignLeft, AlignCenter, AlignRight, MoreHorizontal, Bell,
 } from 'lucide-react';
 
 const NOTE_COLORS: Record<string, { bg: string; border: string; label: string }> = {
