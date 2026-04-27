@@ -55,6 +55,8 @@ export interface BillingoInvoiceRequest {
   electronic?: boolean;
   language?: string;
   currency?: string;
+  /** Exchange rate from invoice currency to HUF. Required by Billingo when currency !== 'HUF'. */
+  conversion_rate?: number;
   items: BillingoInvoiceItem[];
   /** Számla megjegyzés / záradék (pl. AAM záradék) */
   comment?: string;
@@ -149,7 +151,13 @@ async function billingoFetch(
     let detail = `HTTP ${response.status}`;
     try {
       const err = await response.json() as any;
-      detail = err.message || err.error || detail;
+      const msg = err.message || err.error;
+      // If message/error is an object (e.g. Billingo's structured error), stringify the full body
+      if (typeof msg === 'string' && msg.trim()) {
+        detail = msg;
+      } else {
+        detail = JSON.stringify(err, null, 2);
+      }
     } catch { /* ignore */ }
     console.error('[Billingo] API error:', detail);
     throw new BillingoApiError(response.status, detail);
@@ -224,6 +232,7 @@ export async function ensurePartner(clientData: BillingoPartnerData): Promise<nu
 // ── Invoice creation ──
 
 export async function createInvoice(request: BillingoInvoiceRequest): Promise<BillingoInvoiceResult> {
+  const currency = request.currency || 'HUF';
   const body: Record<string, unknown> = {
     vendor_id: request.vendor_id,
     partner_id: request.partner_id,
@@ -234,7 +243,7 @@ export async function createInvoice(request: BillingoInvoiceRequest): Promise<Bi
     due_date: request.due_date,
     payment_method: request.payment_method,
     language: request.language || 'hu',
-    currency: request.currency || 'HUF',
+    currency,
     items: request.items.map(item => ({
       name: item.name,
       unit_price: item.unit_price,
@@ -245,6 +254,10 @@ export async function createInvoice(request: BillingoInvoiceRequest): Promise<Bi
       entitlement: item.entitlement,
     })),
   };
+  // Billingo requires conversion_rate for non-HUF invoices
+  if (currency !== 'HUF' && typeof request.conversion_rate === 'number' && request.conversion_rate > 0) {
+    body.conversion_rate = request.conversion_rate;
+  }
   if (request.comment) {
     body.comment = request.comment;
   }

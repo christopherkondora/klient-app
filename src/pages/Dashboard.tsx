@@ -897,7 +897,7 @@ function DashboardEventModal({ date, projects, onSubmit, onClose }: {
   const [endTime, setEndTime] = useState('10:00');
   const [type, setType] = useState<'work' | 'meeting' | 'deadline' | 'reminder' | 'other'>('work');
 
-  const inputClass = 'w-full px-3 py-2 bg-surface-900 border border-teal/10 rounded-lg text-sm text-cream focus:outline-none focus:ring-2 focus:ring-teal/30';
+  const inputClass = 'w-full px-2.5 py-2 bg-surface-900/40 border border-teal/8 rounded-lg text-sm text-cream focus:outline-none focus:border-teal/25 placeholder:text-steel/40 transition-colors';
 
   function calcDuration() {
     const [sh, sm] = startTime.split(':').map(Number);
@@ -926,15 +926,20 @@ function DashboardEventModal({ date, projects, onSubmit, onClose }: {
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onDoubleClick={onClose}>
-      <div className="bg-surface-800 rounded-xl border border-teal/15 p-6 w-full max-w-sm shadow-2xl" onDoubleClick={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="font-pixel text-[14px] text-cream">
-            {format(date, 'yyyy. MMMM d.', { locale: hu })}
-          </h2>
-          <button onClick={onClose} className="p-1 rounded hover:bg-teal/10 text-steel hover:text-cream">
-            <X width={14} height={14} />
-          </button>
-        </div>
+      <div className="bg-surface-800 rounded-2xl ring-1 ring-inset ring-teal/15 w-full max-w-sm shadow-2xl overflow-hidden" onDoubleClick={e => e.stopPropagation()}>
+
+        {/* Header accent */}
+        <div className="h-1 bg-teal" />
+
+        <div className="p-5">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="font-pixel text-[14px] text-cream">
+              {format(date, 'yyyy. MMMM d.', { locale: hu })}
+            </h2>
+            <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-teal/10 text-steel hover:text-cream cursor-pointer transition-colors duration-150 ease-out">
+              <X width={14} height={14} />
+            </button>
+          </div>
         <form
           onSubmit={e => {
             e.preventDefault();
@@ -952,41 +957,51 @@ function DashboardEventModal({ date, projects, onSubmit, onClose }: {
           }}
           className="space-y-3"
         >
-          <input
-            type="text"
-            value={title}
-            onChange={e => setTitle(e.target.value)}
-            className={inputClass}
-            placeholder="Esemény neve..."
-            required
-            autoFocus
-          />
-          <select value={projectId} onChange={e => setProjectId(e.target.value)} className={inputClass}>
-            <option value="">Nincs projekt</option>
-            {projects.map(p => <option key={p.id} value={p.id}>{p.client_name ? `${p.client_name} – ` : ''}{p.name}</option>)}
-          </select>
+          <div>
+            <label className="text-[10px] text-steel tracking-wider uppercase mb-1 block">Esemény neve</label>
+            <input
+              type="text"
+              value={title}
+              onChange={e => setTitle(e.target.value)}
+              className={inputClass}
+              placeholder="pl. Ügyfél meetup..."
+              required
+              autoFocus
+            />
+          </div>
+          <div>
+            <label className="text-[10px] text-steel tracking-wider uppercase mb-1 block">Projekt</label>
+            <select value={projectId} onChange={e => setProjectId(e.target.value)} className={inputClass}>
+              <option value="">Nincs projekt</option>
+              {projects.map(p => <option key={p.id} value={p.id}>{p.client_name ? `${p.client_name} – ` : ''}{p.name}</option>)}
+            </select>
+          </div>
           <div className="grid grid-cols-2 gap-2">
             <div>
-              <label className="block text-[10px] text-steel mb-1">Kezdés</label>
+              <label className="text-[10px] text-steel tracking-wider uppercase mb-1 block">Kezdés</label>
               <TimePicker value={startTime} onChange={handleStartTimeChange} />
             </div>
             <div>
-              <label className="block text-[10px] text-steel mb-1">Befejezés</label>
+              <label className="text-[10px] text-steel tracking-wider uppercase mb-1 block">Befejezés</label>
               <TimePicker value={endTime} onChange={handleEndTimeChange} />
             </div>
           </div>
-          <select value={type} onChange={e => setType(e.target.value as typeof type)} className={inputClass}>
-            <option value="work">Munka</option>
-            <option value="meeting">Megbeszélés</option>
-            <option value="deadline">Határidő</option>
-            <option value="reminder">Emlékeztető</option>
-            <option value="other">Egyéb</option>
-          </select>
+          <div>
+            <label className="text-[10px] text-steel tracking-wider uppercase mb-1 block">Típus</label>
+            <select value={type} onChange={e => setType(e.target.value as typeof type)} className={inputClass}>
+              <option value="work">Munka</option>
+              <option value="meeting">Megbeszélés</option>
+              <option value="deadline">Határidő</option>
+              <option value="reminder">Emlékeztető</option>
+              <option value="other">Egyéb</option>
+            </select>
+          </div>
           <div className="flex justify-end gap-2 pt-1">
-            <button type="button" onClick={onClose} className="px-3 py-1.5 text-sm text-steel hover:bg-teal/10 rounded-lg">Mégse</button>
-            <button type="submit" className="px-3 py-1.5 text-sm bg-teal text-cream rounded-lg hover:bg-teal/80">Hozzáadás</button>
+            <button type="button" onClick={onClose} className="px-4 py-2 text-xs text-steel hover:text-cream transition-colors duration-150 ease-out cursor-pointer">Mégse</button>
+            <button type="submit" className="px-5 py-2 text-xs font-medium bg-teal text-cream rounded-lg hover:bg-teal/80 transition-colors duration-150 ease-out cursor-pointer">Hozzáadás</button>
           </div>
         </form>
+        </div>
       </div>
     </div>
   );

@@ -104,11 +104,11 @@ export default function Layout({ paywalled }: { paywalled?: boolean } = {}) {
                 style={{ pointerEvents: quickBarOpen ? 'auto' : 'none' }}
                 className="flex items-center gap-1.5 p-1.5 whitespace-nowrap"
               >
-                {/* Close — top-right corner of the flattened hover corner */}
+                {/* Close — top-right corner of the island */}
                 <button
                   onClick={(e) => { e.stopPropagation(); setQuickBarOpen(false); }}
                   aria-label="Gyorsmenü bezárása"
-                  className="absolute top-0 right-0 p-1 text-steel hover:text-cream opacity-0 group-hover:opacity-100 transition-opacity duration-200 ease-out z-10"
+                  className="absolute -top-[6.8px] -right-[6.8px] p-0.5 rounded-full bg-surface-900/80 border border-teal/10 text-steel hover:text-cream opacity-0 group-hover:opacity-100 transition-opacity duration-150 delay-300 ease-out z-10"
                 >
                   <X size={10} />
                 </button>

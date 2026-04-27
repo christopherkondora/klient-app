@@ -508,6 +508,22 @@ function runMigrations() {
   db.run(`UPDATE projects SET client_id = NULL WHERE client_id = ''`);
   db.run(`UPDATE projects SET deadline = NULL WHERE deadline = ''`);
 
+  // ── Project pricing (megállapodott ár / budget) ─────────────────────
+  // project_price: a projekt megállapodott ára eredeti pénznemben
+  // project_price_currency: pénznem (HUF, EUR, USD, GBP, CHF...)
+  // project_price_huf: HUF-ban számolt érték (statisztikákhoz, kiállítás napi árfolyamon)
+  const projPriceCols = db.exec("PRAGMA table_info(projects)");
+  const projPriceColNames = projPriceCols[0]?.values.map(row => row[1]) || [];
+  if (!projPriceColNames.includes('project_price')) {
+    db.run("ALTER TABLE projects ADD COLUMN project_price REAL DEFAULT NULL");
+  }
+  if (!projPriceColNames.includes('project_price_currency')) {
+    db.run("ALTER TABLE projects ADD COLUMN project_price_currency TEXT DEFAULT 'HUF'");
+  }
+  if (!projPriceColNames.includes('project_price_huf')) {
+    db.run("ALTER TABLE projects ADD COLUMN project_price_huf REAL DEFAULT NULL");
+  }
+
   // Add actual_minutes column to calendar_events for Pomodoro tracking
   const eventCols = db.exec("PRAGMA table_info(calendar_events)");
   const eventColNames = eventCols[0]?.values.map(row => row[1]) || [];
@@ -744,6 +760,20 @@ function runMigrations() {
     db.run("ALTER TABLE clients ADD COLUMN address_line2 TEXT DEFAULT ''");
   }
 
+  // International client / foreign invoicing fields
+  if (!clientColNames.includes('country_code')) {
+    db.run("ALTER TABLE clients ADD COLUMN country_code TEXT DEFAULT 'HU'");
+  }
+  if (!clientColNames.includes('eu_vat_number')) {
+    db.run("ALTER TABLE clients ADD COLUMN eu_vat_number TEXT DEFAULT ''");
+  }
+  if (!clientColNames.includes('preferred_currency')) {
+    db.run("ALTER TABLE clients ADD COLUMN preferred_currency TEXT DEFAULT 'HUF'");
+  }
+  if (!clientColNames.includes('invoice_language')) {
+    db.run("ALTER TABLE clients ADD COLUMN invoice_language TEXT DEFAULT 'hu'");
+  }
+
   // Add billing provider fields to invoices for API-generated invoices
   const invCols3 = db.exec("PRAGMA table_info(invoices)");
   const invColNames3 = invCols3[0]?.values.map(row => row[1]) || [];
@@ -832,4 +862,29 @@ function runMigrations() {
   if (!paColNames.includes('fee_huf')) {
     db.run("ALTER TABLE project_assignments ADD COLUMN fee_huf REAL");
   }
+
+  // ── Multi-currency payment tracking (Sztv. §60) ─────────────────────
+  // paid_date: beérkezés napja (pénzforgalmi szemléletű elszámoláshoz)
+  // paid_exchange_rate: beérkezés napi árfolyam (deviza → HUF)
+  // paid_amount_huf: beérkezéskor ténylegesen befolyt összeg HUF-ban
+  // issue_exchange_rate: kiállításkor érvényes árfolyam (könyvelt érték — amount_huf ezzel számolt)
+  const invColsPay = db.exec("PRAGMA table_info(invoices)");
+  const invColNamesPay = invColsPay[0]?.values.map(row => row[1]) || [];
+  if (!invColNamesPay.includes('paid_date')) {
+    db.run("ALTER TABLE invoices ADD COLUMN paid_date TEXT DEFAULT NULL");
+  }
+  if (!invColNamesPay.includes('paid_exchange_rate')) {
+    db.run("ALTER TABLE invoices ADD COLUMN paid_exchange_rate REAL DEFAULT NULL");
+  }
+  if (!invColNamesPay.includes('paid_amount_huf')) {
+    db.run("ALTER TABLE invoices ADD COLUMN paid_amount_huf REAL DEFAULT NULL");
+  }
+  if (!invColNamesPay.includes('issue_exchange_rate')) {
+    db.run("ALTER TABLE invoices ADD COLUMN issue_exchange_rate REAL DEFAULT NULL");
+  }
+  // Backfill: existing paid invoices — treat amount_huf as paid_amount_huf, issue_date as paid_date
+  db.run(`UPDATE invoices
+          SET paid_date = COALESCE(paid_date, issue_date),
+              paid_amount_huf = COALESCE(paid_amount_huf, amount_huf, amount)
+          WHERE status = 'paid' AND paid_amount_huf IS NULL`);
 }

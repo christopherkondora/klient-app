@@ -604,16 +604,16 @@ export default function Files() {
               className="pl-9 pr-3 py-2 bg-surface-800/50 border border-teal/10 rounded-lg text-sm text-cream placeholder:text-steel/50 focus:outline-none focus:ring-2 focus:ring-teal/30 w-48"
             />
           </div>
-          <div className="flex bg-surface-800/50 border border-teal/10 rounded-lg overflow-hidden">
+          <div className="flex bg-surface-800/50 border border-teal/10 rounded-lg">
             <button
               onClick={() => setViewModeAndSave('grid')}
-              className={`p-2 transition-colors ${viewMode === 'grid' ? 'bg-teal/20 text-cream' : 'text-steel hover:text-cream'}`}
+              className={`px-2.5 py-2.5 transition-colors rounded-l-md ${viewMode === 'grid' ? 'bg-teal/20 text-cream' : 'text-steel hover:text-cream'}`}
             >
               <LayoutGrid width={16} height={16} />
             </button>
             <button
               onClick={() => setViewModeAndSave('list')}
-              className={`p-2 transition-colors ${viewMode === 'list' ? 'bg-teal/20 text-cream' : 'text-steel hover:text-cream'}`}
+              className={`px-2.5 py-2.5 transition-colors rounded-r-md ${viewMode === 'list' ? 'bg-teal/20 text-cream' : 'text-steel hover:text-cream'}`}
             >
               <List width={16} height={16} />
             </button>

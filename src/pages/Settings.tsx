@@ -4,7 +4,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useSubscription } from '../contexts/SubscriptionContext';
 import Paywall from '../components/Paywall';
 import PageHeader from '../components/PageHeader';
-import { Crown, Check, Zap, User, Palette, SlidersHorizontal, Info, LogOut, KeyRound, Eye, EyeOff, XCircle, RotateCcw, CreditCard, X, Loader2, Receipt, CheckCircle, AlertCircle, Link as LinkIcon, Trash2, Megaphone, Calculator } from 'lucide-react';
+import { Crown, Check, Zap, User, Palette, SlidersHorizontal, Info, LogOut, KeyRound, Eye, EyeOff, XCircle, RotateCcw, CreditCard, X, Loader2, Receipt, CheckCircle, AlertCircle, Link as LinkIcon, Trash2, Megaphone, Calculator, Building2, FileCheck2, Percent, Briefcase, MapPin, Shield, Edit3 } from 'lucide-react';
 import { version } from '../../package.json';
 import TaxProfileWizard from '../components/TaxProfileWizard';
 
@@ -977,46 +977,145 @@ export default function Settings() {
               <p className="text-xs text-steel mt-1">Adózási profil és ÁFA beállítások</p>
             </div>
 
-            <div className="bg-surface-800/50 rounded-xl p-5 space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <p className="text-[10px] text-steel tracking-[0.1em] uppercase mb-1">Vállalkozás típusa</p>
-                  <p className="text-sm text-cream">{taxProfile?.vallalkozasTipus === 'EV' ? 'Egyéni vállalkozó' : taxProfile?.vallalkozasTipus || '—'}</p>
-                </div>
-                <div>
-                  <p className="text-[10px] text-steel tracking-[0.1em] uppercase mb-1">Adózási forma</p>
-                  <p className="text-sm text-cream">{taxProfile?.adozasForma === 'atalany' ? 'Átalányadózás' : taxProfile?.adozasForma === 'vszja' ? 'VSZJA' : taxProfile?.adozasForma === 'TAO' ? 'TAO' : taxProfile?.adozasForma === 'KIVA' ? 'KIVA' : '—'}</p>
-                </div>
-                <div>
-                  <p className="text-[10px] text-steel tracking-[0.1em] uppercase mb-1">ÁFA státusz</p>
-                  <p className="text-sm text-cream">{user?.vat_status === 'exempt' ? 'Alanyi mentes (AAM)' : user?.vat_status === 'standard' ? `Áfakörös · ${user?.vat_rate_default ?? 27}%` : '—'}</p>
-                </div>
-                <div>
-                  <p className="text-[10px] text-steel tracking-[0.1em] uppercase mb-1">ÁFA adószám</p>
-                  <p className="text-sm text-cream">{user?.vat_number || '—'}</p>
-                </div>
-                {taxProfile?.vallalkozasTipus === 'EV' && (
-                  <div>
-                    <p className="text-[10px] text-steel tracking-[0.1em] uppercase mb-1">Foglalkoztatás</p>
-                    <p className="text-sm text-cream">{taxProfile?.foglalkozas === 'fofoglalkozasu' ? 'Főfoglalkozású' : taxProfile?.foglalkozas === 'mellekfoglalkozasu' ? 'Mellékfoglalkozású' : '—'}</p>
-                  </div>
-                )}
-                <div>
-                  <p className="text-[10px] text-steel tracking-[0.1em] uppercase mb-1">HIPA kulcs</p>
-                  <p className="text-sm text-cream">{typeof taxProfile?.hipaKulcs === 'number' ? `${taxProfile.hipaKulcs}%` : '—'}</p>
-                </div>
-              </div>
+            {(() => {
+              const vallTipus = taxProfile?.vallalkozasTipus;
+              const adozasForma = taxProfile?.adozasForma;
+              const hasProfile = !!vallTipus && !!adozasForma;
+              const vatStatus = user?.vat_status;
+              const vatLabel =
+                vatStatus === 'exempt' ? 'Alanyi mentes (AAM)' :
+                vatStatus === 'standard' ? `Áfakörös · ${user?.vat_rate_default ?? 27}%` :
+                '—';
+              const vallTipusLabel = vallTipus === 'EV' ? 'Egyéni vállalkozó' : vallTipus || '—';
+              const adozasFormaLabel =
+                adozasForma === 'atalany' ? 'Átalányadózás' :
+                adozasForma === 'vszja' ? 'VSZJA' :
+                adozasForma === 'TAO' ? 'TAO (társasági adó)' :
+                adozasForma === 'KIVA' ? 'KIVA' :
+                '—';
+              const foglalkozasLabel =
+                taxProfile?.foglalkozas === 'fofoglalkozasu' ? 'Főfoglalkozású' :
+                taxProfile?.foglalkozas === 'mellekfoglalkozasu' ? 'Mellékfoglalkozású' :
+                '—';
 
-              <div className="pt-3 border-t border-teal/10 flex items-center justify-between gap-4">
-                <p className="text-xs text-steel">Az adózási profilod módosításához nyisd meg a varázslót.</p>
-                <button
-                  onClick={() => setShowTaxWizard(true)}
-                  className="px-4 py-2 text-sm font-medium bg-teal text-ink rounded-lg hover:bg-teal/80 transition-colors cursor-pointer whitespace-nowrap"
-                >
-                  Adózási profil szerkesztése
-                </button>
-              </div>
-            </div>
+              return (
+                <>
+                  {/* Hero card */}
+                  <div className="relative overflow-hidden rounded-2xl border-l-[3px] border-teal bg-gradient-to-br from-surface-800/70 to-surface-900/40 p-6">
+                    <div className="absolute -top-24 -right-24 w-72 h-72 bg-teal/5 rounded-full blur-3xl pointer-events-none" />
+
+                    <div className="relative flex items-start justify-between gap-6 flex-wrap">
+                      <div className="flex items-start gap-4 flex-1 min-w-0">
+                        <div className="w-12 h-12 rounded-xl bg-teal/15 border border-teal/20 flex items-center justify-center shrink-0">
+                          <Calculator width={22} height={22} className="text-teal" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <p className="text-xs text-steel tracking-[0.15em] uppercase font-medium">Adózási profil</p>
+                            {hasProfile ? (
+                              <span className="inline-flex items-center gap-1 text-[10px] tracking-[0.1em] uppercase font-medium text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-full">
+                                <CheckCircle width={10} height={10} /> Beállítva
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 text-[10px] tracking-[0.1em] uppercase font-medium text-amber-400 bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 rounded-full">
+                                <AlertCircle width={10} height={10} /> Hiányzik
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-2xl font-bold text-cream mt-1 truncate">{vallTipusLabel}</p>
+                          <p className="text-sm text-steel mt-0.5">
+                            {adozasFormaLabel}
+                            {vatStatus && (
+                              <span className="text-steel/50"> · {vatLabel}</span>
+                            )}
+                          </p>
+                        </div>
+                      </div>
+
+                      <button
+                        onClick={() => setShowTaxWizard(true)}
+                        className="inline-flex items-center gap-2 px-4 py-2.5 text-sm font-medium bg-teal text-ink rounded-lg hover:bg-teal/80 transition-colors cursor-pointer shrink-0"
+                      >
+                        <Edit3 width={14} height={14} />
+                        {hasProfile ? 'Szerkesztés' : 'Beállítás'}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Stat grid */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                    {/* Vállalkozás típusa */}
+                    <div className="bg-surface-800/50 rounded-xl border border-teal/10 p-4 hover:border-teal/20 transition-colors">
+                      <div className="flex items-center gap-2 mb-2">
+                        <Building2 width={14} height={14} className="text-teal/70" />
+                        <p className="text-[10px] text-steel tracking-[0.12em] uppercase font-medium">Vállalkozás típusa</p>
+                      </div>
+                      <p className="text-sm font-semibold text-cream">{vallTipusLabel}</p>
+                    </div>
+
+                    {/* Adózási forma */}
+                    <div className="bg-surface-800/50 rounded-xl border border-teal/10 p-4 hover:border-teal/20 transition-colors">
+                      <div className="flex items-center gap-2 mb-2">
+                        <FileCheck2 width={14} height={14} className="text-teal/70" />
+                        <p className="text-[10px] text-steel tracking-[0.12em] uppercase font-medium">Adózási forma</p>
+                      </div>
+                      <p className="text-sm font-semibold text-cream">{adozasFormaLabel}</p>
+                    </div>
+
+                    {/* ÁFA státusz */}
+                    <div className="bg-surface-800/50 rounded-xl border border-teal/10 p-4 hover:border-teal/20 transition-colors">
+                      <div className="flex items-center gap-2 mb-2">
+                        <Percent width={14} height={14} className="text-teal/70" />
+                        <p className="text-[10px] text-steel tracking-[0.12em] uppercase font-medium">ÁFA státusz</p>
+                      </div>
+                      <p className="text-sm font-semibold text-cream">{vatLabel}</p>
+                    </div>
+
+                    {/* ÁFA adószám */}
+                    <div className="bg-surface-800/50 rounded-xl border border-teal/10 p-4 hover:border-teal/20 transition-colors">
+                      <div className="flex items-center gap-2 mb-2">
+                        <Shield width={14} height={14} className="text-teal/70" />
+                        <p className="text-[10px] text-steel tracking-[0.12em] uppercase font-medium">ÁFA adószám</p>
+                      </div>
+                      <p className={`text-sm font-semibold font-mono ${user?.vat_number ? 'text-cream' : 'text-steel/40'}`}>
+                        {user?.vat_number || '—'}
+                      </p>
+                    </div>
+
+                    {/* Foglalkoztatás (EV only) */}
+                    {vallTipus === 'EV' && (
+                      <div className="bg-surface-800/50 rounded-xl border border-teal/10 p-4 hover:border-teal/20 transition-colors">
+                        <div className="flex items-center gap-2 mb-2">
+                          <Briefcase width={14} height={14} className="text-teal/70" />
+                          <p className="text-[10px] text-steel tracking-[0.12em] uppercase font-medium">Foglalkoztatás</p>
+                        </div>
+                        <p className="text-sm font-semibold text-cream">{foglalkozasLabel}</p>
+                      </div>
+                    )}
+
+                    {/* HIPA kulcs */}
+                    <div className="bg-surface-800/50 rounded-xl border border-teal/10 p-4 hover:border-teal/20 transition-colors">
+                      <div className="flex items-center gap-2 mb-2">
+                        <MapPin width={14} height={14} className="text-teal/70" />
+                        <p className="text-[10px] text-steel tracking-[0.12em] uppercase font-medium">HIPA kulcs</p>
+                      </div>
+                      <p className={`text-sm font-semibold ${typeof taxProfile?.hipaKulcs === 'number' ? 'text-cream' : 'text-steel/40'}`}>
+                        {typeof taxProfile?.hipaKulcs === 'number' ? `${taxProfile.hipaKulcs}%` : '—'}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Help text */}
+                  <div className="flex items-start gap-2.5 bg-teal/5 border border-teal/15 rounded-xl px-4 py-3">
+                    <Info width={14} height={14} className="text-teal/70 shrink-0 mt-0.5" />
+                    <p className="text-xs text-steel/80 leading-relaxed">
+                      A <span className="text-cream">Pénzügyek</span> oldalon ezen adatok alapján becsüljük meg az éves adóterhedet (SZJA, járulékok, HIPA).
+                      Változás esetén frissítsd a profilt, hogy pontos maradjon a becslés.
+                    </p>
+                  </div>
+                </>
+              );
+            })()}
 
             {showTaxWizard && (
               <TaxProfileWizard
@@ -1033,27 +1132,6 @@ export default function Settings() {
             <div>
               <h2 className="font-pixel text-[15px] text-cream">Általános</h2>
               <p className="text-xs text-steel mt-1">Alkalmazás beállítások</p>
-            </div>
-
-            {/* Pomodoro project tracking */}
-            <div className="bg-surface-800/50 rounded-lg border border-teal/10 p-6">
-              <h3 className="text-sm font-semibold text-ash mb-1">Pomodoro naplózás</h3>
-              <p className="text-[11px] text-steel mb-4">Ha bekapcsolod, a befejezett Pomodoro munkamenetek automatikusan rögzülnek a kiválasztott projekt naptári eseményéhez.</p>
-              <div className="flex items-center justify-between">
-                <span className="text-xs text-steel">Projekt követés</span>
-                <button
-                  onClick={() => updateUser({ pomodoro_project_tracking: user?.pomodoro_project_tracking === 1 ? 0 : 1 })}
-                  className={`relative w-10 h-5 rounded-full transition-colors ${
-                    user?.pomodoro_project_tracking === 1 ? 'bg-teal' : 'bg-surface-800 border border-teal/20'
-                  }`}
-                >
-                  <span className={`absolute top-1/2 -translate-y-1/2 w-4 h-4 rounded-full transition-all ${
-                    user?.pomodoro_project_tracking === 1
-                      ? 'left-5.5 bg-cream'
-                      : 'left-0.5 bg-steel/60'
-                  }`} />
-                </button>
-              </div>
             </div>
 
             {/* Team mode */}

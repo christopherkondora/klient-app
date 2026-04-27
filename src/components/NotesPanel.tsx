@@ -10,7 +10,7 @@ import { ResizableImageExtension } from './ResizableImageExtension';
 import Link from '@tiptap/extension-link';
 import TextAlign from '@tiptap/extension-text-align';
 import {
-  X, Plus, Trash2, Pin, PinOff, Bell, BellOff,
+  X, Plus, Trash2, Pin, PinOff,
   Bold, Italic, Underline as UnderlineIcon, Strikethrough,
   Heading1, Heading2, List, ListOrdered, Highlighter,
   Mic, MicOff, Search, StickyNote, ChevronLeft,
@@ -315,32 +315,6 @@ export default function NotesPanel({ open, onClose }: NotesPanelProps) {
     }
   }
 
-  async function handleReminderToggle(note: Note) {
-    try {
-      const hasReminder = !!note.reminder_date;
-      const updates: Partial<Note> = hasReminder
-        ? { reminder_date: null, reminder_time: null }
-        : { reminder_date: new Date().toISOString().split('T')[0], reminder_time: '09:00' };
-
-      const updated = await window.electronAPI.updateNote(note.id, updates);
-      setNotes(prev => prev.map(n => n.id === note.id ? updated : n));
-      if (activeNote?.id === note.id) setActiveNote(updated);
-    } catch (err) {
-      console.error('Failed to toggle reminder:', err);
-    }
-  }
-
-  async function handleReminderDateChange(date: string) {
-    if (!activeNote) return;
-    try {
-      const updated = await window.electronAPI.updateNote(activeNote.id, { reminder_date: date });
-      setNotes(prev => prev.map(n => n.id === activeNote.id ? updated : n));
-      setActiveNote(updated);
-    } catch (err) {
-      console.error('Failed to update reminder:', err);
-    }
-  }
-
   function openNote(note: Note) {
     // Cancel any pending debounced save
     if (saveTimeoutRef.current) {
@@ -537,23 +511,6 @@ export default function NotesPanel({ open, onClose }: NotesPanelProps) {
             >
               {activeNote.pinned ? <PinOff size={13} /> : <Pin size={13} />}
             </button>
-            <button
-              onClick={() => handleReminderToggle(activeNote)}
-              className={`p-1.5 rounded transition-colors ${activeNote.reminder_date ? 'text-teal bg-teal/10' : 'text-steel hover:text-cream hover:bg-teal/10'}`}
-              title={activeNote.reminder_date ? 'Emlékeztető törlése' : 'Emlékeztető'}
-            >
-              {activeNote.reminder_date ? <BellOff size={13} /> : <Bell size={13} />}
-            </button>
-
-            {activeNote.reminder_date && (
-              <input
-                type="date"
-                value={activeNote.reminder_date}
-                onChange={e => handleReminderDateChange(e.target.value)}
-                className="notes-date-input text-xs text-steel bg-surface-800 border border-teal/10 rounded px-2 py-1 ml-1"
-              />
-            )}
-
             <div className="flex-1" />
 
             {/* Color dots */}

@@ -66,7 +66,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   createNote: (data: unknown) => ipcRenderer.invoke('db:notes:create', data),
   updateNote: (id: string, data: unknown) => ipcRenderer.invoke('db:notes:update', id, data),
   deleteNote: (id: string) => ipcRenderer.invoke('db:notes:delete', id),
-  getReminders: () => ipcRenderer.invoke('db:notes:getReminders'),
 
   // Database operations - Recordings
   getRecordings: (clientId?: string) => ipcRenderer.invoke('db:recordings:getAll', clientId),

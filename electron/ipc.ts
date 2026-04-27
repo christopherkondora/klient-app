@@ -21,6 +21,29 @@ function getFilesRoot(): string {
   return path.join(app.getPath('userData'), 'Files');
 }
 
+/** Fetch live exchange rate from frankfurter.dev (e.g. EUR -> HUF). */
+function fetchExchangeRate(from: string, to: string): Promise<number> {
+  return new Promise<number>((resolve, reject) => {
+    if (from === to) return resolve(1);
+    const url = `https://api.frankfurter.dev/v1/latest?base=${encodeURIComponent(from)}&symbols=${encodeURIComponent(to)}`;
+    const req = net.request(url);
+    let body = '';
+    req.on('response', (response) => {
+      response.on('data', (chunk) => { body += chunk.toString(); });
+      response.on('end', () => {
+        try {
+          const data = JSON.parse(body);
+          const rate = data?.rates?.[to];
+          if (typeof rate === 'number') resolve(rate);
+          else reject(new Error('Rate not found'));
+        } catch { reject(new Error('Parse error')); }
+      });
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
 const USER_FIELDS = 'id, name, email, invoice_platform, onboarding_complete, pomodoro_project_tracking, revenue_goal_yearly, profit_goal_yearly, company_name, tax_number, address, bank_account, team_mode, vat_status, vat_rate_default, vat_number, is_business, created_at';
 
 /** Ensure a local user_settings row exists for a Supabase user, return it */
@@ -355,8 +378,8 @@ export function registerIpcHandlers() {
   ipcMain.handle('db:clients:create', (_event, data: Record<string, unknown>) => {
     const id = uuidv4();
     execute(
-      `INSERT INTO clients (id, name, email, phone, company, address, postal_code, city, street, address_line2, tax_number, notes, color) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [id, data.name, data.email, data.phone, data.company, data.address, data.postal_code, data.city, data.street, data.address_line2, data.tax_number, data.notes, data.color || '#6366f1']
+      `INSERT INTO clients (id, name, email, phone, company, address, postal_code, city, street, address_line2, tax_number, country_code, eu_vat_number, preferred_currency, invoice_language, notes, color) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [id, data.name, data.email, data.phone, data.company, data.address, data.postal_code, data.city, data.street, data.address_line2, data.tax_number, data.country_code || 'HU', data.eu_vat_number || '', data.preferred_currency || 'HUF', data.invoice_language || 'hu', data.notes, data.color || '#6366f1']
     );
     // Auto-create client folder
     if (data.name) {
@@ -379,7 +402,7 @@ export function registerIpcHandlers() {
         }
       }
     }
-    const allowedFields = ['name', 'email', 'phone', 'company', 'address', 'postal_code', 'city', 'street', 'address_line2', 'notes', 'color', 'tax_number', 'representative_name'];
+    const allowedFields = ['name', 'email', 'phone', 'company', 'address', 'postal_code', 'city', 'street', 'address_line2', 'notes', 'color', 'tax_number', 'representative_name', 'country_code', 'eu_vat_number', 'preferred_currency', 'invoice_language'];
     const filteredData: Record<string, unknown> = {};
     for (const key of allowedFields) {
       if (key in data) filteredData[key] = data[key];
@@ -444,7 +467,7 @@ export function registerIpcHandlers() {
     );
   });
 
-  ipcMain.handle('db:projects:update', (_event, id: string, data: Record<string, unknown>) => {
+  ipcMain.handle('db:projects:update', async (_event, id: string, data: Record<string, unknown>) => {
     // Auto-rename project folder if name changed
     if (data.name) {
       const oldProject = queryOne('SELECT p.name, c.name as client_name FROM projects p LEFT JOIN clients c ON p.client_id = c.id WHERE p.id = ?', [id]) as Record<string, string> | null;
@@ -458,7 +481,36 @@ export function registerIpcHandlers() {
         }
       }
     }
-    const allowedFields = ['name', 'description', 'status', 'deadline', 'estimated_hours', 'allocated_hours', 'is_hours_distributed', 'priority', 'color', 'client_id'];
+
+    // Auto-compute project_price_huf when price/currency provided
+    // Triggered when caller supplies project_price (and optionally currency).
+    if ('project_price' in data) {
+      const price = data.project_price;
+      const currency = (data.project_price_currency as string) || 'HUF';
+      if (price === null || price === '' || price === undefined) {
+        data.project_price = null;
+        data.project_price_huf = null;
+      } else {
+        const priceNum = typeof price === 'number' ? price : parseFloat(String(price));
+        if (!isNaN(priceNum)) {
+          data.project_price = priceNum;
+          data.project_price_currency = currency;
+          if (currency === 'HUF') {
+            data.project_price_huf = Math.round(priceNum);
+          } else if (data.project_price_huf == null) {
+            try {
+              const rate = await fetchExchangeRate(currency, 'HUF');
+              data.project_price_huf = Math.round(priceNum * rate);
+            } catch (err) {
+              console.warn('[projects:update] FX fetch failed, leaving price_huf null', err);
+              data.project_price_huf = null;
+            }
+          }
+        }
+      }
+    }
+
+    const allowedFields = ['name', 'description', 'status', 'deadline', 'estimated_hours', 'allocated_hours', 'is_hours_distributed', 'priority', 'color', 'client_id', 'project_price', 'project_price_currency', 'project_price_huf'];
     const filteredData: Record<string, unknown> = {};
     for (const key of allowedFields) {
       if (key in data) {
@@ -613,14 +665,14 @@ export function registerIpcHandlers() {
   ipcMain.handle('db:notes:create', (_event, data: Record<string, unknown>) => {
     const id = uuidv4();
     execute(
-      `INSERT INTO notes (id, project_id, client_id, title, content, date, is_notification, notification_email, color, pinned, reminder_date, reminder_time) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [id, data.project_id, data.client_id, data.title, data.content, data.date || new Date().toISOString().split('T')[0], data.is_notification ? 1 : 0, data.notification_email, data.color || 'default', data.pinned ? 1 : 0, data.reminder_date, data.reminder_time]
+      `INSERT INTO notes (id, project_id, client_id, title, content, date, color, pinned) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [id, data.project_id, data.client_id, data.title, data.content, data.date || new Date().toISOString().split('T')[0], data.color || 'default', data.pinned ? 1 : 0]
     );
     return queryOne('SELECT * FROM notes WHERE id = ?', [id]);
   });
 
   ipcMain.handle('db:notes:update', (_event, id: string, data: Record<string, unknown>) => {
-    const allowedFields = ['title', 'content', 'date', 'is_notification', 'notification_email', 'color', 'pinned', 'reminder_date', 'reminder_time'];
+    const allowedFields = ['title', 'content', 'date', 'color', 'pinned'];
     const filteredData: Record<string, unknown> = {};
     for (const key of allowedFields) {
       if (key in data) filteredData[key] = data[key];
@@ -631,15 +683,6 @@ export function registerIpcHandlers() {
       execute(`UPDATE notes SET ${fields}, updated_at = datetime('now') WHERE id = ?`, [...values, id]);
     }
     return queryOne('SELECT * FROM notes WHERE id = ?', [id]);
-  });
-
-  ipcMain.handle('db:notes:getReminders', () => {
-    return queryAll(
-      `SELECT n.*, p.name as project_name, c.name as client_name
-       FROM notes n LEFT JOIN projects p ON n.project_id = p.id LEFT JOIN clients c ON n.client_id = c.id
-       WHERE n.reminder_date IS NOT NULL AND n.reminder_date <= date('now')
-       ORDER BY n.reminder_date ASC, n.reminder_time ASC`
-    );
   });
 
   ipcMain.handle('db:notes:delete', (_event, id: string) => {
@@ -888,7 +931,7 @@ export function registerIpcHandlers() {
     );
   });
 
-  ipcMain.handle('db:invoices:create', (_event, data: Record<string, unknown>) => {
+  ipcMain.handle('db:invoices:create', async (_event, data: Record<string, unknown>) => {
     const id = uuidv4();
     // ÁFA szétbontás: ha a kliens küld net_amount-ot, azt használjuk; különben fallback:
     // áfakörös usernél alapértelmezett kulcs alapján, AAM-nél net = amount, vat = 0.
@@ -897,7 +940,21 @@ export function registerIpcHandlers() {
     const defaultRate = (user?.vat_rate_default as number) ?? 27;
     const amount = Number(data.amount);
     const currency = (data.currency as string) || 'HUF';
-    const amountHuf = (data.amount_huf as number | undefined) ?? (currency === 'HUF' ? amount : amount);
+    let amountHuf = data.amount_huf as number | undefined;
+    if (amountHuf === undefined) {
+      if (currency === 'HUF') {
+        amountHuf = amount;
+      } else {
+        // Fetch live exchange rate to convert non-HUF invoice amount
+        try {
+          const rate = await fetchExchangeRate(currency, 'HUF');
+          amountHuf = Math.round(amount * rate);
+        } catch (err) {
+          console.warn('[Invoice] Could not fetch exchange rate, using amount as fallback:', err);
+          amountHuf = amount;
+        }
+      }
+    }
     let vatRate = data.vat_rate as number | undefined;
     let netAmount = data.net_amount as number | undefined;
     let vatAmount = data.vat_amount as number | undefined;
@@ -921,12 +978,41 @@ export function registerIpcHandlers() {
     return queryOne('SELECT * FROM invoices WHERE id = ?', [id]);
   });
 
-  ipcMain.handle('db:invoices:update', (_event, id: string, data: Record<string, unknown>) => {
-    const allowedFields = ['invoice_number', 'amount', 'currency', 'amount_huf', 'vat_rate', 'net_amount', 'vat_amount', 'net_amount_huf', 'vat_amount_huf', 'issue_date', 'due_date', 'status', 'notes', 'file_path', 'client_id', 'project_id', 'type', 'provider', 'provider_invoice_id', 'provider_synced_at'];
+  ipcMain.handle('db:invoices:update', async (_event, id: string, data: Record<string, unknown>) => {
+    const allowedFields = ['invoice_number', 'amount', 'currency', 'amount_huf', 'vat_rate', 'net_amount', 'vat_amount', 'net_amount_huf', 'vat_amount_huf', 'issue_date', 'due_date', 'status', 'notes', 'file_path', 'client_id', 'project_id', 'type', 'provider', 'provider_invoice_id', 'provider_synced_at', 'paid_date', 'paid_exchange_rate', 'paid_amount_huf', 'issue_exchange_rate'];
     const filteredData: Record<string, unknown> = {};
     for (const key of allowedFields) {
       if (key in data) filteredData[key] = data[key];
     }
+
+    // ── Auto-populate paid_date / paid_amount_huf on status → 'paid' ──
+    // Sztv. §60 (5): beérkezés napi árfolyamon számoljuk a pénzforgalmi bevételt.
+    if (filteredData.status === 'paid') {
+      const existing = queryOne('SELECT amount, currency, paid_date, paid_amount_huf FROM invoices WHERE id = ?', [id]) as Record<string, any> | undefined;
+      if (existing && !existing.paid_date) {
+        const today = new Date().toISOString().slice(0, 10);
+        if (!('paid_date' in filteredData)) filteredData.paid_date = today;
+        if (!('paid_amount_huf' in filteredData)) {
+          const amount = Number(existing.amount) || 0;
+          const currency = String(existing.currency || 'HUF').toUpperCase();
+          if (currency === 'HUF') {
+            filteredData.paid_amount_huf = amount;
+            filteredData.paid_exchange_rate = 1;
+          } else {
+            try {
+              const rate = await fetchExchangeRate(currency, 'HUF');
+              filteredData.paid_exchange_rate = rate;
+              filteredData.paid_amount_huf = Math.round(amount * rate);
+              console.log(`[Invoice] Marked paid — ${currency} → HUF rate: ${rate}, paid_amount_huf: ${filteredData.paid_amount_huf}`);
+            } catch (err) {
+              console.warn('[Invoice] Could not fetch exchange rate for paid_amount_huf, falling back to amount_huf:', err);
+              filteredData.paid_amount_huf = Number(existing.amount) * 1; // fallback
+            }
+          }
+        }
+      }
+    }
+
     const fields = Object.keys(filteredData).map(k => `${k} = ?`).join(', ');
     const values = Object.values(filteredData);
     if (fields) {
@@ -999,16 +1085,30 @@ export function registerIpcHandlers() {
   });
 
   ipcMain.handle('db:finance:stats', () => {
-    // Befolyt bevétel - paid invoices this month
-    const paidThisMonth = (queryOne(`SELECT COALESCE(SUM(amount), 0) as total FROM invoices WHERE status = 'paid' AND issue_date >= date('now', 'start of month')`) as Record<string, number>)?.total ?? 0;
-    // Függő bevétel - pending invoices total
-    const pendingTotal = (queryOne(`SELECT COALESCE(SUM(amount), 0) as total FROM invoices WHERE status = 'pending'`) as Record<string, number>)?.total ?? 0;
-    // Várható bevétel - active + completed (but not fully paid) projects
-    const avgHourlyRate = (queryOne(`SELECT COALESCE(AVG(i.amount / NULLIF(p.estimated_hours, 0)), 0) as rate FROM invoices i JOIN projects p ON i.project_id = p.id WHERE i.status = 'paid' AND p.estimated_hours > 0`) as Record<string, number>)?.rate ?? 0;
+    // ── Multi-currency aggregation (Sztv. §60) ─────────────────────────
+    // Havi bevétel = PÉNZFORGALMI szemlélet: paid_date alapján, paid_amount_huf (beérkezéskori árfolyam)
+    // Fallback: issue_date + amount_huf régi adatokra, ahol paid_date még nincs kitöltve.
+    const paidThisMonth = (queryOne(
+      `SELECT COALESCE(SUM(COALESCE(paid_amount_huf, amount_huf, amount)), 0) as total
+       FROM invoices
+       WHERE status = 'paid'
+         AND COALESCE(paid_date, issue_date) >= date('now', 'start of month')`
+    ) as Record<string, number>)?.total ?? 0;
+    // Függő számlák — könyvelt HUF érték (kiállításkori árfolyamon)
+    const pendingTotal = (queryOne(
+      `SELECT COALESCE(SUM(COALESCE(amount_huf, amount)), 0) as total
+       FROM invoices WHERE status = 'pending'`
+    ) as Record<string, number>)?.total ?? 0;
+    // Átl. óradíj — kizárólag HUF-ra konvertált értékekből
+    const avgHourlyRate = (queryOne(
+      `SELECT COALESCE(AVG(COALESCE(i.paid_amount_huf, i.amount_huf, i.amount) / NULLIF(p.estimated_hours, 0)), 0) as rate
+       FROM invoices i JOIN projects p ON i.project_id = p.id
+       WHERE i.status = 'paid' AND p.estimated_hours > 0`
+    ) as Record<string, number>)?.rate ?? 0;
     const eligibleProjects = queryAll(
       `SELECT p.id, p.name, p.estimated_hours, p.status, c.name as client_name,
-        COALESCE((SELECT SUM(i.amount) FROM invoices i WHERE i.project_id = p.id AND i.status != 'cancelled'), 0) as invoiced_total,
-        COALESCE((SELECT SUM(i.amount) FROM invoices i WHERE i.project_id = p.id AND i.status = 'paid'), 0) as paid_total
+        COALESCE((SELECT SUM(COALESCE(i.amount_huf, i.amount)) FROM invoices i WHERE i.project_id = p.id AND i.status != 'cancelled'), 0) as invoiced_total,
+        COALESCE((SELECT SUM(COALESCE(i.paid_amount_huf, i.amount_huf, i.amount)) FROM invoices i WHERE i.project_id = p.id AND i.status = 'paid'), 0) as paid_total
        FROM projects p LEFT JOIN clients c ON p.client_id = c.id
        WHERE p.status IN ('active', 'completed') AND p.estimated_hours > 0
          AND p.client_id IS NOT NULL AND p.client_id != ''
@@ -1048,16 +1148,17 @@ export function registerIpcHandlers() {
 
   ipcMain.handle('db:finance:monthlyRevenue', () => {
     // Get monthly revenue for the last 12 months, broken down by client
+    // Pénzforgalmi szemlélet: paid_date + paid_amount_huf (multi-currency correct)
     const rows = queryAll(
       `SELECT 
-        strftime('%Y-%m', i.issue_date) as month,
+        strftime('%Y-%m', COALESCE(i.paid_date, i.issue_date)) as month,
         i.client_id,
         c.name as client_name,
         c.color as client_color,
-        SUM(i.amount) as total
+        SUM(COALESCE(i.paid_amount_huf, i.amount_huf, i.amount)) as total
       FROM invoices i
       LEFT JOIN clients c ON i.client_id = c.id
-      WHERE i.status = 'paid' AND i.issue_date >= date('now', '-12 months')
+      WHERE i.status = 'paid' AND COALESCE(i.paid_date, i.issue_date) >= date('now', '-12 months')
       GROUP BY month, i.client_id
       ORDER BY month ASC`
     );
@@ -1066,8 +1167,21 @@ export function registerIpcHandlers() {
 
   // Enhanced finance stats
   ipcMain.handle('db:finance:enhanced', () => {
-    const paidLastMonth = (queryOne(`SELECT COALESCE(SUM(amount), 0) as total FROM invoices WHERE status = 'paid' AND issue_date >= date('now', 'start of month', '-1 month') AND issue_date < date('now', 'start of month')`) as Record<string, number>)?.total ?? 0;
-    const yearlyRevenue = (queryOne(`SELECT COALESCE(SUM(amount), 0) as total FROM invoices WHERE status = 'paid' AND issue_date >= date('now', 'start of year')`) as Record<string, number>)?.total ?? 0;
+    // ── Pénzforgalmi (cash-basis) és számviteli (accrual) metrikák ─────
+    // paidLastMonth: pénzforgalmi — paid_date szerint, paid_amount_huf alapján
+    const paidLastMonth = (queryOne(
+      `SELECT COALESCE(SUM(COALESCE(paid_amount_huf, amount_huf, amount)), 0) as total
+       FROM invoices
+       WHERE status = 'paid'
+         AND COALESCE(paid_date, issue_date) >= date('now', 'start of month', '-1 month')
+         AND COALESCE(paid_date, issue_date) < date('now', 'start of month')`
+    ) as Record<string, number>)?.total ?? 0;
+    // yearlyRevenue: SZÁMVITELI szemlélet — issue_date + amount_huf (bruttó könyvelt árbevétel)
+    const yearlyRevenue = (queryOne(
+      `SELECT COALESCE(SUM(COALESCE(amount_huf, amount)), 0) as total
+       FROM invoices
+       WHERE status = 'paid' AND issue_date >= date('now', 'start of year')`
+    ) as Record<string, number>)?.total ?? 0;
     // ÁFA bontás: nettó YTD (amit a vállalkozás tényleges bevételeként könyvelhet)
     // A migráció után minden számla net_amount/vat_amount mezője ki van töltve.
     // Ha valamiért NULL, fallback: amount (bruttónak tekintjük, de áfa 0).
@@ -1092,12 +1206,15 @@ export function registerIpcHandlers() {
     const vatBalance = vatPayable - vatDeductible;
     const vatStatus = ((queryOne('SELECT vat_status FROM user_settings LIMIT 1') as Record<string, string>)?.vat_status as 'exempt' | 'standard') || 'exempt';
     const yearlyMonthly = queryAll(
-      `SELECT strftime('%Y-%m', issue_date) as month, SUM(amount) as total
-       FROM invoices WHERE status = 'paid' AND issue_date >= date('now', 'start of year')
+      `SELECT strftime('%Y-%m', COALESCE(paid_date, issue_date)) as month,
+              SUM(COALESCE(paid_amount_huf, amount_huf, amount)) as total
+       FROM invoices WHERE status = 'paid' AND COALESCE(paid_date, issue_date) >= date('now', 'start of year')
        GROUP BY month ORDER BY month ASC`
     ) as { month: string; total: number }[];
     const topClients = queryAll(
-      `SELECT c.id, c.name, c.color, SUM(i.amount) as total, COUNT(i.id) as invoice_count
+      `SELECT c.id, c.name, c.color,
+              SUM(COALESCE(i.paid_amount_huf, i.amount_huf, i.amount)) as total,
+              COUNT(i.id) as invoice_count
        FROM invoices i JOIN clients c ON i.client_id = c.id
        WHERE i.status = 'paid'
        GROUP BY c.id ORDER BY total DESC LIMIT 3`
@@ -1426,24 +1543,7 @@ export function registerIpcHandlers() {
 
   // ============ EXCHANGE RATES ============
   ipcMain.handle('exchange:getRate', async (_event, from: string, to: string) => {
-    return new Promise<number>((resolve, reject) => {
-      const url = `https://api.frankfurter.dev/v1/latest?base=${encodeURIComponent(from)}&symbols=${encodeURIComponent(to)}`;
-      const req = net.request(url);
-      let body = '';
-      req.on('response', (response) => {
-        response.on('data', (chunk) => { body += chunk.toString(); });
-        response.on('end', () => {
-          try {
-            const data = JSON.parse(body);
-            const rate = data?.rates?.[to];
-            if (typeof rate === 'number') resolve(rate);
-            else reject(new Error('Rate not found'));
-          } catch { reject(new Error('Parse error')); }
-        });
-      });
-      req.on('error', reject);
-      req.end();
-    });
+    return fetchExchangeRate(from, to);
   });
 
   // ============ FILE OPERATIONS ============
@@ -2093,10 +2193,23 @@ export function registerIpcHandlers() {
 
   ipcMain.handle('billing:create-invoice', async (_event, request: any) => {
     try {
+      // Billingo requires conversion_rate for non-HUF invoices; auto-fetch live rate if missing
+      const currency = (request?.currency || 'HUF').toUpperCase();
+      if (currency !== 'HUF' && !request.conversionRate) {
+        try {
+          request.conversionRate = await fetchExchangeRate(currency, 'HUF');
+          console.log(`[Billing] Auto-fetched exchange rate ${currency} -> HUF: ${request.conversionRate}`);
+        } catch (err: any) {
+          console.error('[Billing] Exchange rate fetch failed:', err?.message || err);
+          return { success: false, error: `Nem sikerült lekérni a(z) ${currency} -> HUF árfolyamot. Ellenőrizd az internetkapcsolatot.` };
+        }
+      }
       const result = await billingService.createInvoice(request);
       return { success: true, data: result };
     } catch (err: any) {
-      return { success: false, error: err.message };
+      const msg = typeof err?.message === 'string' ? err.message : JSON.stringify(err);
+      console.error('[Billing] createInvoice failed:', msg);
+      return { success: false, error: msg };
     }
   });
 

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import {
-  Plus, Search, Trash2, X, AlertTriangle, StickyNote as NoteIcon,
+  Plus, Search, Trash2, X, StickyNote as NoteIcon,
 } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
 import DatePicker from '../components/DatePicker';
@@ -108,11 +108,7 @@ export default function Notes() {
             <div key={note.id} className="bg-surface-800/50 rounded-lg border border-teal/10 p-4 group">
               <div className="flex items-start justify-between">
                 <div className="flex items-start gap-3">
-                  {note.is_notification ? (
-                    <AlertTriangle width={16} height={16} className="text-amber-400 mt-0.5 shrink-0" />
-                  ) : (
-                    <NoteIcon width={16} height={16} className="text-steel mt-0.5 shrink-0" />
-                  )}
+                  <NoteIcon width={16} height={16} className="text-steel mt-0.5 shrink-0" />
                   <div>
                     <h3 className="font-semibold text-cream text-sm">{note.title || 'Jegyzet'}</h3>
                     <p className="text-sm text-steel mt-1">{stripHtml(note.content)}</p>
@@ -161,21 +157,26 @@ function NoteForm({ projects, clients, onSubmit, onClose }: {
   const [content, setContent] = useState('');
   const [clientId, setClientId] = useState('');
   const [projectId, setProjectId] = useState('');
-  const [isNotification, setIsNotification] = useState(false);
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
 
   const clientProjects = clientId ? projects.filter(p => p.client_id === clientId) : projects;
-  const inputClass = "w-full px-3 py-2 bg-surface-900 border border-teal/10 rounded-lg text-sm text-cream focus:outline-none focus:ring-2 focus:ring-teal/30";
+  const inputClass = "w-full px-2.5 py-2 bg-surface-900/40 border border-teal/8 rounded-lg text-sm text-cream focus:outline-none focus:border-teal/25 placeholder:text-steel/40 transition-colors";
+  const labelClass = "text-[10px] text-steel tracking-wider uppercase mb-1 block";
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onDoubleClick={onClose}>
-      <div className="bg-surface-800 rounded-xl border border-teal/15 p-6 w-full max-w-md shadow-2xl" onDoubleClick={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between mb-5">
-          <h2 className="font-pixel text-[14px] text-cream">Új jegyzet</h2>
-          <button onClick={onClose} className="p-1 rounded hover:bg-teal/10 text-steel hover:text-cream">
-            <X width={14} height={14} />
-          </button>
-        </div>
+      <div className="bg-surface-800 rounded-2xl ring-1 ring-inset ring-teal/15 w-full max-w-md shadow-2xl overflow-hidden" onDoubleClick={e => e.stopPropagation()}>
+
+        {/* Header accent */}
+        <div className="h-1 bg-teal" />
+
+        <div className="p-5">
+          <div className="flex items-center justify-between mb-5">
+            <h2 className="font-pixel text-[14px] text-cream">Új jegyzet</h2>
+            <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-teal/10 text-steel hover:text-cream cursor-pointer transition-colors duration-150 ease-out">
+              <X width={14} height={14} />
+            </button>
+          </div>
         <form
           onSubmit={e => {
             e.preventDefault();
@@ -185,26 +186,25 @@ function NoteForm({ projects, clients, onSubmit, onClose }: {
               content,
               client_id: clientId || undefined,
               project_id: projectId || undefined,
-              is_notification: isNotification ? 1 : 0,
               date,
             });
           }}
           className="space-y-4"
         >
           <div>
-            <label className="block text-xs font-medium text-steel mb-1">Dátum</label>
+            <label className={labelClass}>Dátum</label>
             <DatePicker value={date} onChange={setDate} />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs font-medium text-steel mb-1">Ügyfél</label>
+              <label className={labelClass}>Ügyfél</label>
               <select value={clientId} onChange={e => { setClientId(e.target.value); setProjectId(''); }} className={inputClass}>
                 <option value="">Nincs</option>
                 {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
             </div>
             <div>
-              <label className="block text-xs font-medium text-steel mb-1">Projekt</label>
+              <label className={labelClass}>Projekt</label>
               <select value={projectId} onChange={e => setProjectId(e.target.value)} className={inputClass}>
                 <option value="">Nincs</option>
                 {clientProjects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
@@ -212,22 +212,19 @@ function NoteForm({ projects, clients, onSubmit, onClose }: {
             </div>
           </div>
           <div>
-            <label className="block text-xs font-medium text-steel mb-1">Cím</label>
+            <label className={labelClass}>Cím</label>
             <input type="text" value={title} onChange={e => setTitle(e.target.value)} className={inputClass} placeholder="Jegyzet címe" />
           </div>
           <div>
-            <label className="block text-xs font-medium text-steel mb-1">Tartalom *</label>
+            <label className={labelClass}>Tartalom *</label>
             <textarea value={content} onChange={e => setContent(e.target.value)} className={`${inputClass} resize-none h-24`} placeholder="Jegyzet tartalma..." required />
           </div>
-          <label className="flex items-center gap-2">
-            <input type="checkbox" checked={isNotification} onChange={e => setIsNotification(e.target.checked)} className="rounded border-teal/20" />
-            <span className="text-sm text-steel">Megjelölés értesítésként</span>
-          </label>
           <div className="flex justify-end gap-2 pt-2">
-            <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-steel hover:bg-teal/10 rounded-lg">Mégse</button>
-            <button type="submit" className="px-4 py-2 text-sm bg-teal text-cream rounded-lg hover:bg-teal/80">Létrehozás</button>
+            <button type="button" onClick={onClose} className="px-4 py-2 text-xs text-steel hover:text-cream transition-colors duration-150 ease-out cursor-pointer">Mégse</button>
+            <button type="submit" className="px-5 py-2 text-xs font-medium bg-teal text-cream rounded-lg hover:bg-teal/80 transition-colors duration-150 ease-out cursor-pointer">Létrehozás</button>
           </div>
         </form>
+        </div>
       </div>
     </div>
   );

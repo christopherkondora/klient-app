@@ -7,3 +7,9 @@ release/
 *.db-journal
 *.db-wal
 .env
+
+# Apple signing certificates — never commit
+build/certs/
+*.p12
+*.cer
+*.mobileprovision

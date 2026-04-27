@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, protocol, Tray, Menu, nativeImage, session } from 'electron';
+import { app, BrowserWindow, ipcMain, protocol, Tray, Menu, nativeImage, session, desktopCapturer } from 'electron';
 import path from 'path';
 import { autoUpdater } from 'electron-updater';
 import { initDatabase } from './database';
@@ -76,6 +76,27 @@ app.whenReady().then(async () => {
   session.defaultSession.setPermissionCheckHandler((_webContents, permission) => {
     return ['media', 'audioCapture', 'speech'].includes(permission);
   });
+
+  // Allow `getDisplayMedia()` calls from the renderer to silently resolve with
+  // the system audio loopback (Windows). This is used by the recording feature
+  // to capture the other side of Google Meet / Teams calls alongside the mic.
+  // No picker is shown; we always return the primary screen + loopback audio.
+  try {
+    session.defaultSession.setDisplayMediaRequestHandler((_request, callback) => {
+      desktopCapturer
+        .getSources({ types: ['screen'] })
+        .then((sources) => {
+          if (sources.length === 0) {
+            callback({});
+            return;
+          }
+          callback({ video: sources[0], audio: 'loopback' });
+        })
+        .catch(() => callback({}));
+    });
+  } catch (err) {
+    console.warn('[main] Failed to install display media handler:', err);
+  }
 
   createWindow();
   createTray();

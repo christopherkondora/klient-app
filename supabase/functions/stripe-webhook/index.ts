@@ -196,10 +196,10 @@ async function createBillingoInvoice(params: {
           {
             name: planNames[params.plan] || 'Klient előfizetés',
             unit_price: params.amountHuf,
-            unit_price_type: 'gross',
+            unit_price_type: 'net',
             quantity: 1,
             unit: 'db',
-            vat: '27%',
+            vat: 'AAM',
           },
         ],
       }),

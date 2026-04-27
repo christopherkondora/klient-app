@@ -15,7 +15,9 @@ export default function TimePicker({ value, onChange, className }: TimePickerPro
   const [tempHour, setTempHour] = useState(9);
   const [tempMinute, setTempMinute] = useState(0);
   const [textInput, setTextInput] = useState('');
+  const [dropdownPos, setDropdownPos] = useState({ top: 0, left: 0, openUp: false });
   const ref = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
   const clockRef = useRef<SVGSVGElement>(null);
   const isDragging = useRef(false);
 
@@ -39,6 +41,17 @@ export default function TimePicker({ value, onChange, className }: TimePickerPro
     setTempMinute(m);
     setTextInput('');
     setMode('hour');
+    if (buttonRef.current) {
+      const rect = buttonRef.current.getBoundingClientRect();
+      const dropdownH = 320; // approx height
+      const spaceBelow = window.innerHeight - rect.bottom;
+      const openUp = spaceBelow < dropdownH && rect.top > dropdownH;
+      setDropdownPos({
+        top: openUp ? rect.top - dropdownH - 8 : rect.bottom + 8,
+        left: Math.min(rect.left, window.innerWidth - 228),
+        openUp,
+      });
+    }
     setOpen(true);
   }
 
@@ -163,9 +176,10 @@ export default function TimePicker({ value, onChange, className }: TimePickerPro
   return (
     <div ref={ref} className={`relative ${className || ''}`}>
       <button
+        ref={buttonRef}
         type="button"
         onClick={openPicker}
-        className="w-full flex items-center justify-between px-2 py-1.5 bg-surface-800 border border-teal/10 rounded text-xs text-left focus:outline-none focus:ring-1 focus:ring-teal/30 transition-colors"
+        className="w-full flex items-center justify-between px-2.5 py-2 bg-surface-900/40 border border-teal/8 rounded-lg text-sm text-left focus:outline-none focus:border-teal/25 transition-colors"
       >
         <span className={value ? 'text-cream' : 'text-steel/50'}>
           {value || '--:--'}
@@ -174,7 +188,10 @@ export default function TimePicker({ value, onChange, className }: TimePickerPro
       </button>
 
       {open && (
-        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-[220px] bg-surface-800 border border-teal/15 rounded-xl shadow-2xl z-50 p-3 animate-in">
+        <div
+          className="fixed w-[220px] bg-surface-800 border border-teal/15 rounded-xl shadow-2xl z-[9999] p-3"
+          style={{ top: dropdownPos.top, left: dropdownPos.left }}
+        >
           {/* Text input for typing time */}
           <div className="mb-2">
             <input

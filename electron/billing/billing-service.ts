@@ -22,12 +22,20 @@ export interface InvoiceRequest {
     netUnitPrice: number;
     vatRate: 27 | 18 | 5 | 0;
     /** Speciális áfa kód, pl. 'AAM' (alanyi adómentes), 'TAM' (tárgyi adómentes). Ha meg van adva, a vatRate 0 kell legyen. */
-    vatCode?: 'AAM' | 'TAM' | 'EU' | 'EUK' | 'MAA' | 'F.AFA';
+    vatCode?: 'AM' | 'AAM' | 'TAM' | 'EU' | 'EUK' | 'ATHK' | 'MAA' | 'FAD' | 'AKK' | 'K_AFA';
   }>;
   fulfillmentDate: string;
   dueDate: string;
   paymentMethod: 'bank_transfer' | 'cash' | 'bankcard';
-  currency: 'HUF';
+  currency: string;
+  /** ISO 3166-1 alpha-2 country code of the buyer (e.g. 'HU', 'DE'). Defaults to 'HU'. */
+  clientCountryCode?: string;
+  /** EU VAT registration number of the buyer (e.g. 'DE123456789'). Required for EU B2B reverse-charge. */
+  clientEuVatNumber?: string;
+  /** Invoice language code (e.g. 'hu', 'en', 'de'). Defaults to 'hu'. */
+  language?: string;
+  /** Exchange rate from invoice currency to HUF. Required by Billingo for non-HUF invoices. */
+  conversionRate?: number;
   sellerBankName?: string;
   sellerBankAccount?: string;
   /** Számla megjegyzés / záradék (pl. AAM esetén kötelező hivatkozás). */
@@ -51,6 +59,49 @@ export function getActiveProvider(): 'billingo' | 'szamlazz' | null {
     return cfg.platform;
   }
   return null;
+}
+
+// ── EU country codes (ISO 3166-1 alpha-2, excluding HU since seller is in HU) ──
+
+export const EU_COUNTRY_CODES = new Set([
+  'AT', 'BE', 'BG', 'HR', 'CY', 'CZ', 'DK', 'EE', 'FI', 'FR',
+  'DE', 'GR', 'IE', 'IT', 'LV', 'LT', 'LU', 'MT', 'NL', 'PL',
+  'PT', 'RO', 'SK', 'SI', 'ES', 'SE'
+]);
+
+export function isEuCountry(countryCode: string | undefined | null): boolean {
+  if (!countryCode) return false;
+  return EU_COUNTRY_CODES.has(countryCode.toUpperCase());
+}
+
+/**
+ * Determines the appropriate VAT code/rate for an invoice based on buyer location and VAT registration.
+ * Returns either a percentage rate (number) for HU domestic, or a special VAT code (string).
+ *
+ * Hungarian invoicing rules (Billingo official codes):
+ * - HU domestic: standard rate (27%/18%/5%) or 'AAM' if seller is alanyi adómentes
+ * - EU B2B (buyer has EU VAT number): 'EU' — EU-n belül (reverse charge Art. 196)
+ * - EU B2C (no EU VAT number): domestic rate applies (no special code)
+ * - Third country (non-EU): 'EUK' — EU-n kívül, export
+ */
+export function resolveVatCode(
+  countryCode: string | undefined | null,
+  euVatNumber: string | undefined | null,
+  sellerVatStatus: 'standard' | 'exempt' | string,
+  defaultDomesticRate: 27 | 18 | 5 | 0 = 27,
+): { vatRate: 27 | 18 | 5 | 0; vatCode?: 'AM' | 'AAM' | 'TAM' | 'EU' | 'EUK' | 'ATHK' | 'MAA' | 'FAD' | 'AKK' | 'K_AFA' } {
+  const cc = (countryCode || 'HU').toUpperCase();
+  if (cc === 'HU') {
+    if (sellerVatStatus === 'exempt') return { vatRate: 0, vatCode: 'AAM' };
+    return { vatRate: defaultDomesticRate };
+  }
+  if (isEuCountry(cc)) {
+    if (euVatNumber && euVatNumber.trim()) return { vatRate: 0, vatCode: 'EU' };
+    // EU B2C: no special code, domestic rate applies
+    return { vatRate: defaultDomesticRate };
+  }
+  // Third country (non-EU): EU-n kívül
+  return { vatRate: 0, vatCode: 'EUK' };
 }
 
 // ── Mark invoice as paid on provider ──
@@ -149,17 +200,19 @@ function mapBillingoPaymentMethod(method: string): string {
 
 async function createBillingoInvoice(request: InvoiceRequest): Promise<InvoiceResult> {
   const addr = parseAddress(request.clientAddress);
+  const countryCode = (request.clientCountryCode || 'HU').toUpperCase();
+  const language = request.language || (countryCode === 'HU' ? 'hu' : 'en');
 
   // 1. Ensure partner exists
   const partnerId = await billingoAdapter.ensurePartner({
     name: request.clientName,
     address: {
-      country_code: 'HU',
+      country_code: countryCode,
       post_code: addr.post_code,
       city: addr.city,
       address: addr.address,
     },
-    taxcode: request.clientTaxNumber,
+    taxcode: request.clientEuVatNumber || request.clientTaxNumber,
     emails: request.clientEmail ? [request.clientEmail] : undefined,
   });
 
@@ -177,8 +230,9 @@ async function createBillingoInvoice(request: InvoiceRequest): Promise<InvoiceRe
     due_date: request.dueDate,
     payment_method: mapBillingoPaymentMethod(request.paymentMethod),
     electronic: true,
-    language: 'hu',
+    language,
     currency: request.currency || 'HUF',
+    conversion_rate: request.conversionRate,
     items: request.items.map(item => ({
       name: item.name,
       unit_price: item.netUnitPrice,
@@ -216,13 +270,16 @@ async function createBillingoInvoice(request: InvoiceRequest): Promise<InvoiceRe
     netTotal += net;
     grossTotal += net * (1 + item.vatRate / 100);
   }
+  // Round only for HUF (no fractional forints); keep 2 decimals for other currencies
+  const isHuf = (request.currency || 'HUF').toUpperCase() === 'HUF';
+  const roundAmount = (n: number) => isHuf ? Math.round(n) : Math.round(n * 100) / 100;
 
   return {
     provider: 'billingo',
     invoiceNumber: result.invoice_number,
     providerInvoiceId: String(result.id),
-    grossTotal: Math.round(grossTotal),
-    netTotal: Math.round(netTotal),
+    grossTotal: roundAmount(grossTotal),
+    netTotal: roundAmount(netTotal),
     pdfBase64,
   };
 }
@@ -231,20 +288,21 @@ async function createBillingoInvoice(request: InvoiceRequest): Promise<InvoiceRe
 
 async function createSzamlazzInvoice(request: InvoiceRequest): Promise<InvoiceResult> {
   const addr = parseAddress(request.clientAddress);
+  const language = request.language || ((request.clientCountryCode || 'HU').toUpperCase() === 'HU' ? 'hu' : 'en');
   const result = await szamlazzAdapter.createInvoice({
     externalId: request.externalId,
     fulfillmentDate: request.fulfillmentDate,
     dueDate: request.dueDate,
     paymentMethod: request.paymentMethod,
     currency: request.currency || 'HUF',
-    language: 'hu',
+    language,
     buyer: {
       name: request.clientName,
       zip: addr.post_code,
       city: addr.city,
       address: addr.address,
       email: request.clientEmail,
-      taxNumber: request.clientTaxNumber,
+      taxNumber: request.clientEuVatNumber || request.clientTaxNumber,
       clientId: request.clientId,
     },
     items: request.items.map(item => ({

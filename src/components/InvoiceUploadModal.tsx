@@ -130,19 +130,25 @@ export default function InvoiceUploadModal({ clients, projects, onClose, onSaved
     }
   }
 
-  const inputClass = "w-full px-3 py-2 bg-surface-900 border border-teal/10 rounded-lg text-sm text-cream focus:outline-none focus:ring-2 focus:ring-teal/30";
+  const inputClass = "w-full px-2.5 py-2 bg-surface-900/40 border border-teal/8 rounded-lg text-sm text-cream focus:outline-none focus:border-teal/25 placeholder:text-steel/40 transition-colors";
+  const labelClass = "text-[10px] text-steel tracking-wider uppercase mb-1 block";
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onDoubleClick={onClose}>
-      <div className="bg-surface-800 rounded-xl border border-teal/15 p-6 w-full max-w-md shadow-2xl" onDoubleClick={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="font-pixel text-[14px] text-cream">
-            {step === 'upload' ? 'Számla beolvasása' : 'Számla ellenőrzése'}
-          </h2>
-          <button onClick={onClose} className="p-1 rounded hover:bg-teal/10 text-steel hover:text-cream cursor-pointer">
-            <X width={14} height={14} />
-          </button>
-        </div>
+      <div className="bg-surface-800 rounded-2xl ring-1 ring-inset ring-teal/15 w-full max-w-md shadow-2xl overflow-hidden" onDoubleClick={e => e.stopPropagation()}>
+
+        {/* Header accent */}
+        <div className="h-1 bg-teal" />
+
+        <div className="p-5">
+          <div className="flex items-center justify-between mb-5">
+            <h2 className="font-pixel text-[14px] text-cream">
+              {step === 'upload' ? 'Számla beolvasása' : 'Számla ellenőrzése'}
+            </h2>
+            <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-teal/10 text-steel hover:text-cream cursor-pointer transition-colors duration-150 ease-out">
+              <X width={14} height={14} />
+            </button>
+          </div>
 
         {step === 'upload' && (
           <>
@@ -202,16 +208,16 @@ export default function InvoiceUploadModal({ clients, projects, onClose, onSaved
 
             <div className="space-y-3">
               <div>
-                <label className="block text-xs font-medium text-steel mb-1">
+                <label className={labelClass}>
                   Számlaszám
-                  {!extractedData?.invoice_number && <span className="ml-1 text-amber-400 text-[9px]">• manuális</span>}
+                  {!extractedData?.invoice_number && <span className="ml-1 text-amber-400 text-[9px] normal-case tracking-normal">• manuális</span>}
                 </label>
                 <input type="text" value={confirmFields.invoice_number} onChange={e => setConfirmFields(f => ({ ...f, invoice_number: e.target.value }))} className={inputClass} />
               </div>
               <div>
-                <label className="block text-xs font-medium text-steel mb-1">
+                <label className={labelClass}>
                   Ügyfél *
-                  {extractedData?.client_name && !confirmFields.client_id && <span className="ml-1 text-amber-400 text-[9px]">• „{extractedData.client_name}" – nem azonosítva</span>}
+                  {extractedData?.client_name && !confirmFields.client_id && <span className="ml-1 text-amber-400 text-[9px] normal-case tracking-normal">• „{extractedData.client_name}" – nem azonosítva</span>}
                 </label>
                 <select value={confirmFields.client_id} onChange={e => setConfirmFields(f => ({ ...f, client_id: e.target.value, project_id: '' }))} className={inputClass} required>
                   <option value="">Válassz ügyfelet...</option>
@@ -220,9 +226,9 @@ export default function InvoiceUploadModal({ clients, projects, onClose, onSaved
               </div>
               {!projectId && projects && projects.length > 0 && (
                 <div>
-                  <label className="block text-xs font-medium text-steel mb-1">
+                  <label className={labelClass}>
                     Projekt
-                    {confirmFields.project_id && <span className="ml-1 text-teal text-[9px]">• AI javasolt</span>}
+                    {confirmFields.project_id && <span className="ml-1 text-teal text-[9px] normal-case tracking-normal">• AI javasolt</span>}
                   </label>
                   <select value={confirmFields.project_id} onChange={e => setConfirmFields(f => ({ ...f, project_id: e.target.value }))} className={inputClass}>
                     <option value="">Nincs projekthez csatolva</option>
@@ -234,14 +240,14 @@ export default function InvoiceUploadModal({ clients, projects, onClose, onSaved
               )}
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-medium text-steel mb-1">
+                  <label className={labelClass}>
                     Összeg *
-                    {!extractedData?.amount && <span className="ml-1 text-amber-400 text-[9px]">• manuális</span>}
+                    {!extractedData?.amount && <span className="ml-1 text-amber-400 text-[9px] normal-case tracking-normal">• manuális</span>}
                   </label>
                   <input type="text" inputMode="numeric" value={fmtNum(confirmFields.amount)} onChange={e => setConfirmFields(f => ({ ...f, amount: parseNum(e.target.value) }))} className={inputClass} required />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-steel mb-1">Pénznem</label>
+                  <label className={labelClass}>Pénznem</label>
                   <select value={confirmFields.currency} onChange={e => setConfirmFields(f => ({ ...f, currency: e.target.value }))} className={inputClass}>
                     <option value="HUF">HUF</option>
                     <option value="EUR">EUR</option>
@@ -251,16 +257,16 @@ export default function InvoiceUploadModal({ clients, projects, onClose, onSaved
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-medium text-steel mb-1">
+                  <label className={labelClass}>
                     Kiállítás dátuma
-                    {!extractedData?.issue_date && <span className="ml-1 text-amber-400 text-[9px]">• manuális</span>}
+                    {!extractedData?.issue_date && <span className="ml-1 text-amber-400 text-[9px] normal-case tracking-normal">• manuális</span>}
                   </label>
                   <input type="date" value={confirmFields.issue_date} onChange={e => setConfirmFields(f => ({ ...f, issue_date: e.target.value }))} className={inputClass} />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-steel mb-1">
+                  <label className={labelClass}>
                     Fizetési határidő
-                    {!extractedData?.due_date && <span className="ml-1 text-amber-400 text-[9px]">• manuális</span>}
+                    {!extractedData?.due_date && <span className="ml-1 text-amber-400 text-[9px] normal-case tracking-normal">• manuális</span>}
                   </label>
                   <input type="date" value={confirmFields.due_date} onChange={e => setConfirmFields(f => ({ ...f, due_date: e.target.value }))} className={inputClass} />
                 </div>
@@ -270,16 +276,16 @@ export default function InvoiceUploadModal({ clients, projects, onClose, onSaved
             <div className="flex items-center gap-2 mt-4">
               <button
                 onClick={() => { setStep('upload'); setExtractedData(null); setUploadedFilePath(null); }}
-                className="flex items-center gap-1.5 px-4 py-2 text-sm text-steel hover:bg-teal/10 rounded-lg cursor-pointer"
+                className="flex items-center gap-1.5 px-4 py-2 text-xs text-steel hover:text-cream transition-colors duration-150 ease-out cursor-pointer"
               >
                 <ArrowLeft width={14} height={14} /> Másik fájl
               </button>
               <div className="flex-1" />
-              <button onClick={onClose} className="px-4 py-2 text-sm text-steel hover:bg-teal/10 rounded-lg cursor-pointer">Mégse</button>
+              <button onClick={onClose} className="px-4 py-2 text-xs text-steel hover:text-cream transition-colors duration-150 ease-out cursor-pointer">Mégse</button>
               <button
                 onClick={handleConfirm}
                 disabled={!confirmFields.amount || !confirmFields.client_id}
-                className={`px-4 py-2 text-sm rounded-lg font-medium cursor-pointer ${
+                className={`px-5 py-2 text-xs rounded-lg font-medium transition-colors duration-150 ease-out cursor-pointer ${
                   confirmFields.amount && confirmFields.client_id
                     ? 'bg-teal text-cream hover:bg-teal/80'
                     : 'bg-teal/20 text-steel/40 cursor-not-allowed'
@@ -290,6 +296,7 @@ export default function InvoiceUploadModal({ clients, projects, onClose, onSaved
             </div>
           </>
         )}
+        </div>
       </div>
     </div>
   );

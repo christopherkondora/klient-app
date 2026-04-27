@@ -16,6 +16,7 @@ import ContractGenerateModal from '../components/ContractGenerateModal';
 import ContractPdfViewer from '../components/ContractPdfViewer';
 import { ClientForm } from './Clients';
 import { useThemedColor } from '../utils/colors';
+import { startAudioRecording, canCaptureSystemAudio, RecordingSession } from '../utils/recording';
 
 const PLATFORM_URLS: Record<string, { label: string; url: string }> = {
   szamlazz: { label: 'Számlázz.hu', url: 'https://www.szamlazz.hu' },
@@ -55,6 +56,7 @@ export default function ClientDetail() {
   // Recording state
   const [isRecording, setIsRecording] = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
+  const [includeSystemAudio, setIncludeSystemAudio] = useState(false);
   const [playingId, setPlayingId] = useState<string | null>(null);
   const [audioProgress, setAudioProgress] = useState(0);
   const [audioDuration, setAudioDuration] = useState(0);
@@ -65,6 +67,7 @@ export default function ClientDetail() {
   const timerRef = useRef<number>(0);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const recordedBlob = useRef<Blob | null>(null);
+  const recordingSession = useRef<RecordingSession | null>(null);
   const [processingId, setProcessingId] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
@@ -133,8 +136,9 @@ export default function ClientDetail() {
   // Recording functions
   async function startRecording() {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      mediaRecorder.current = new MediaRecorder(stream);
+      const session = await startAudioRecording({ includeSystemAudio });
+      recordingSession.current = session;
+      mediaRecorder.current = new MediaRecorder(session.stream);
       audioChunks.current = [];
 
       mediaRecorder.current.ondataavailable = (event) => {
@@ -143,7 +147,8 @@ export default function ClientDetail() {
 
       mediaRecorder.current.onstop = () => {
         recordedBlob.current = new Blob(audioChunks.current, { type: 'audio/webm' });
-        stream.getTracks().forEach(track => track.stop());
+        recordingSession.current?.stop();
+        recordingSession.current = null;
         setShowSaveForm(true);
       };
 
@@ -153,6 +158,10 @@ export default function ClientDetail() {
       timerRef.current = window.setInterval(() => {
         setRecordingTime(prev => prev + 1);
       }, 1000);
+
+      if (includeSystemAudio && !session.systemAudioActive) {
+        alert('A rendszerhang rögzítése nem sikerült — a felvétel csak mikrofonról készül. (Windows szükséges.)');
+      }
     } catch (err) {
       console.error('Failed to start recording:', err);
       alert('Nem sikerült elindítani a felvételt. Ellenőrizd a mikrofon engedélyeket.');
@@ -465,6 +474,17 @@ export default function ClientDetail() {
                   >
                     <Mic width={14} height={14} /> Felvétel indítása
                   </button>
+                  {canCaptureSystemAudio() && (
+                    <label className="flex items-center gap-2 text-xs text-steel cursor-pointer select-none mt-1">
+                      <input
+                        type="checkbox"
+                        checked={includeSystemAudio}
+                        onChange={(e) => setIncludeSystemAudio(e.target.checked)}
+                        className="accent-teal"
+                      />
+                      Rendszerhang is rögzítése <span className="text-steel/50">(pl. Google Meet, Teams)</span>
+                    </label>
+                  )}
                 </>
               )}
             </div>
@@ -798,18 +818,21 @@ export default function ClientDetail() {
       {/* Save Recording Modal */}
       {showSaveForm && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-          <div className="bg-surface-800 rounded-xl border border-teal/15 p-6 w-full max-w-md shadow-2xl">
-            <h2 className="font-pixel text-[14px] text-cream mb-5">Felvétel mentése</h2>
-            <SaveRecordingForm
-              duration={recordingTime}
-              clientName={client.name}
-              onSave={saveRecording}
-              onCancel={() => {
-                setShowSaveForm(false);
-                recordedBlob.current = null;
-                setRecordingTime(0);
-              }}
-            />
+          <div className="bg-surface-800 rounded-2xl ring-1 ring-inset ring-teal/15 w-full max-w-md shadow-2xl overflow-hidden">
+            <div className="h-1 bg-teal" />
+            <div className="p-5">
+              <h2 className="font-pixel text-[14px] text-cream mb-5">Felvétel mentése</h2>
+              <SaveRecordingForm
+                duration={recordingTime}
+                clientName={client.name}
+                onSave={saveRecording}
+                onCancel={() => {
+                  setShowSaveForm(false);
+                  recordedBlob.current = null;
+                  setRecordingTime(0);
+                }}
+              />
+            </div>
           </div>
         </div>
       )}
@@ -923,7 +946,8 @@ function SaveRecordingForm({ duration, clientName, onSave, onCancel }: {
   onCancel: () => void;
 }) {
   const [title, setTitle] = useState('');
-  const inputClass = "w-full px-3 py-2 bg-surface-900 border border-teal/10 rounded-lg text-sm text-cream focus:outline-none focus:ring-2 focus:ring-teal/30";
+  const inputClass = "w-full px-2.5 py-2 bg-surface-900/40 border border-teal/8 rounded-lg text-sm text-cream focus:outline-none focus:border-teal/25 placeholder:text-steel/40 transition-colors";
+  const labelClass = "text-[10px] text-steel tracking-wider uppercase mb-1 block";
 
   return (
     <form
@@ -938,12 +962,12 @@ function SaveRecordingForm({ duration, clientName, onSave, onCancel }: {
         Időtartam: {Math.floor(duration / 60)}:{String(duration % 60).padStart(2, '0')} • Ügyfél: {clientName}
       </p>
       <div>
-        <label className="block text-xs font-medium text-steel mb-1">Cím *</label>
+        <label className={labelClass}>Cím *</label>
         <input type="text" value={title} onChange={e => setTitle(e.target.value)} className={inputClass} placeholder="pl. Hívás - Projekt egyeztetés" required />
       </div>
       <div className="flex justify-end gap-2 pt-2">
-        <button type="button" onClick={onCancel} className="px-4 py-2 text-sm text-steel hover:bg-teal/10 rounded-lg">Elvetés</button>
-        <button type="submit" className="px-4 py-2 text-sm bg-teal text-cream rounded-lg hover:bg-teal/80">Mentés</button>
+        <button type="button" onClick={onCancel} className="px-4 py-2 text-xs text-steel hover:text-cream transition-colors duration-150 ease-out cursor-pointer">Elvetés</button>
+        <button type="submit" className="px-5 py-2 text-xs font-medium bg-teal text-cream rounded-lg hover:bg-teal/80 transition-colors duration-150 ease-out cursor-pointer">Mentés</button>
       </div>
     </form>
   );

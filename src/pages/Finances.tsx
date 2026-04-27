@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { BarChart3, Receipt, Coins, Upload, Check, AlertTriangle, Clock, X, Loader2, Search, Trash2, ChevronDown, TrendingUp, FileText, Plus, Target, Users, Zap, CreditCard, ArrowUpRight, ArrowDownRight, Minus, Edit2, DollarSign, Quote, Monitor, Megaphone, Building, Server, ShieldCheck, Truck, GraduationCap, Wrench, MoreHorizontal, CalendarClock } from 'lucide-react';
+import { BarChart3, Receipt, Coins, Upload, Check, AlertTriangle, Clock, X, Loader2, Search, Trash2, ChevronDown, TrendingUp, FileText, Plus, Target, Users, CreditCard, ArrowUpRight, ArrowDownRight, Minus, Edit2, Monitor, Megaphone, Building, Server, ShieldCheck, Truck, GraduationCap, Wrench, MoreHorizontal, CalendarClock } from 'lucide-react';
 import { format, parseISO, differenceInDays, startOfMonth, subMonths } from 'date-fns';
 import { hu } from 'date-fns/locale';
 import { useAuth } from '../contexts/AuthContext';
@@ -21,29 +21,17 @@ const CATEGORY_META: Record<string, { label: string; icon: typeof Monitor; color
   transport: { label: 'Szállítás', icon: Truck, color: 'text-orange-400 bg-orange-500/10', chartColor: '#fb923c' },
   education: { label: 'Képzés', icon: GraduationCap, color: 'text-purple-400 bg-purple-500/10', chartColor: '#a78bfa' },
   equipment: { label: 'Eszközök', icon: Wrench, color: 'text-rose-400 bg-rose-500/10', chartColor: '#fb7185' },
+  berkoltseg: { label: 'Bérköltség', icon: Users, color: 'text-violet-400 bg-violet-500/10', chartColor: '#a78bfa' },
+  alvallalkozo: { label: 'Alvállalkozó', icon: Users, color: 'text-indigo-400 bg-indigo-500/10', chartColor: '#818cf8' },
   other: { label: 'Egyéb', icon: MoreHorizontal, color: 'text-steel bg-steel/10', chartColor: '#598392' },
 };
-
-const MOTIVATIONAL_QUOTES = [
-  { text: 'A siker nem a végcél, hanem az utazás maga.', author: 'Winston Churchill' },
-  { text: 'Minden nagy eredmény apró lépésekkel kezdődik.', author: 'Lao-ce' },
-  { text: 'A legjobb befektetés, amit tehetsz, a saját fejlődésedbe való befektetés.', author: 'Warren Buffett' },
-  { text: 'A munka gyümölcse a legédesebb jutalom.', author: 'Magyar közmondás' },
-  { text: 'Ne azt számold, mennyi van hátra – nézd, mennyit értél el.', author: 'Ismeretlen' },
-  { text: 'A kitartás az, ami a lehetetlent lehetségessé teszi.', author: 'Nelson Mandela' },
-  { text: 'Tervezz úgy, mintha örökké élnél. Dolgozz úgy, mintha holnap meghalnál.', author: 'Andy Warhol' },
-  { text: 'A kreativitás intelligencia, ami jól szórakozik.', author: 'Albert Einstein' },
-  { text: 'Nem az számít, milyen lassan haladsz, amíg meg nem állsz.', author: 'Confucius' },
-  { text: 'A pénz nem boldogít, de a nyugalom, amit ad, felbecsülhetetlen.', author: 'Ismeretlen' },
-  { text: 'A fegyelem híd a célok és a megvalósítás között.', author: 'Jim Rohn' },
-  { text: 'Az egyetlen korlát az, amit magadnak állítasz.', author: 'Ismeretlen' },
-];
 
 export default function Finances() {
   const { user } = useAuth();
   const tc = useThemedColor();
-  const hasInvoicing = user?.invoice_platform && user.invoice_platform !== 'none';
   const isBusiness = user?.is_business !== 0;
+  // Számlázás csak vállalkozói módban és csak ha be van állítva platform.
+  const hasInvoicing = isBusiness && !!user?.invoice_platform && user.invoice_platform !== 'none';
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -62,6 +50,9 @@ export default function Finances() {
   const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'paid' | 'overdue'>('all');
   const [clientFilter, setClientFilter] = useState('');
   const [dateRange, setDateRange] = useState<'all' | '30' | '90' | '365'>('all');
+  const [invoicePage, setInvoicePage] = useState(1);
+  const INVOICES_PER_PAGE = 10;
+  const [revenuePeriod, setRevenuePeriod] = useState<7 | 30 | 365>(30);
   const [showExpectedTooltip, setShowExpectedTooltip] = useState(false);
   const expectedCardRef = useRef<HTMLDivElement>(null);
   const [tooltipPos, setTooltipPos] = useState<{ top: number; left: number } | null>(null);
@@ -119,7 +110,24 @@ export default function Finances() {
   }
 
   async function handleMarkPaid(id: string) {
+    // Update local DB first
     await window.electronAPI.updateInvoice(id, { status: 'paid' });
+    // If the invoice has a provider + provider_invoice_id, also sync to billing provider
+    const invoice = invoices.find(i => i.id === id);
+    if (invoice?.provider && invoice.provider_invoice_id) {
+      try {
+        const res = await window.electronAPI.billingMarkInvoicePaid(
+          invoice.provider_invoice_id,
+          invoice.provider,
+          invoice.amount,
+        );
+        if (!res.success) {
+          console.error('[Finances] Failed to mark invoice paid on provider:', res.error);
+        }
+      } catch (err) {
+        console.error('[Finances] Provider mark-paid sync error:', err);
+      }
+    }
     loadData();
   }
 
@@ -190,13 +198,33 @@ export default function Finances() {
     return { current, prev, pct };
   }, [financeStats, enhanced]);
 
-  // Daily motivational quote (rotates each day)
-  const dailyQuote = useMemo(() => {
+  // Period revenue stat (last 7 / 30 / 365 days vs previous same-length window)
+  // Pénzforgalmi szemlélet: paid_date + paid_amount_huf (beérkezéskori árfolyam).
+  // Fallback régi rekordokra: issue_date + amount_huf.
+  const periodRevenueStat = useMemo(() => {
     const now = new Date();
-    const start = new Date(now.getFullYear(), 0, 0);
-    const dayOfYear = Math.floor((now.getTime() - start.getTime()) / 86_400_000);
-    return MOTIVATIONAL_QUOTES[dayOfYear % MOTIVATIONAL_QUOTES.length];
-  }, []);
+    const msPerDay = 86_400_000;
+    const paidInvoices = invoices.filter(i => i.status === 'paid');
+    const currentStart = new Date(now.getTime() - revenuePeriod * msPerDay);
+    const previousStart = new Date(now.getTime() - 2 * revenuePeriod * msPerDay);
+    const dateOf = (i: Invoice) => i.paid_date || i.issue_date;
+    const hufOf = (i: Invoice) => i.paid_amount_huf ?? i.amount_huf ?? i.amount;
+    const current = paidInvoices
+      .filter(i => dateOf(i) && new Date(dateOf(i) as string) >= currentStart)
+      .reduce((sum, i) => sum + hufOf(i), 0);
+    const previous = paidInvoices
+      .filter(i => {
+        const d = dateOf(i);
+        if (!d) return false;
+        const dt = new Date(d);
+        return dt >= previousStart && dt < currentStart;
+      })
+      .reduce((sum, i) => sum + hufOf(i), 0);
+    const pct = previous > 0
+      ? Math.round(((current - previous) / previous) * 100)
+      : current > 0 ? 100 : null;
+    return { current, previous, pct };
+  }, [invoices, revenuePeriod]);
 
   // Yearly cumulative trend for sparkline
   const cumulativeTrend = useMemo(() => {
@@ -216,26 +244,11 @@ export default function Finances() {
     );
   }
 
-  if (!isBusiness) {
-    return (
-      <div className="max-w-7xl mx-auto">
-        <PageHeader title="Pénzügyek" subtitle="Magánszemély mód – a számlázás és adózás ki van kapcsolva" />
-        <div className="mt-8 bg-surface-800/50 border border-dashed border-teal/20 rounded-xl p-8 text-center">
-          <Coins width={32} height={32} className="mx-auto mb-3 text-teal" />
-          <h2 className="font-pixel text-[15px] text-cream mb-2">Pénzügyi modul kikapcsolva</h2>
-          <p className="text-sm text-steel max-w-md mx-auto">
-            Magánszemélyként regisztráltál. Ha vállalkozóvá válsz, kapcsold be a vállalkozói módot a Beállítások → Fiók menüpontban, és utána elérhetővé válik a számlázás és az adózás is.
-          </p>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="max-w-7xl mx-auto space-y-8">
       <PageHeader
         title="Pénzügyek"
-        subtitle={hasInvoicing ? 'Cash flow és számlakezelés' : 'Bevételi nyilvántartás'}
+        subtitle={!isBusiness ? 'Bevételi és kiadási nyilvántartás' : (hasInvoicing ? 'Cash flow és számlakezelés' : 'Bevételi nyilvántartás')}
         actions={(
           <>
             <button
@@ -243,7 +256,7 @@ export default function Finances() {
               className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium cursor-pointer transition-colors duration-150 ease-out bg-steel/20 text-cream hover:bg-steel/30"
             >
               <Plus width={16} height={16} />
-              Bevétel
+              Egyéb bevétel
             </button>
             {hasInvoicing && (
               <button
@@ -266,17 +279,37 @@ export default function Finances() {
         <div className="absolute -top-20 -right-20 w-72 h-72 bg-teal/5 rounded-full blur-3xl pointer-events-none" />
         <div className="relative flex items-start justify-between">
           <div className="flex-1 min-w-0">
-            <p className="text-xs text-steel tracking-[0.15em] font-medium mb-1">
-              {enhanced?.vatStatus === 'standard' ? 'NETTÓ ÁRBEVÉTEL' : 'ÉVES ÁRBEVÉTEL'} • {new Date().getFullYear()}
-            </p>
+            <div className="flex items-center gap-3 mb-1">
+              <p className="text-xs text-steel tracking-[0.15em] font-medium">
+                {revenuePeriod === 365
+                  ? (enhanced?.vatStatus === 'standard' ? 'NETTÓ ÁRBEVÉTEL' : 'ÉVES ÁRBEVÉTEL') + ' • ' + new Date().getFullYear()
+                  : revenuePeriod === 30 ? 'ÁRBEVÉTEL • ELMÚLT 30 NAP'
+                  : 'ÁRBEVÉTEL • ELMÚLT 7 NAP'}
+              </p>
+              <div className="flex items-center gap-0.5 bg-surface-900/40 rounded-lg p-0.5">
+                {([7, 30, 365] as const).map(p => (
+                  <button
+                    key={p}
+                    onClick={() => setRevenuePeriod(p)}
+                    className={`px-2.5 py-1 rounded-md text-[10px] font-medium cursor-pointer transition-colors duration-150 ease-out ${
+                      revenuePeriod === p ? 'bg-teal/20 text-teal' : 'text-steel/50 hover:text-steel'
+                    }`}
+                  >
+                    {p === 7 ? 'Heti' : p === 30 ? 'Havi' : 'Éves'}
+                  </button>
+                ))}
+              </div>
+            </div>
             <p className="text-5xl font-bold text-cream tracking-tight">
-              {formatCurrency(
-                enhanced?.vatStatus === 'standard'
-                  ? (enhanced?.yearlyNetRevenue ?? enhanced?.yearlyRevenue ?? 0)
-                  : (enhanced?.yearlyRevenue ?? 0)
-              )}
+              {revenuePeriod === 365
+                ? formatCurrency(
+                    enhanced?.vatStatus === 'standard'
+                      ? (enhanced?.yearlyNetRevenue ?? enhanced?.yearlyRevenue ?? 0)
+                      : (enhanced?.yearlyRevenue ?? 0)
+                  )
+                : formatCurrency(periodRevenueStat.current)}
             </p>
-            {enhanced && (
+            {revenuePeriod === 365 && enhanced ? (
               <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-1.5 text-xs">
                 {enhanced.vatStatus === 'standard' && (
                   <span className="text-steel/60">
@@ -309,11 +342,29 @@ export default function Finances() {
                   </span>
                 )}
               </div>
-            )}
+            ) : revenuePeriod !== 365 ? (
+              <div className="mt-3 flex items-center gap-4 text-xs">
+                <span className="text-steel/60">
+                  Előző {revenuePeriod === 7 ? '7 nap' : 'hónap'}: <span className="text-steel">{formatCurrency(periodRevenueStat.previous)}</span>
+                </span>
+                {periodRevenueStat.pct !== null && periodRevenueStat.previous > 0 && (
+                  <span className={`font-medium px-2 py-0.5 rounded flex items-center gap-0.5 ${
+                    periodRevenueStat.pct > 0 ? 'bg-emerald-500/10 text-emerald-400' :
+                    periodRevenueStat.pct < 0 ? 'bg-red-500/10 text-red-400' :
+                    'bg-steel/10 text-steel'
+                  }`}>
+                    {periodRevenueStat.pct > 0 ? <ArrowUpRight width={12} height={12} /> :
+                     periodRevenueStat.pct < 0 ? <ArrowDownRight width={12} height={12} /> :
+                     <Minus width={12} height={12} />}
+                    {periodRevenueStat.pct > 0 ? '+' : ''}{periodRevenueStat.pct}%
+                  </span>
+                )}
+              </div>
+            ) : null}
           </div>
 
-          {/* Cumulative sparkline */}
-          {cumulativeTrend && cumulativeTrend.length >= 2 && (
+          {/* Cumulative sparkline — only on yearly view */}
+          {revenuePeriod === 365 && cumulativeTrend && cumulativeTrend.length >= 2 && (
             <div className="w-72 h-28 flex-shrink-0 ml-6">
               <svg viewBox="0 0 280 100" className="w-full h-full">
                 {/* Area fill */}
@@ -374,92 +425,79 @@ export default function Finances() {
       </div>
 
       {/* ══════════════════════════════════════════════════════════
-          ADÓZÁS — ÁFA státusz + becsült adók
+          ADÓZÁS — ÁFA státusz + becsült adók (csak vállalkozói módban)
          ══════════════════════════════════════════════════════════ */}
-      <TaxSection
-        yearlyRevenue={enhanced?.yearlyRevenue ?? 0}
-        yearlyNetRevenue={enhanced?.yearlyNetRevenue}
-        vatPayable={enhanced?.vatPayable}
-        vatDeductible={enhanced?.vatDeductible}
-        vatBalance={enhanced?.vatBalance}
-        vatStatus={enhanced?.vatStatus}
-        onVatChanged={loadData}
-      />
-
+      {isBusiness && (
+        <TaxSection
+          yearlyRevenue={enhanced?.yearlyRevenue ?? 0}
+          yearlyNetRevenue={enhanced?.yearlyNetRevenue}
+          vatPayable={enhanced?.vatPayable}
+          vatDeductible={enhanced?.vatDeductible}
+          vatBalance={enhanced?.vatBalance}
+          vatStatus={enhanced?.vatStatus}
+          onVatChanged={loadData}
+        />
+      )}
       {/* ══════════════════════════════════════════════════════════
-          ROW 2 — Monthly comparison · Várható/Függő · Mutatók
+          ROW 2 — Havi bevétel · Várható · Függő
          ══════════════════════════════════════════════════════════ */}
       <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
-        {/* Monthly revenue — left 5 cols */}
-        <div className="md:col-span-5 bg-surface-800/50 rounded-xl border-l-[3px] border-teal p-5 flex flex-col justify-center">
-          <p className="text-xs text-steel tracking-[0.1em] mb-3">HAVI BEVÉTEL</p>
-          <div className="flex items-end gap-3">
-            <p className="text-3xl font-extrabold text-cream">{formatCurrency(financeStats?.paidThisMonth ?? 0)}</p>
-            {monthlyDelta && monthlyDelta.prev > 0 && (
-              <span className={`text-sm font-medium px-2 py-0.5 rounded flex items-center gap-0.5 mb-1 ${
-                monthlyDelta.pct > 0 ? 'bg-emerald-500/10 text-emerald-400' :
-                monthlyDelta.pct < 0 ? 'bg-red-500/10 text-red-400' :
-                'bg-steel/10 text-steel'
-              }`}>
-                {monthlyDelta.pct > 0 ? <ArrowUpRight width={14} height={14} /> :
-                 monthlyDelta.pct < 0 ? <ArrowDownRight width={14} height={14} /> :
-                 <Minus width={14} height={14} />}
-                {monthlyDelta.pct > 0 ? '+' : ''}{monthlyDelta.pct}%
-              </span>
-            )}
+
+        {/* Havi bevétel — left 6 cols */}
+        <div className="md:col-span-6 bg-surface-800/50 rounded-xl border-l-[3px] border-teal p-6 flex flex-col gap-4">
+          <div>
+            <p className="text-[10px] text-steel/60 tracking-[0.15em] uppercase mb-3">Havi bevétel</p>
+            <div className="flex items-end gap-3">
+              <p className="text-4xl font-bold text-cream tracking-tight">{formatCurrency(financeStats?.paidThisMonth ?? 0)}</p>
+              {monthlyDelta && monthlyDelta.prev > 0 && (
+                <span className={`text-xs font-medium px-2 py-1 rounded-lg flex items-center gap-0.5 mb-1 ${
+                  monthlyDelta.pct > 0 ? 'bg-emerald-500/10 text-emerald-400' :
+                  monthlyDelta.pct < 0 ? 'bg-red-500/10 text-red-400' :
+                  'bg-steel/10 text-steel'
+                }`}>
+                  {monthlyDelta.pct > 0 ? <ArrowUpRight width={12} height={12} /> :
+                   monthlyDelta.pct < 0 ? <ArrowDownRight width={12} height={12} /> :
+                   <Minus width={12} height={12} />}
+                  {monthlyDelta.pct > 0 ? '+' : ''}{monthlyDelta.pct}%
+                </span>
+              )}
+            </div>
           </div>
-          <p className="text-sm text-steel/40 mt-2">
-            Előző hónap: {formatCurrency(enhanced?.paidLastMonth ?? 0)}
-          </p>
-          <div className="mt-3 pt-3 border-t border-teal/10 flex items-start gap-2">
-            <Quote width={13} height={13} className="text-teal/30 shrink-0 mt-0.5" />
-            <p className="text-xs text-steel/40 italic leading-relaxed">
-              {dailyQuote.text} <span className="text-steel/25 not-italic">— {dailyQuote.author}</span>
-            </p>
+          <div className="mt-auto pt-4 border-t border-teal/8 grid grid-cols-2 gap-4">
+            <div>
+              <p className="text-[10px] text-steel/40 tracking-wider uppercase mb-1">Előző hónap</p>
+              <p className="text-sm font-medium text-steel">{formatCurrency(enhanced?.paidLastMonth ?? 0)}</p>
+            </div>
+            <div>
+              <p className="text-[10px] text-steel/40 tracking-wider uppercase mb-1">Átl. óradíj</p>
+              <p className="text-sm font-medium text-steel">{formatCurrency(financeStats?.avgHourlyRate ?? 0)}<span className="text-steel/40">/óra</span></p>
+            </div>
           </div>
         </div>
 
-        {/* Várható + Függő stacked — middle 3 cols */}
-        <div className="md:col-span-3 flex flex-col gap-4">
-          <div
-            ref={expectedCardRef}
-            className="bg-surface-800/50 rounded-xl border border-teal/10 p-4 flex-1 cursor-default"
-            onMouseEnter={() => handleExpectedHover(true)}
-            onMouseLeave={() => handleExpectedHover(false)}
-          >
-            <div className="flex items-center gap-2 mb-2">
-              <TrendingUp width={14} height={14} className="text-teal" />
-              <span className="text-xs text-steel tracking-[0.1em]">VÁRHATÓ</span>
-            </div>
-            <p className="text-xl font-bold text-cream">{formatCurrency(financeStats?.expectedRevenue ?? 0)}</p>
+        {/* Várható — middle 3 cols */}
+        <div
+          ref={expectedCardRef}
+          className="md:col-span-3 bg-surface-800/50 rounded-xl border-l-[3px] border-teal/40 p-6 flex flex-col gap-3 cursor-default"
+          onMouseEnter={() => handleExpectedHover(true)}
+          onMouseLeave={() => handleExpectedHover(false)}
+        >
+          <div className="flex items-center gap-2">
+            <TrendingUp width={13} height={13} className="text-teal/70" />
+            <p className="text-[10px] text-steel/60 tracking-[0.15em] uppercase">Várható</p>
           </div>
-          <div className="bg-surface-800/50 rounded-xl border border-teal/10 p-4 flex-1">
-            <div className="flex items-center gap-2 mb-2">
-              <Clock width={14} height={14} className="text-amber-400" />
-              <span className="text-xs text-steel tracking-[0.1em]">FÜGGŐ</span>
-            </div>
-            <p className="text-xl font-bold text-amber-400">{formatCurrency(financeStats?.pendingTotal ?? 0)}</p>
-          </div>
+          <p className="text-3xl font-bold text-cream tracking-tight">{formatCurrency(financeStats?.expectedRevenue ?? 0)}</p>
+          <p className="text-xs text-steel/40 mt-auto">Folyamatban lévő projektek becsült bevétele</p>
         </div>
 
-        {/* Mutatók — right 4 cols */}
-        <div className="md:col-span-4 bg-surface-800/50 rounded-xl border border-teal/10 p-5 flex flex-col justify-between">
-          <p className="text-xs text-steel tracking-[0.1em]">MUTATÓK</p>
-          <div className="border-b border-teal/10 mt-2 mb-4" />
-          <div className="space-y-4 flex-1 flex flex-col justify-center">
-            <div className="flex items-center justify-between">
-              <span className="text-[15px] text-steel/60 flex items-center gap-2"><Zap width={15} height={15} className="text-amber-400" /> Átl. fizetési idő</span>
-              <span className="text-[15px] font-bold text-cream">{enhanced?.avgPaymentDays ?? 0} nap</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-[15px] text-steel/60 flex items-center gap-2"><CreditCard width={15} height={15} className="text-rose-400" /> Havi kiadás</span>
-              <span className="text-[15px] font-bold text-cream">{formatCurrency(enhanced?.monthlyExpenses ?? 0)}</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-[15px] text-steel/60 flex items-center gap-2"><DollarSign width={15} height={15} className="text-emerald-400" /> Átl. óradíj</span>
-              <span className="text-[15px] font-bold text-cream">{formatCurrency(financeStats?.avgHourlyRate ?? 0)}/óra</span>
-            </div>
+        {/* Függő — right 3 cols */}
+        <div className="md:col-span-3 bg-surface-800/50 rounded-xl border-l-[3px] border-amber-400/50 p-6 flex flex-col gap-3">
+          <div className="flex items-center gap-2">
+            <Clock width={13} height={13} className="text-amber-400/70" />
+            <p className="text-[10px] text-steel/60 tracking-[0.15em] uppercase">Függő</p>
           </div>
+          <p className="text-3xl font-bold text-amber-400 tracking-tight">{formatCurrency(financeStats?.pendingTotal ?? 0)}</p>
+          <p className="text-xs text-steel/40 mt-auto">Kiállított, de még ki nem fizetett számlák</p>
         </div>
       </div>
 
@@ -482,15 +520,8 @@ export default function Finances() {
               <Plus width={13} height={13} /> Hozzáadás
             </button>
           </div>
-          {expenses.length === 0 ? (
-            <div className="flex-1 flex flex-col items-center justify-center py-8">
-              <CreditCard width={28} height={28} className="text-steel/20 mb-2" />
-              <p className="text-xs text-steel/40 italic">Még nincsenek kiadások rögzítve.</p>
-              <p className="text-[10px] text-steel/25 mt-1">Kattints a &quot;Hozzáadás&quot; gombra az első kiadás rögzítéséhez.</p>
-            </div>
-          ) : (
-            <div className="space-y-1.5 overflow-auto flex-1">
-              {expenses.map(exp => {
+          <div className="overflow-auto flex-1 space-y-1.5">
+            {expenses.map(exp => {
                 const catMeta = CATEGORY_META[exp.category] || CATEGORY_META.other;
                 const CatIcon = catMeta.icon;
                 const freqLabel = exp.frequency === 'monthly' ? 'havi' : exp.frequency === 'yearly' ? 'éves' : 'egyszeri';
@@ -560,9 +591,43 @@ export default function Finances() {
                 );
               })}
             </div>
+          {/* Team cost items (contractor/freelancer fees) */}
+          {enhanced?.teamCostItems && enhanced.teamCostItems.length > 0 && (
+            <div className={expenses.length > 0 ? 'mt-3 pt-3 border-t border-teal/8 space-y-1.5' : 'space-y-1.5'}>
+              {enhanced.teamCostItems.map(item => (
+                <div key={item.id} className="flex items-center gap-3 p-3 bg-surface-900/30 rounded-lg">
+                  <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 bg-indigo-500/10">
+                    <Users width={14} height={14} className="text-indigo-400" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <p className="text-sm text-cream truncate font-medium">{item.member_name}</p>
+                      <span className="text-[9px] px-1.5 py-0.5 rounded font-medium shrink-0 text-indigo-400 bg-indigo-500/10">
+                        {item.employment_type === 'contractor' ? 'Alvállalkozó' : 'Megbízott'}
+                      </span>
+                    </div>
+                    <p className="text-[10px] text-steel/50 mt-0.5">{item.project_name}</p>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <span className="text-sm font-bold text-cream block">{formatCurrency(item.fee_huf ?? item.fee, item.fee_huf ? 'HUF' : item.fee_currency)}</span>
+                    <span className="text-[10px] text-steel/40">egyszeri</span>
+                  </div>
+                </div>
+              ))}
+            </div>
           )}
+
+          {/* Empty state */}
+          {expenses.length === 0 && (!enhanced?.teamCostItems || enhanced.teamCostItems.length === 0) && (
+            <div className="flex-1 flex flex-col items-center justify-center py-8">
+              <CreditCard width={28} height={28} className="text-steel/20 mb-2" />
+              <p className="text-xs text-steel/40 italic">Még nincsenek kiadások rögzítve.</p>
+              <p className="text-[10px] text-steel/25 mt-1">Kattints a &quot;Hozzáadás&quot; gombra az első kiadás rögzítéséhez.</p>
+            </div>
+          )}
+
           {/* Summary footer */}
-          {expenses.length > 0 && enhanced && enhanced.monthlyExpenses > 0 && (
+          {enhanced && enhanced.yearlyExpenses > 0 && (
             <div className="flex items-center justify-between pt-3 mt-3 border-t border-teal/8">
               <span className="text-[10px] text-steel/40">Összesítés</span>
               <div className="flex items-center gap-4">
@@ -954,7 +1019,7 @@ export default function Finances() {
           <div className="flex items-center gap-2">
             <select
               value={statusFilter}
-              onChange={e => setStatusFilter(e.target.value as typeof statusFilter)}
+              onChange={e => { setStatusFilter(e.target.value as typeof statusFilter); setInvoicePage(1); }}
               className="text-xs px-2 py-1 bg-surface-900 border border-teal/10 rounded-md text-steel focus:outline-none focus:ring-1 focus:ring-teal/30"
             >
               <option value="all">Mind</option>
@@ -964,7 +1029,7 @@ export default function Finances() {
             </select>
             <select
               value={clientFilter}
-              onChange={e => setClientFilter(e.target.value)}
+              onChange={e => { setClientFilter(e.target.value); setInvoicePage(1); }}
               className="text-xs px-2 py-1 bg-surface-900 border border-teal/10 rounded-md text-steel focus:outline-none focus:ring-1 focus:ring-teal/30"
             >
               <option value="">Minden ügyfél</option>
@@ -972,7 +1037,7 @@ export default function Finances() {
             </select>
             <select
               value={dateRange}
-              onChange={e => setDateRange(e.target.value as typeof dateRange)}
+              onChange={e => { setDateRange(e.target.value as typeof dateRange); setInvoicePage(1); }}
               className="text-xs px-2 py-1 bg-surface-900 border border-teal/10 rounded-md text-steel focus:outline-none focus:ring-1 focus:ring-teal/30"
             >
               <option value="all">Minden idő</option>
@@ -985,7 +1050,7 @@ export default function Finances() {
         {filteredInvoices.length === 0 ? (
           <p className="text-sm text-steel/60 italic text-center py-8">
             {invoices.length === 0
-              ? (hasInvoicing ? 'Még nincsenek számlák. Használd a "Számla beolvasása" gombot!' : 'Még nincsenek bevételek. Rögzíts egyet a "Bevétel rögzítése" gombbal!')
+              ? (hasInvoicing ? 'Még nincsenek számlák. Használd a "Számla beolvasása" gombot!' : 'Még nincsenek bevételek. Rögzíts egyet az "Egyéb bevétel" gombbal!')
               : (hasInvoicing ? 'Nincs a szűrésnek megfelelő számla.' : 'Nincs a szűrésnek megfelelő bevétel.')
             }
           </p>
@@ -1004,7 +1069,7 @@ export default function Finances() {
                 </tr>
               </thead>
               <tbody>
-                {filteredInvoices.map(invoice => (
+                {filteredInvoices.slice((invoicePage - 1) * INVOICES_PER_PAGE, invoicePage * INVOICES_PER_PAGE).map(invoice => (
                   <tr key={invoice.id} className="border-b border-teal/5 hover:bg-teal/5 transition-colors duration-150 ease-out">
                     <td className="py-2.5 px-3 font-medium text-cream">
                       {invoice.invoice_number || <span className="text-steel/30 italic text-xs">Automatikus</span>}
@@ -1070,6 +1135,73 @@ export default function Finances() {
             </table>
           </div>
         )}
+
+        {/* Pagination */}
+        {filteredInvoices.length > INVOICES_PER_PAGE && (() => {
+          const totalPages = Math.ceil(filteredInvoices.length / INVOICES_PER_PAGE);
+          return (
+            <div className="flex items-center justify-between pt-4 mt-2 border-t border-teal/5">
+              <span className="text-xs text-steel/60">
+                {(invoicePage - 1) * INVOICES_PER_PAGE + 1}–{Math.min(invoicePage * INVOICES_PER_PAGE, filteredInvoices.length)} / {filteredInvoices.length}
+              </span>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => setInvoicePage(1)}
+                  disabled={invoicePage === 1}
+                  className="px-2 py-1 text-xs text-steel/60 hover:text-cream disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                >
+                  «
+                </button>
+                <button
+                  onClick={() => setInvoicePage(p => p - 1)}
+                  disabled={invoicePage === 1}
+                  className="px-2.5 py-1 text-xs text-steel/60 hover:text-cream disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                >
+                  ‹
+                </button>
+                {Array.from({ length: totalPages }, (_, i) => i + 1)
+                  .filter(p => p === 1 || p === totalPages || Math.abs(p - invoicePage) <= 1)
+                  .reduce<(number | '...')[]>((acc, p, idx, arr) => {
+                    if (idx > 0 && typeof arr[idx - 1] === 'number' && (p as number) - (arr[idx - 1] as number) > 1) acc.push('...');
+                    acc.push(p);
+                    return acc;
+                  }, [])
+                  .map((p, i) =>
+                    p === '...' ? (
+                      <span key={`ellipsis-${i}`} className="px-1.5 text-xs text-steel/40">…</span>
+                    ) : (
+                      <button
+                        key={p}
+                        onClick={() => setInvoicePage(p as number)}
+                        className={`min-w-[28px] px-2 py-1 text-xs rounded transition-colors ${
+                          invoicePage === p
+                            ? 'bg-teal/20 text-cream font-medium'
+                            : 'text-steel/60 hover:text-cream hover:bg-teal/10'
+                        }`}
+                      >
+                        {p}
+                      </button>
+                    )
+                  )
+                }
+                <button
+                  onClick={() => setInvoicePage(p => p + 1)}
+                  disabled={invoicePage === totalPages}
+                  className="px-2.5 py-1 text-xs text-steel/60 hover:text-cream disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                >
+                  ›
+                </button>
+                <button
+                  onClick={() => setInvoicePage(totalPages)}
+                  disabled={invoicePage === totalPages}
+                  className="px-2 py-1 text-xs text-steel/60 hover:text-cream disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                >
+                  »
+                </button>
+              </div>
+            </div>
+          );
+        })()}
       </div>
 
       {/* ── Modals ── */}

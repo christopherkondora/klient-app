@@ -171,13 +171,18 @@ export default function Calendar() {
     });
   }, [events, clientFilter, showCompleted, allProjects]);
 
-  // Check for overlapping events on a given date
-  function getOverlaps(date: string, startTime: string, endTime: string, excludeId?: string) {
+  // Check for overlapping events on a given date.
+  // In team mode, events for outsourced projects (those with team member assignments)
+  // are excluded — they're not done by the user, so they can't conflict with their schedule.
+  function getOverlaps(date: string, startTime: string, endTime: string, excludeId?: string, projectId?: string | null) {
+    // If the event being checked is itself for an outsourced project, never flag a conflict.
+    if (teamMode && projectId && projectAssignments.has(projectId)) return [];
     return filteredEvents.filter(e =>
       e.date === date &&
       e.start_time && e.end_time &&
       e.id !== excludeId &&
       e.type === 'work' &&
+      !(teamMode && e.project_id && projectAssignments.has(e.project_id)) &&
       timesOverlap(startTime, endTime, e.start_time, e.end_time)
     );
   }
@@ -924,7 +929,7 @@ function EventFormModal({ projects, allEvents, selectedDate, editingEvent, onSub
   editingEvent: CalendarEvent | null;
   onSubmit: (data: Partial<CalendarEvent>) => void;
   onClose: () => void;
-  getOverlaps: (date: string, start: string, end: string, excludeId?: string) => CalendarEvent[];
+  getOverlaps: (date: string, start: string, end: string, excludeId?: string, projectId?: string | null) => CalendarEvent[];
 }) {
   const [title, setTitle] = useState(editingEvent?.title || '');
   const tc = useThemedColor();
@@ -967,22 +972,28 @@ function EventFormModal({ projects, allEvents, selectedDate, editingEvent, onSub
     setEndTime(newEnd);
   }
 
-  const overlaps = getOverlaps(date, startTime, endTime, editingEvent?.id);
+  const overlaps = getOverlaps(date, startTime, endTime, editingEvent?.id, projectId || null);
   const dayEvents = allEvents.filter(e => e.date === date).sort((a, b) => (a.start_time || '').localeCompare(b.start_time || ''));
 
-  const inputClass = "w-full px-3 py-2 bg-surface-900 border border-teal/10 rounded-lg text-sm text-cream focus:outline-none focus:ring-2 focus:ring-teal/30";
+  const inputClass = "w-full px-2.5 py-2 bg-surface-900/40 border border-teal/8 rounded-lg text-sm text-cream focus:outline-none focus:border-teal/25 placeholder:text-steel/40 transition-colors";
+  const labelClass = "text-[10px] text-steel tracking-wider uppercase mb-1 block";
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onDoubleClick={onClose}>
-      <div className="bg-surface-800 rounded-xl border border-teal/15 p-6 w-full max-w-lg shadow-2xl max-h-[90vh] overflow-auto" onDoubleClick={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between mb-5">
-          <h2 className="font-pixel text-[14px] text-cream">
-            {editingEvent ? 'Bejegyzés szerkesztése' : 'Új naptárbejegyzés'}
-          </h2>
-          <button onClick={onClose} className="p-1 rounded hover:bg-teal/10 text-steel hover:text-cream">
-            <X width={14} height={14} />
-          </button>
-        </div>
+      <div className="bg-surface-800 rounded-2xl ring-1 ring-inset ring-teal/15 w-full max-w-lg shadow-2xl max-h-[90vh] overflow-hidden flex flex-col" onDoubleClick={e => e.stopPropagation()}>
+
+        {/* Header accent */}
+        <div className="h-1 bg-teal shrink-0" />
+
+        <div className="p-5 overflow-auto">
+          <div className="flex items-center justify-between mb-5">
+            <h2 className="font-pixel text-[14px] text-cream">
+              {editingEvent ? 'Bejegyzés szerkesztése' : 'Új naptárbejegyzés'}
+            </h2>
+            <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-teal/10 text-steel hover:text-cream cursor-pointer transition-colors duration-150 ease-out">
+              <X width={14} height={14} />
+            </button>
+          </div>
 
         {/* Day preview - show existing events for selected date */}
         {dayEvents.length > 0 && (
@@ -1036,7 +1047,7 @@ function EventFormModal({ projects, allEvents, selectedDate, editingEvent, onSub
           className="space-y-4"
         >
           <div>
-            <label className="block text-xs font-medium text-steel mb-1">Projekt (opcionális)</label>
+            <label className={labelClass}>Projekt (opcionális)</label>
             <select value={projectId} onChange={e => setProjectId(e.target.value)} className={inputClass}>
               <option value="">Nincs projekt</option>
               {projects.map(p => (
@@ -1047,25 +1058,25 @@ function EventFormModal({ projects, allEvents, selectedDate, editingEvent, onSub
             </select>
           </div>
           <div>
-            <label className="block text-xs font-medium text-steel mb-1">Cím *</label>
+            <label className={labelClass}>Cím *</label>
             <input type="text" value={title} onChange={e => setTitle(e.target.value)} className={inputClass} placeholder="Bejegyzés címe" required />
           </div>
           <div className="grid grid-cols-3 gap-3">
             <div>
-              <label className="block text-xs font-medium text-steel mb-1">Dátum</label>
+              <label className={labelClass}>Dátum</label>
               <DatePicker value={date} onChange={setDate} />
             </div>
             <div>
-              <label className="block text-xs font-medium text-steel mb-1">Kezdés</label>
+              <label className={labelClass}>Kezdés</label>
               <TimePicker value={startTime} onChange={handleStartTimeChange} />
             </div>
             <div>
-              <label className="block text-xs font-medium text-steel mb-1">Befejezés</label>
+              <label className={labelClass}>Befejezés</label>
               <TimePicker value={endTime} onChange={handleEndTimeChange} />
             </div>
           </div>
           <div>
-            <label className="block text-xs font-medium text-steel mb-1">Típus</label>
+            <label className={labelClass}>Típus</label>
             <select value={type} onChange={e => setType(e.target.value as typeof type)} className={inputClass}>
               <option value="work">Munka</option>
               <option value="meeting">Megbeszélés</option>
@@ -1075,15 +1086,15 @@ function EventFormModal({ projects, allEvents, selectedDate, editingEvent, onSub
             </select>
           </div>
           <div>
-            <label className="block text-xs font-medium text-steel mb-1">Leírás</label>
+            <label className={labelClass}>Leírás</label>
             <textarea value={description} onChange={e => setDescription(e.target.value)} className={`${inputClass} resize-none h-16`} placeholder="Részletek..." />
           </div>
           <div className="flex justify-end gap-2 pt-2">
-            <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-steel hover:bg-teal/10 rounded-lg">Mégse</button>
+            <button type="button" onClick={onClose} className="px-4 py-2 text-xs text-steel hover:text-cream transition-colors duration-150 ease-out cursor-pointer">Mégse</button>
             <button
               type="submit"
               disabled={overlaps.length > 0 && type === 'work'}
-              className={`px-4 py-2 text-sm rounded-lg ${
+              className={`px-5 py-2 text-xs rounded-lg font-medium transition-colors duration-150 ease-out cursor-pointer ${
                 overlaps.length > 0 && type === 'work'
                   ? 'bg-teal/20 text-steel/40 cursor-not-allowed'
                   : 'bg-teal text-cream hover:bg-teal/80'
@@ -1093,6 +1104,7 @@ function EventFormModal({ projects, allEvents, selectedDate, editingEvent, onSub
             </button>
           </div>
         </form>
+        </div>
       </div>
     </div>
   );

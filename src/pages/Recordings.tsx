@@ -1,12 +1,14 @@
 import { useEffect, useState, useRef } from 'react';
 import { Mic, Square, Play, Pause, Trash2, Clock } from 'lucide-react';
 import ConfirmDialog from '../components/ConfirmDialog';
+import { startAudioRecording, canCaptureSystemAudio, RecordingSession } from '../utils/recording';
 
 export default function Recordings() {
   const [recordings, setRecordings] = useState<Recording[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [isRecording, setIsRecording] = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
+  const [includeSystemAudio, setIncludeSystemAudio] = useState(false);
   const [playingId, setPlayingId] = useState<string | null>(null);
   const [showSaveForm, setShowSaveForm] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -17,6 +19,7 @@ export default function Recordings() {
   const timerRef = useRef<number>(0);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const recordedBlob = useRef<Blob | null>(null);
+  const recordingSession = useRef<RecordingSession | null>(null);
 
   useEffect(() => {
     loadData();
@@ -42,8 +45,9 @@ export default function Recordings() {
 
   async function startRecording() {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      mediaRecorder.current = new MediaRecorder(stream);
+      const session = await startAudioRecording({ includeSystemAudio });
+      recordingSession.current = session;
+      mediaRecorder.current = new MediaRecorder(session.stream);
       audioChunks.current = [];
 
       mediaRecorder.current.ondataavailable = (event) => {
@@ -52,7 +56,8 @@ export default function Recordings() {
 
       mediaRecorder.current.onstop = () => {
         recordedBlob.current = new Blob(audioChunks.current, { type: 'audio/webm' });
-        stream.getTracks().forEach(track => track.stop());
+        recordingSession.current?.stop();
+        recordingSession.current = null;
         setShowSaveForm(true);
       };
 
@@ -63,6 +68,10 @@ export default function Recordings() {
       timerRef.current = window.setInterval(() => {
         setRecordingTime(prev => prev + 1);
       }, 1000);
+
+      if (includeSystemAudio && !session.systemAudioActive) {
+        alert('A rendszerhang rögzítése nem sikerült — a felvétel csak mikrofonról készül. (Windows szükséges.)');
+      }
     } catch (err) {
       console.error('Failed to start recording:', err);
       alert('Nem sikerült elindítani a felvételt. Ellenőrizd a mikrofon engedélyeket.');
@@ -168,6 +177,17 @@ export default function Recordings() {
               >
                 <Mic size={16} /> Felvétel indítása
               </button>
+              {canCaptureSystemAudio() && (
+                <label className="flex items-center gap-2 text-xs text-surface-500 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={includeSystemAudio}
+                    onChange={(e) => setIncludeSystemAudio(e.target.checked)}
+                    className="accent-primary-600"
+                  />
+                  Rendszerhang is rögzítése <span className="text-surface-400">(pl. Google Meet, Teams)</span>
+                </label>
+              )}
             </>
           )}
         </div>
@@ -228,19 +248,22 @@ export default function Recordings() {
 
       {/* Save Recording Modal */}
       {showSaveForm && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-xl">
-            <h2 className="text-lg font-bold text-surface-900 mb-4">Felvétel mentése</h2>
-            <SaveRecordingForm
-              clients={clients}
-              duration={recordingTime}
-              onSave={saveRecording}
-              onCancel={() => {
-                setShowSaveForm(false);
-                recordedBlob.current = null;
-                setRecordingTime(0);
-              }}
-            />
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+          <div className="bg-surface-800 rounded-2xl ring-1 ring-inset ring-teal/15 w-full max-w-md shadow-2xl overflow-hidden">
+            <div className="h-1 bg-teal" />
+            <div className="p-5">
+              <h2 className="font-pixel text-[14px] text-cream mb-5">Felvétel mentése</h2>
+              <SaveRecordingForm
+                clients={clients}
+                duration={recordingTime}
+                onSave={saveRecording}
+                onCancel={() => {
+                  setShowSaveForm(false);
+                  recordedBlob.current = null;
+                  setRecordingTime(0);
+                }}
+              />
+            </div>
           </div>
         </div>
       )}
@@ -268,6 +291,8 @@ function SaveRecordingForm({ clients, duration, onSave, onCancel }: {
 }) {
   const [title, setTitle] = useState('');
   const [clientId, setClientId] = useState('');
+  const inputClass = "w-full px-2.5 py-2 bg-surface-900/40 border border-teal/8 rounded-lg text-sm text-cream focus:outline-none focus:border-teal/25 placeholder:text-steel/40 transition-colors";
+  const labelClass = "text-[10px] text-steel tracking-wider uppercase mb-1 block";
 
   return (
     <form
@@ -280,32 +305,32 @@ function SaveRecordingForm({ clients, duration, onSave, onCancel }: {
     >
       <p className="text-sm text-steel">Időtartam: {Math.floor(duration / 60)}:{String(duration % 60).padStart(2, '0')}</p>
       <div>
-        <label className="block text-xs font-medium text-steel mb-1">Cím *</label>
+        <label className={labelClass}>Cím *</label>
         <input
           type="text"
           value={title}
           onChange={e => setTitle(e.target.value)}
-          className="w-full px-3 py-2 bg-surface-900 border border-teal/10 rounded-lg text-sm text-cream focus:outline-none focus:ring-2 focus:ring-teal/30"
+          className={inputClass}
           placeholder="pl. Hívás - Ügyfél neve"
           required
         />
       </div>
       <div>
-        <label className="block text-xs font-medium text-steel mb-1">Ügyfél</label>
+        <label className={labelClass}>Ügyfél</label>
         <select
           value={clientId}
           onChange={e => setClientId(e.target.value)}
-          className="w-full px-3 py-2 bg-surface-900 border border-teal/10 rounded-lg text-sm text-cream focus:outline-none focus:ring-2 focus:ring-teal/30"
+          className={inputClass}
         >
           <option value="">Nincs ügyfél</option>
           {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
         </select>
       </div>
       <div className="flex justify-end gap-2 pt-2">
-        <button type="button" onClick={onCancel} className="px-4 py-2 text-sm text-steel hover:bg-teal/10 rounded-lg">
+        <button type="button" onClick={onCancel} className="px-4 py-2 text-xs text-steel hover:text-cream transition-colors duration-150 ease-out cursor-pointer">
           Elvetés
         </button>
-        <button type="submit" className="px-4 py-2 text-sm bg-teal text-cream rounded-lg hover:bg-teal/80">
+        <button type="submit" className="px-5 py-2 text-xs font-medium bg-teal text-cream rounded-lg hover:bg-teal/80 transition-colors duration-150 ease-out cursor-pointer">
           Mentés
         </button>
       </div>

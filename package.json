@@ -1,6 +1,6 @@
 {
   "name": "klient",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "Business management system for marketing agencies and freelancers",
   "main": "dist-electron/main.js",
   "scripts": {
@@ -13,6 +13,8 @@
     "build": "npm run build:react && npm run build:electron",
     "pack": "npm run build && electron-builder --dir",
     "dist": "npm run build && electron-builder",
+    "dist:mac": "npm run build && dotenv -- electron-builder --mac",
+    "dist:win": "npm run build && electron-builder --win",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage"
   },
@@ -55,6 +57,12 @@
     },
     "mac": {
       "icon": "assets/icon.icns",
+      "category": "public.app-category.business",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "notarize": false,
       "target": [
         {
           "target": "dmg",
@@ -64,6 +72,10 @@
         }
       ]
     },
+    "dmg": {
+      "sign": false
+    },
+    "afterSign": "scripts/notarize.js",
     "publish": {
       "provider": "github",
       "owner": "christopherkondora",
@@ -71,6 +83,7 @@
     }
   },
   "devDependencies": {
+    "@electron/notarize": "^3.1.1",
     "@tailwindcss/vite": "^4.2.1",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
@@ -80,6 +93,7 @@
     "@vitejs/plugin-react": "^5.1.4",
     "@vitest/coverage-v8": "^4.1.2",
     "concurrently": "^9.2.1",
+    "dotenv-cli": "^11.0.0",
     "electron": "^41.0.0",
     "electron-builder": "^26.8.1",
     "nodemon": "^3.1.14",

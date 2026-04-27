@@ -163,21 +163,27 @@ function ShortcutForm({ shortcut, onSubmit, onClose }: {
   const [url, setUrl] = useState(shortcut?.url || '');
   const [icon, setIcon] = useState(shortcut?.icon || '');
 
-  const inputClass = "w-full px-3 py-2 bg-surface-900 border border-teal/10 rounded-lg text-sm text-cream focus:outline-none focus:ring-2 focus:ring-teal/30";
+  const inputClass = "w-full px-2.5 py-2 bg-surface-900/40 border border-teal/8 rounded-lg text-sm text-cream focus:outline-none focus:border-teal/25 placeholder:text-steel/40 transition-colors";
+  const labelClass = "text-[10px] text-steel tracking-wider uppercase mb-1 block";
 
   const effectiveIcon = icon || (url ? guessIconFromUrl(url) : 'Globe');
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onClose}>
-      <div className="bg-surface-800 rounded-xl border border-teal/15 p-6 w-full max-w-md shadow-2xl" onClick={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between mb-5">
-          <h2 className="font-pixel text-[14px] text-cream">
-            {shortcut ? 'Gyorslink szerkesztése' : 'Új gyorslink'}
-          </h2>
-          <button onClick={onClose} className="p-1 rounded hover:bg-teal/10 text-steel hover:text-cream">
-            <X width={14} height={14} />
-          </button>
-        </div>
+      <div className="bg-surface-800 rounded-2xl ring-1 ring-inset ring-teal/15 w-full max-w-md shadow-2xl overflow-hidden" onClick={e => e.stopPropagation()}>
+
+        {/* Header accent */}
+        <div className="h-1 bg-teal" />
+
+        <div className="p-5">
+          <div className="flex items-center justify-between mb-5">
+            <h2 className="font-pixel text-[14px] text-cream">
+              {shortcut ? 'Gyorslink szerkesztése' : 'Új gyorslink'}
+            </h2>
+            <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-teal/10 text-steel hover:text-cream cursor-pointer transition-colors duration-150 ease-out">
+              <X width={14} height={14} />
+            </button>
+          </div>
         <form
           onSubmit={e => {
             e.preventDefault();
@@ -191,15 +197,15 @@ function ShortcutForm({ shortcut, onSubmit, onClose }: {
           className="space-y-4"
         >
           <div>
-            <label className="block text-xs font-medium text-steel mb-1">Név *</label>
+            <label className={labelClass}>Név *</label>
             <input type="text" value={name} onChange={e => setName(e.target.value)} className={inputClass} placeholder="pl. Google Analytics" required />
           </div>
           <div>
-            <label className="block text-xs font-medium text-steel mb-1">URL *</label>
+            <label className={labelClass}>URL *</label>
             <input type="text" value={url} onChange={e => setUrl(e.target.value)} className={inputClass} placeholder="https://analytics.google.com" required />
           </div>
           <div>
-            <label className="block text-xs font-medium text-steel mb-1.5">Ikon</label>
+            <label className={labelClass}>Ikon</label>
             <div className="grid grid-cols-7 gap-1.5">
               {Object.entries(SHORTCUT_ICONS).map(([key, { icon: IconComp, label }]) => (
                 <button
@@ -219,12 +225,13 @@ function ShortcutForm({ shortcut, onSubmit, onClose }: {
             </div>
           </div>
           <div className="flex justify-end gap-2 pt-2">
-            <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-steel hover:bg-teal/10 rounded-lg">Mégse</button>
-            <button type="submit" className="px-4 py-2 text-sm bg-teal text-cream rounded-lg hover:bg-teal/80">
+            <button type="button" onClick={onClose} className="px-4 py-2 text-xs text-steel hover:text-cream transition-colors duration-150 ease-out cursor-pointer">Mégse</button>
+            <button type="submit" className="px-5 py-2 text-xs font-medium bg-teal text-cream rounded-lg hover:bg-teal/80 transition-colors duration-150 ease-out cursor-pointer">
               {shortcut ? 'Mentés' : 'Létrehozás'}
             </button>
           </div>
         </form>
+        </div>
       </div>
     </div>
   );

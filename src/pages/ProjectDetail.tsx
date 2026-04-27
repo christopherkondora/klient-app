@@ -4,7 +4,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, Clock, Calendar, StickyNote, Receipt, FileText,
   Plus, Check, AlertTriangle, Trash2, Pencil, User, ArrowRight, FolderOpen, Settings2, X,
-  ChevronLeft, ChevronRight, Users, UserMinus, Ban, Landmark,
+  ChevronLeft, ChevronRight, Users, UserMinus, Ban, Landmark, Coins, Wallet,
 } from 'lucide-react';
 import { format, parseISO, startOfMonth, endOfMonth, startOfWeek, endOfWeek, addDays, addMonths, subMonths, isSameMonth, isSameDay } from 'date-fns';
 import { hu } from 'date-fns/locale';
@@ -22,7 +22,9 @@ export default function ProjectDetail() {
   const navigate = useNavigate();
   const { user } = useAuth();
   const tc = useThemedColor();
-  const hasInvoicing = user?.invoice_platform && user.invoice_platform !== 'none';
+  const isBusiness = user?.is_business !== 0;
+  // Számlázás csak vállalkozói módban és csak ha be van állítva platform.
+  const hasInvoicing = isBusiness && !!user?.invoice_platform && user.invoice_platform !== 'none';
   const teamMode = user?.team_mode === 1;
   const [project, setProject] = useState<Project | null>(null);
   const [notes, setNotes] = useState<Note[]>([]);
@@ -217,6 +219,40 @@ export default function ProjectDetail() {
                     </button>
                   )
                 )}
+                {!!project.project_price && project.project_price > 0 && (
+                  invoices.some(i => i.status === 'paid') ? (
+                    <span className="flex items-center gap-1.5 px-3 py-1.5 border border-green-600/60 bg-green-600/10 text-green-400 rounded-lg text-xs font-medium">
+                      <Wallet width={13} height={13} /> Fizetve
+                    </span>
+                  ) : (
+                    <button
+                      onClick={async () => {
+                        try {
+                          const nextNumber = await window.electronAPI.getNextInvoiceNumber();
+                          await window.electronAPI.createInvoice({
+                            project_id: project.id,
+                            client_id: project.client_id || '',
+                            file_path: null,
+                            invoice_number: nextNumber,
+                            amount: project.project_price ?? 0,
+                            currency: project.project_price_currency || 'HUF',
+                            issue_date: new Date().toISOString().slice(0, 10),
+                            due_date: new Date().toISOString().slice(0, 10),
+                            status: 'paid',
+                            notes: null,
+                            type: 'manual',
+                          });
+                          loadData();
+                        } catch (err) {
+                          console.error('Failed to record payment:', err);
+                        }
+                      }}
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-steel/20 text-steel rounded-lg text-xs font-medium hover:bg-steel/30 hover:text-cream transition-colors"
+                    >
+                      <Wallet width={13} height={13} /> Fizetve
+                    </button>
+                  )
+                )}
                 <button
                   onClick={() => setShowCloseConfirm(true)}
                   className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 text-white rounded-lg text-xs font-medium hover:bg-green-700"
@@ -298,12 +334,11 @@ export default function ProjectDetail() {
               {project.deadline ? format(parseISO(project.deadline), 'yyyy. MM. dd.') : <span className="text-steel/40 font-normal italic">Nincs határidő</span>}
             </p>
           </div>
-          <div className="bg-teal/5 rounded-lg p-4">
-            <div className="flex items-center gap-2 text-steel text-xs mb-2">
-              <Calendar width={13} height={13} /> Naptárbejegyzések
-            </div>
-            <p className="text-sm font-bold text-cream">{calendarEvents.length} bejegyzés</p>
-          </div>
+          <ProjectPriceTile
+            project={project}
+            invoices={invoices}
+            onSaved={() => loadData()}
+          />
         </div>
       </div>
 
@@ -686,14 +721,17 @@ export default function ProjectDetail() {
       {/* Close Project Confirm */}
       {showCloseConfirm && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={() => setShowCloseConfirm(false)}>
-          <div className="bg-surface-800 rounded-xl border border-teal/15 p-6 w-full max-w-sm shadow-2xl" onClick={e => e.stopPropagation()}>
-            <h2 className="font-pixel text-[14px] text-cream mb-2">Projekt lezárása</h2>
-            <p className="text-sm text-steel mb-6">
-              Biztosan le szeretnéd zárni a projektet? A lezárt projekt a naptárban szürkén jelenik meg.
-            </p>
-            <div className="flex justify-end gap-2">
-              <button onClick={() => setShowCloseConfirm(false)} className="px-4 py-2 text-sm text-steel hover:bg-teal/10 rounded-lg">Mégse</button>
-              <button onClick={handleCloseProject} className="px-4 py-2 text-sm rounded-lg font-medium bg-green-600 text-white hover:bg-green-700">Lezárás</button>
+          <div className="bg-surface-800 rounded-2xl ring-1 ring-inset ring-teal/15 w-full max-w-sm shadow-2xl overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="h-1 bg-teal" />
+            <div className="p-5">
+              <h2 className="font-pixel text-[14px] text-cream mb-2">Projekt lezárása</h2>
+              <p className="text-sm text-steel mb-6">
+                Biztosan le szeretnéd zárni a projektet? A lezárt projekt a naptárban szürkén jelenik meg.
+              </p>
+              <div className="flex justify-end gap-2">
+                <button onClick={() => setShowCloseConfirm(false)} className="px-4 py-2 text-xs text-steel hover:text-cream transition-colors duration-150 ease-out cursor-pointer">Mégse</button>
+                <button onClick={handleCloseProject} className="px-5 py-2 text-xs rounded-lg font-medium bg-green-600 text-white hover:bg-green-700 transition-colors duration-150 ease-out cursor-pointer">Lezárás</button>
+              </div>
             </div>
           </div>
         </div>
@@ -1141,37 +1179,44 @@ function NoteFormModal({ onSubmit, onClose }: {
   const [content, setContent] = useState('');
   const [isNotification, setIsNotification] = useState(false);
 
-  const inputClass = "w-full px-3 py-2 bg-surface-900 border border-teal/10 rounded-lg text-sm text-cream focus:outline-none focus:ring-2 focus:ring-teal/30";
+  const inputClass = "w-full px-2.5 py-2 bg-surface-900/40 border border-teal/8 rounded-lg text-sm text-cream focus:outline-none focus:border-teal/25 placeholder:text-steel/40 transition-colors";
+  const labelClass = "text-[10px] text-steel tracking-wider uppercase mb-1 block";
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onClose}>
-      <div className="bg-surface-800 rounded-xl border border-teal/15 p-6 w-full max-w-md shadow-2xl" onClick={e => e.stopPropagation()}>
-        <h2 className="font-pixel text-[14px] text-cream mb-5">Új jegyzet</h2>
-        <form
-          onSubmit={e => {
-            e.preventDefault();
-            if (!content.trim()) return;
-            onSubmit({ title, content, is_notification: isNotification });
-          }}
-          className="space-y-4"
-        >
-          <div>
-            <label className="block text-xs font-medium text-steel mb-1">Cím</label>
-            <input type="text" value={title} onChange={e => setTitle(e.target.value)} className={inputClass} placeholder="Jegyzet címe" />
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-steel mb-1">Tartalom *</label>
-            <textarea value={content} onChange={e => setContent(e.target.value)} className={`${inputClass} resize-none h-24`} placeholder="Jegyzet tartalma..." required />
-          </div>
-          <label className="flex items-center gap-2">
-            <input type="checkbox" checked={isNotification} onChange={e => setIsNotification(e.target.checked)} className="rounded border-teal/20" />
-            <span className="text-sm text-steel">Megjelölés értesítésként</span>
-          </label>
-          <div className="flex justify-end gap-2 pt-2">
-            <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-steel hover:bg-teal/10 rounded-lg">Mégse</button>
-            <button type="submit" className="px-4 py-2 text-sm bg-teal text-cream rounded-lg hover:bg-teal/80">Hozzáadás</button>
-          </div>
-        </form>
+      <div className="bg-surface-800 rounded-2xl ring-1 ring-inset ring-teal/15 w-full max-w-md shadow-2xl overflow-hidden" onClick={e => e.stopPropagation()}>
+
+        {/* Header accent */}
+        <div className="h-1 bg-teal" />
+
+        <div className="p-5">
+          <h2 className="font-pixel text-[14px] text-cream mb-5">Új jegyzet</h2>
+          <form
+            onSubmit={e => {
+              e.preventDefault();
+              if (!content.trim()) return;
+              onSubmit({ title, content, is_notification: isNotification });
+            }}
+            className="space-y-4"
+          >
+            <div>
+              <label className={labelClass}>Cím</label>
+              <input type="text" value={title} onChange={e => setTitle(e.target.value)} className={inputClass} placeholder="Jegyzet címe" />
+            </div>
+            <div>
+              <label className={labelClass}>Tartalom *</label>
+              <textarea value={content} onChange={e => setContent(e.target.value)} className={`${inputClass} resize-none h-24`} placeholder="Jegyzet tartalma..." required />
+            </div>
+            <label className="flex items-center gap-2">
+              <input type="checkbox" checked={isNotification} onChange={e => setIsNotification(e.target.checked)} className="rounded border-teal/20" />
+              <span className="text-sm text-steel">Megjelölés értesítésként</span>
+            </label>
+            <div className="flex justify-end gap-2 pt-2">
+              <button type="button" onClick={onClose} className="px-4 py-2 text-xs text-steel hover:text-cream transition-colors duration-150 ease-out cursor-pointer">Mégse</button>
+              <button type="submit" className="px-5 py-2 text-xs font-medium bg-teal text-cream rounded-lg hover:bg-teal/80 transition-colors duration-150 ease-out cursor-pointer">Hozzáadás</button>
+            </div>
+          </form>
+        </div>
       </div>
     </div>
   );
@@ -1278,5 +1323,193 @@ function AssignmentFeeForm({
     </form>
   );
 }
+
+const PRICE_CURRENCIES = ['HUF', 'EUR', 'USD', 'GBP', 'CHF'] as const;
+
+function ProjectPriceTile({
+  project,
+  invoices,
+  onSaved,
+}: {
+  project: Project;
+  invoices: Invoice[];
+  onSaved: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [price, setPrice] = useState(project.project_price != null ? String(project.project_price) : '');
+  const [currency, setCurrency] = useState(project.project_price_currency || 'HUF');
+  const [exchangeRate, setExchangeRate] = useState<number | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  // Sync state when project prop changes (after save)
+  useEffect(() => {
+    if (!editing) {
+      setPrice(project.project_price != null ? String(project.project_price) : '');
+      setCurrency(project.project_price_currency || 'HUF');
+    }
+  }, [project.project_price, project.project_price_currency, editing]);
+
+  useEffect(() => {
+    if (currency === 'HUF') { setExchangeRate(null); return; }
+    let cancelled = false;
+    window.electronAPI.getExchangeRate(currency, 'HUF')
+      .then(rate => { if (!cancelled) setExchangeRate(rate); })
+      .catch(() => { if (!cancelled) setExchangeRate(null); });
+    return () => { cancelled = true; };
+  }, [currency]);
+
+  const paidHuf = useMemo(() => {
+    return invoices
+      .filter(inv => inv.status === 'paid' && inv.project_id === project.id)
+      .reduce((sum, inv) => sum + (inv.paid_amount_huf || inv.amount_huf || 0), 0);
+  }, [invoices, project.id]);
+
+  const priceHuf = project.project_price_huf;
+  const hasPrice = project.project_price != null && priceHuf != null;
+  const progressPct = priceHuf && priceHuf > 0 ? Math.min(100, (paidHuf / priceHuf) * 100) : 0;
+
+  const fmtHuf = (n: number) => new Intl.NumberFormat('hu-HU', { style: 'currency', currency: 'HUF', maximumFractionDigits: 0 }).format(n);
+  const fmtCur = (n: number, cur: string) => new Intl.NumberFormat('hu-HU', { style: 'currency', currency: cur, maximumFractionDigits: cur === 'HUF' ? 0 : 2 }).format(n);
+
+  const priceNum = price ? parseFloat(price.replace(',', '.')) : NaN;
+  const hasValidPrice = !isNaN(priceNum) && priceNum > 0;
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await window.electronAPI.updateProject(project.id, {
+        project_price: hasValidPrice ? priceNum : null,
+        project_price_currency: currency,
+      });
+      setEditing(false);
+      onSaved();
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleCancel = () => {
+    setPrice(project.project_price != null ? String(project.project_price) : '');
+    setCurrency(project.project_price_currency || 'HUF');
+    setEditing(false);
+  };
+
+  const inputClass = 'w-full px-2.5 py-1.5 bg-surface-900/60 border border-teal/20 rounded-md text-sm text-cream placeholder:text-steel/30 focus:outline-none focus:border-teal/50 transition-colors';
+
+  // ── Editing mode ──────────────────────────────────────────────────────
+  if (editing) {
+    return (
+      <div className="bg-teal/5 rounded-lg p-4 flex flex-col gap-3">
+        <div className="flex items-center gap-2 text-steel text-xs">
+          <Coins width={13} height={13} /> Projekt ára
+        </div>
+
+        {/* Amount input */}
+        <div className="relative">
+          <input
+            type="text"
+            inputMode="decimal"
+            value={fmtNum(price)}
+            onChange={e => setPrice(parseNum(e.target.value))}
+            className={`${inputClass} pr-14 font-medium text-base`}
+            placeholder="0"
+            autoFocus
+          />
+          <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] text-steel/50 font-medium pointer-events-none">
+            {currency}
+          </span>
+        </div>
+
+        {/* Currency chips */}
+        <div className="flex gap-1.5">
+          {PRICE_CURRENCIES.map(c => (
+            <button
+              key={c}
+              type="button"
+              onClick={() => setCurrency(c)}
+              className={`flex-1 py-1 text-[10px] font-medium rounded transition-colors ${
+                currency === c
+                  ? 'bg-teal/30 text-cream ring-1 ring-inset ring-teal/40'
+                  : 'bg-surface-900/40 text-steel hover:text-cream hover:bg-teal/10'
+              }`}
+            >
+              {c}
+            </button>
+          ))}
+        </div>
+
+        {/* FX preview */}
+        {currency !== 'HUF' && hasValidPrice && (
+          <div className="text-[10px] text-steel/70">
+            ≈ {exchangeRate ? fmtHuf(Math.round(priceNum * exchangeRate)) : '...'} HUF
+            {exchangeRate && <span className="ml-1 text-steel/40">(1 {currency} = {exchangeRate.toFixed(2)} HUF)</span>}
+          </div>
+        )}
+
+        {/* Actions */}
+        <div className="flex gap-2 pt-1">
+          <button
+            onClick={handleCancel}
+            disabled={saving}
+            className="flex-1 py-1.5 text-xs text-steel hover:text-cream border border-teal/10 rounded-md transition-colors"
+          >
+            Mégse
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={saving || !hasValidPrice}
+            className="flex-1 py-1.5 text-xs font-medium bg-teal text-cream rounded-md hover:bg-teal/80 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
+            {saving ? '...' : 'Mentés'}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Display mode — no price set ───────────────────────────────────────
+  if (!hasPrice) {
+    return (
+      <button
+        onClick={() => setEditing(true)}
+        className="bg-teal/5 hover:bg-teal/8 rounded-lg p-4 text-left w-full transition-colors group"
+      >
+        <div className="flex items-center gap-2 text-steel text-xs mb-2">
+          <Coins width={13} height={13} /> Projekt ára
+        </div>
+        <p className="text-sm text-steel/50 italic">Nincs megadva</p>
+        <p className="text-[10px] text-teal/60 mt-1 opacity-0 group-hover:opacity-100 transition-opacity">
+          Kattints a beállításhoz
+        </p>
+      </button>
+    );
+  }
+
+  // ── Display mode — price set ──────────────────────────────────────────
+  return (
+    <button
+      onClick={() => setEditing(true)}
+      className="bg-teal/5 hover:bg-teal/10 rounded-lg p-4 text-left w-full transition-colors group"
+    >
+      <div className="flex items-center justify-between text-steel text-xs mb-2">
+        <div className="flex items-center gap-2">
+          <Coins width={13} height={13} /> Projekt ára
+        </div>
+        <Pencil width={11} height={11} className="opacity-0 group-hover:opacity-60 transition-opacity" />
+      </div>
+      <div className="flex items-baseline gap-1.5 mb-2.5 flex-wrap">
+        <span className="text-sm font-bold text-cream">
+          {fmtCur(project.project_price!, project.project_price_currency || 'HUF')}
+        </span>
+        {project.project_price_currency !== 'HUF' && (
+          <span className="text-[10px] text-steel/50">≈ {fmtHuf(priceHuf!)}</span>
+        )}
+      </div>
+    </button>
+  );
+}
+
+
+
 
 

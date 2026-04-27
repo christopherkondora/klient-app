@@ -222,12 +222,20 @@ interface UnifiedInvoiceRequest {
     netUnitPrice: number;
     vatRate: 27 | 18 | 5 | 0;
     /** Speciális áfa kód (pl. 'AAM' alanyi adómentes). Ha meg van adva, a vatRate 0. */
-    vatCode?: 'AAM' | 'TAM' | 'EU' | 'EUK' | 'MAA' | 'F.AFA';
+    vatCode?: 'AM' | 'AAM' | 'TAM' | 'EU' | 'EUK' | 'ATHK' | 'MAA' | 'FAD' | 'AKK' | 'K_AFA';
   }>;
   fulfillmentDate: string;
   dueDate: string;
   paymentMethod: 'bank_transfer' | 'cash' | 'bankcard';
-  currency: 'HUF';
+  currency: string;
+  /** ISO 3166-1 alpha-2 country code of the buyer (e.g. 'HU', 'DE'). Defaults to 'HU'. */
+  clientCountryCode?: string;
+  /** EU VAT registration number of the buyer (for B2B reverse charge). */
+  clientEuVatNumber?: string;
+  /** Invoice language code ('hu', 'en', 'de'). Defaults to 'hu'. */
+  language?: string;
+  /** Exchange rate from invoice currency to HUF (Billingo requires for non-HUF). Auto-fetched by backend if omitted. */
+  conversionRate?: number;
   sellerBankName?: string;
   sellerBankAccount?: string;
   /** Számla megjegyzés / záradék (AAM esetén kötelező hivatkozás). */
@@ -355,6 +363,10 @@ interface Client {
   address_line2: string;
   tax_number: string;
   representative_name: string;
+  country_code: string;
+  eu_vat_number: string;
+  preferred_currency: string;
+  invoice_language: string;
   notes: string;
   color: string;
   created_at: string;
@@ -375,6 +387,12 @@ interface Project {
   is_hours_distributed: number;
   priority: 'low' | 'medium' | 'high' | 'urgent';
   color: string | null;
+  /** Megállapodott projektár (eredeti pénznemben) */
+  project_price: number | null;
+  /** Pénznem (HUF, EUR, USD, GBP, CHF...) */
+  project_price_currency: string | null;
+  /** HUF-ban számolt érték (statisztikákhoz) */
+  project_price_huf: number | null;
   created_at: string;
   updated_at: string;
   closed_at: string | null;
@@ -407,13 +425,8 @@ interface Note {
   title: string;
   content: string;
   date: string;
-  is_notification: number;
-  notification_email: string | null;
-  notification_sent: number;
   color: string;
   pinned: number;
-  reminder_date: string | null;
-  reminder_time: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -498,6 +511,14 @@ interface Invoice {
   provider: 'billingo' | 'szamlazz' | null;
   provider_invoice_id: string | null;
   provider_synced_at: string | null;
+  /** Beérkezés (kifizetés) napja — pénzforgalmi elszámoláshoz (Sztv. §60) */
+  paid_date: string | null;
+  /** Beérkezés napi árfolyam (currency → HUF) */
+  paid_exchange_rate: number | null;
+  /** Ténylegesen befolyt összeg HUF-ban (paid_date-i árfolyamon) */
+  paid_amount_huf: number | null;
+  /** Kiállítás napi árfolyam (tájékoztató — amount_huf ezzel számolt) */
+  issue_exchange_rate: number | null;
   created_at: string;
 }
 
