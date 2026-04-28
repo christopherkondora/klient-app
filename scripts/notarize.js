@@ -98,30 +98,71 @@ async function fetchNotaryLog(submissionId, credentialArgs) {
   }
 }
 
+function isNetworkError(error) {
+  const msg = error.message || '';
+  return (
+    msg.includes('Could not connect to the server') ||
+    msg.includes('NSURLErrorDomain') ||
+    msg.includes('kCFErrorDomainCFNetwork') ||
+    msg.includes('network connection was lost') ||
+    msg.includes('The request timed out') ||
+    msg.includes('HTTPError(statusCode: nil')
+  );
+}
+
 async function waitForNotarization(submissionId, credentialArgs, timeoutMinutes, pollIntervalSeconds) {
   const startedAt = Date.now();
   const timeoutMs = timeoutMinutes * 60 * 1000;
   const pollIntervalMs = pollIntervalSeconds * 1000;
+  const maxNetworkRetries = 10;
+  const networkRetryDelayMs = 60 * 1000;
+
+  let consecutiveNetworkErrors = 0;
 
   while (Date.now() - startedAt < timeoutMs) {
-    const output = await runCommand(
-      'xcrun',
-      ['notarytool', 'info', submissionId, ...credentialArgs, '--output-format', 'json'],
-      COMMAND_TIMEOUTS.info
-    );
-    const result = parseJson(output, 'notarytool info');
-    const status = result.status || 'Unknown';
     const elapsedMinutes = ((Date.now() - startedAt) / 60000).toFixed(1);
 
-    console.log(`${LOG_PREFIX} Apple status=${status}; elapsed=${elapsedMinutes}m; submissionId=${submissionId}`);
+    try {
+      const output = await runCommand(
+        'xcrun',
+        ['notarytool', 'info', submissionId, ...credentialArgs, '--output-format', 'json'],
+        COMMAND_TIMEOUTS.info
+      );
 
-    if (status === 'Accepted') {
-      return;
-    }
+      consecutiveNetworkErrors = 0;
 
-    if (status === 'Invalid' || status === 'Rejected') {
-      await fetchNotaryLog(submissionId, credentialArgs);
-      throw new Error(`Apple notarization ${status}; submissionId=${submissionId}`);
+      const result = parseJson(output, 'notarytool info');
+      const status = result.status || 'Unknown';
+
+      console.log(`${LOG_PREFIX} Apple status=${status}; elapsed=${elapsedMinutes}m; submissionId=${submissionId}`);
+
+      if (status === 'Accepted') {
+        return;
+      }
+
+      if (status === 'Invalid' || status === 'Rejected') {
+        await fetchNotaryLog(submissionId, credentialArgs);
+        throw new Error(`Apple notarization ${status}; submissionId=${submissionId}`);
+      }
+    } catch (error) {
+      if (isNetworkError(error)) {
+        consecutiveNetworkErrors += 1;
+        console.warn(
+          `${LOG_PREFIX} Network error polling Apple (attempt ${consecutiveNetworkErrors}/${maxNetworkRetries}); elapsed=${elapsedMinutes}m; retrying in ${networkRetryDelayMs / 1000}s`
+        );
+        console.warn(`${LOG_PREFIX} Network error detail: ${error.message.split('\n')[0]}`);
+
+        if (consecutiveNetworkErrors >= maxNetworkRetries) {
+          throw new Error(
+            `Apple notarization polling failed after ${maxNetworkRetries} consecutive network errors; submissionId=${submissionId}`
+          );
+        }
+
+        await delay(networkRetryDelayMs);
+        continue;
+      }
+
+      throw error;
     }
 
     await delay(pollIntervalMs);
