@@ -15,7 +15,6 @@ module.exports = {
     target: 'nsis',
     signAndEditExecutable: true,
     forceCodeSigning: process.env.CI === 'true',
-    signingHashAlgorithms: ['sha256'],
     azureSignOptions: {
       publisherName: azurePublisherName,
       endpoint: azureCodeSigningEndpoint,
@@ -25,8 +24,6 @@ module.exports = {
       timestampRfc3161: 'http://timestamp.acs.microsoft.com',
       timestampDigest: 'SHA256',
     },
-    rfc3161TimeStampServer: 'http://timestamp.acs.microsoft.com',
-    timeStampServer: 'http://timestamp.acs.microsoft.com',
   },
   nsis: {
     oneClick: false,
