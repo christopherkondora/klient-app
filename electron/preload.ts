@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   loginUser: (data: unknown) => ipcRenderer.invoke('db:user:login', data),
   logoutUser: () => ipcRenderer.invoke('db:user:logout'),
   resetPassword: (email: string) => ipcRenderer.invoke('db:user:resetPassword', email),
+  resendConfirmation: (email: string) => ipcRenderer.invoke('db:user:resendConfirmation', email),
   changePassword: (data: { currentPassword: string; newPassword: string }) => ipcRenderer.invoke('db:user:changePassword', data),
   checkEmailConfirmed: (data: { email: string; password: string }) => ipcRenderer.invoke('db:user:checkEmailConfirmed', data),
   googleAuth: () => ipcRenderer.invoke('db:user:googleAuth'),
@@ -186,6 +187,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getTaxDeadlines: (userId: string | undefined, adoev: number) => ipcRenderer.invoke('db:tax:getDeadlines', userId, adoev),
   getTaxWarnings: (userId: string | undefined, bevétel: number, adoev: number) => ipcRenderer.invoke('db:tax:getWarnings', userId, bevétel, adoev),
   compareTaxForms: (bevétel: number, koltsegek: number, adoev: number, hipaKulcs: number, kivet?: number) => ipcRenderer.invoke('db:tax:compareForms', bevétel, koltsegek, adoev, hipaKulcs, kivet),
+  getKivaPeriods: (userId: string | undefined, year: number) => ipcRenderer.invoke('db:tax:kiva:getPeriods', userId, year),
+  saveKivaPeriod: (userId: string | undefined, input: unknown) => ipcRenderer.invoke('db:tax:kiva:savePeriod', userId, input),
+  getKivaAdjustments: (userId: string | undefined, year: number) => ipcRenderer.invoke('db:tax:kiva:getAdjustments', userId, year),
+  createKivaAdjustment: (userId: string | undefined, item: unknown) => ipcRenderer.invoke('db:tax:kiva:createAdjustment', userId, item),
+  updateKivaAdjustment: (userId: string | undefined, id: string, patch: unknown) => ipcRenderer.invoke('db:tax:kiva:updateAdjustment', userId, id, patch),
+  deleteKivaAdjustment: (userId: string | undefined, id: string) => ipcRenderer.invoke('db:tax:kiva:deleteAdjustment', userId, id),
+  getKivaEstimate: (userId: string | undefined, year: number) => ipcRenderer.invoke('db:tax:kiva:estimate', userId, year),
 
   // Billing / Invoicing config
   setBillingConfig: (data: { platform: string; apiKey?: string; url?: string }) => ipcRenderer.invoke('billing:set-config', data),
@@ -199,6 +207,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   billingoEnsurePartner: (clientData: unknown) => ipcRenderer.invoke('billing:billingo:ensure-partner', clientData),
   billingoCreateInvoice: (request: unknown) => ipcRenderer.invoke('billing:billingo:create-invoice', request),
   billingoGetPdf: (invoiceId: number) => ipcRenderer.invoke('billing:billingo:get-pdf', invoiceId),
+    ensureInvoicePdf: (data: unknown) => ipcRenderer.invoke('billing:ensure-invoice-pdf', data),
   billingoCancelInvoice: (invoiceId: number) => ipcRenderer.invoke('billing:billingo:cancel', invoiceId),
   billingoGetStatus: (invoiceId: number) => ipcRenderer.invoke('billing:billingo:get-status', invoiceId),
 

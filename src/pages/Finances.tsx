@@ -141,6 +141,25 @@ export default function Finances() {
     loadData();
   }
 
+  async function handleOpenInvoicePdf(invoice: Invoice) {
+    const client = clients.find(item => item.id === invoice.client_id);
+    const result = await window.electronAPI.ensureInvoicePdf({
+      invoiceId: invoice.id,
+      filePath: invoice.file_path,
+      provider: invoice.provider,
+      providerInvoiceId: invoice.provider_invoice_id,
+      clientName: client?.name ?? invoice.client_name,
+      invoiceNumber: invoice.invoice_number,
+    });
+
+    if (result.success && result.filePath) {
+      setViewingInvoice({ ...invoice, file_path: result.filePath });
+      if (result.filePath !== invoice.file_path) loadData();
+    } else {
+      console.warn('[Finances] Could not open invoice PDF:', result.error);
+    }
+  }
+
   // Pending invoices sorted by urgency
   const pendingInvoices = useMemo(() => {
     const now = new Date();
@@ -173,7 +192,6 @@ export default function Finances() {
   const chartData = useMemo(() => {
     if (monthlyRevenue.length === 0) return null;
     const months = [...new Set(monthlyRevenue.map(r => r.month))].sort();
-    if (months.length < 2) return null;
     const clientIds = [...new Set(monthlyRevenue.map(r => r.client_id))];
     const clientMap = new Map(monthlyRevenue.map(r => [r.client_id, { name: r.client_name, color: r.client_color }]));
     const bars = months.map(month => {
@@ -244,11 +262,16 @@ export default function Finances() {
     );
   }
 
+  const salaryCostItems = enhanced?.employeeSalaryItems ?? [];
+  const contractorCostItems = enhanced?.teamCostItems ?? [];
+  const visibleCostCount = expenses.length + salaryCostItems.length + contractorCostItems.length;
+  const personnelCostCount = salaryCostItems.length + contractorCostItems.length;
+
   return (
     <div className="max-w-7xl mx-auto space-y-8">
       <PageHeader
         title="Pénzügyek"
-        subtitle={!isBusiness ? 'Bevételi és kiadási nyilvántartás' : (hasInvoicing ? 'Cash flow és számlakezelés' : 'Bevételi nyilvántartás')}
+        subtitle={!isBusiness ? 'Bevételi és költségnyilvántartás' : (hasInvoicing ? 'Cash flow és számlakezelés' : 'Bevételi nyilvántartás')}
         actions={(
           <>
             <button
@@ -317,7 +340,7 @@ export default function Finances() {
                   </span>
                 )}
                 <span className="text-steel/60">
-                  Kiadás: <span className="text-steel">{formatCurrency(enhanced.yearlyExpenses)}</span>
+                  Költség: <span className="text-steel">{formatCurrency(enhanced.yearlyExpenses)}</span>
                 </span>
                 {(() => {
                   const net = enhanced.vatStatus === 'standard'
@@ -502,16 +525,16 @@ export default function Finances() {
       </div>
 
       {/* ══════════════════════════════════════════════════════════
-          ROW 3 — Kiadások (full width, 2-column)
+          ROW 3 — Költségek (full width, 2-column)
          ══════════════════════════════════════════════════════════ */}
       <div className="grid md:grid-cols-12 gap-4">
 
         {/* ── LEFT: Expense list ── */}
-        <div className="md:col-span-7 bg-surface-800/50 rounded-xl border border-teal/10 p-5 flex flex-col">
+        <div className="md:col-span-7 bg-surface-800/50 rounded-xl border border-teal/10 p-5 flex flex-col min-h-[420px] md:h-[520px] md:max-h-[calc(100vh-260px)] overflow-hidden">
           <div className="flex items-center justify-between mb-4">
             <p className="text-xs text-steel tracking-[0.15em] font-medium flex items-center gap-1.5">
-              <CreditCard width={12} height={12} className="text-rose-400" /> KIADÁSOK
-              {expenses.length > 0 && <span className="text-steel/40 font-normal">({expenses.length})</span>}
+              <CreditCard width={12} height={12} className="text-rose-400" /> KÖLTSÉGEK
+              {visibleCostCount > 0 && <span className="text-steel/40 font-normal">({visibleCostCount})</span>}
             </p>
             <button
               onClick={() => { setEditingExpense(null); setShowExpenseModal(true); }}
@@ -520,109 +543,150 @@ export default function Finances() {
               <Plus width={13} height={13} /> Hozzáadás
             </button>
           </div>
-          <div className="overflow-auto flex-1 space-y-1.5">
-            {expenses.map(exp => {
-                const catMeta = CATEGORY_META[exp.category] || CATEGORY_META.other;
-                const CatIcon = catMeta.icon;
-                const freqLabel = exp.frequency === 'monthly' ? 'havi' : exp.frequency === 'yearly' ? 'éves' : 'egyszeri';
-                const monthlyHuf = exp.frequency === 'monthly'
-                  ? (exp.amount_huf ?? exp.amount)
-                  : exp.frequency === 'yearly'
-                    ? Math.round((exp.amount_huf ?? exp.amount) / 12)
-                    : null;
+          {visibleCostCount > 0 && (
+            <div className="flex-1 min-h-0 flex flex-col gap-3">
+              {expenses.length > 0 && (
+                <section className={`min-h-0 flex flex-col ${personnelCostCount > 0 ? 'basis-1/2' : 'flex-1'}`}>
+                  <div className="flex items-center justify-between pb-2">
+                    <p className="text-[10px] text-steel/55 tracking-[0.14em] uppercase font-medium">Eszközök és szolgáltatások</p>
+                    <span className="text-[10px] text-steel/35">{expenses.length} tétel</span>
+                  </div>
+                  <div className="min-h-0 flex-1 overflow-y-auto pr-1 space-y-1.5">
+                    {expenses.map(exp => {
+                      const catMeta = CATEGORY_META[exp.category] || CATEGORY_META.other;
+                      const CatIcon = catMeta.icon;
+                      const freqLabel = exp.frequency === 'monthly' ? 'havi' : exp.frequency === 'yearly' ? 'éves' : 'egyszeri';
+                      const monthlyHuf = exp.frequency === 'monthly'
+                        ? (exp.amount_huf ?? exp.amount)
+                        : exp.frequency === 'yearly'
+                          ? Math.round((exp.amount_huf ?? exp.amount) / 12)
+                          : null;
 
-                // Next payment date calculation for recurring expenses
-                let nextPayment: string | null = null;
-                if (exp.frequency !== 'one-time' && (!exp.end_date || exp.end_date >= new Date().toISOString().slice(0, 10))) {
-                  const start = new Date(exp.start_date);
-                  const now = new Date();
-                  const next = new Date(start);
-                  if (exp.frequency === 'monthly') {
-                    while (next <= now) next.setMonth(next.getMonth() + 1);
-                  } else {
-                    while (next <= now) next.setFullYear(next.getFullYear() + 1);
-                  }
-                  const diffDays = Math.ceil((next.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
-                  nextPayment = diffDays <= 0 ? 'ma' : diffDays === 1 ? 'holnap' : `${diffDays} nap múlva`;
-                }
+                      // Next payment date calculation for recurring expenses
+                      let nextPayment: string | null = null;
+                      if (exp.frequency !== 'one-time' && (!exp.end_date || exp.end_date >= new Date().toISOString().slice(0, 10))) {
+                        const start = new Date(exp.start_date);
+                        const now = new Date();
+                        const next = new Date(start);
+                        if (exp.frequency === 'monthly') {
+                          while (next <= now) next.setMonth(next.getMonth() + 1);
+                        } else {
+                          while (next <= now) next.setFullYear(next.getFullYear() + 1);
+                        }
+                        const diffDays = Math.ceil((next.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+                        nextPayment = diffDays <= 0 ? 'ma' : diffDays === 1 ? 'holnap' : `${diffDays} nap múlva`;
+                      }
 
-                return (
-                  <div key={exp.id} className="flex items-center gap-3 p-3 bg-surface-900/30 rounded-lg group transition-colors duration-150 ease-out hover:bg-surface-900/50">
-                    <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${catMeta.color.split(' ')[1]}`}>
-                      <CatIcon width={14} height={14} className={catMeta.color.split(' ')[0]} />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <p className="text-sm text-cream truncate font-medium">{exp.name}</p>
-                        <span className={`text-[9px] px-1.5 py-0.5 rounded font-medium shrink-0 ${catMeta.color}`}>{catMeta.label}</span>
+                      return (
+                        <div key={exp.id} className="flex items-center gap-3 p-3 bg-surface-900/30 rounded-lg group transition-colors duration-150 ease-out hover:bg-surface-900/50">
+                          <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${catMeta.color.split(' ')[1]}`}>
+                            <CatIcon width={14} height={14} className={catMeta.color.split(' ')[0]} />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <p className="text-sm text-cream truncate font-medium">{exp.name}</p>
+                              <span className={`text-[9px] px-1.5 py-0.5 rounded font-medium shrink-0 ${catMeta.color}`}>{catMeta.label}</span>
+                            </div>
+                            <div className="flex items-center gap-2 mt-0.5">
+                              <p className="text-[10px] text-steel/50">
+                                {exp.type === 'subscription' ? 'Előfizetés' : 'Beruházás'} • {freqLabel}
+                              </p>
+                              {nextPayment && (
+                                <span className="text-[10px] text-steel/40 flex items-center gap-0.5">
+                                  <CalendarClock width={8} height={8} /> {nextPayment}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          <div className="text-right shrink-0">
+                            <span className="text-sm font-bold text-cream block">{formatCurrency(exp.amount, exp.currency)}</span>
+                            {monthlyHuf !== null && exp.frequency !== 'monthly' && (
+                              <span className="text-[10px] text-steel/40">~{formatCurrency(monthlyHuf)}/hó</span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-150 ease-out shrink-0">
+                            <button
+                              onClick={() => { setEditingExpense(exp); setShowExpenseModal(true); }}
+                              className="p-1 rounded hover:bg-teal/10 text-steel/40 hover:text-cream transition-colors duration-150 ease-out cursor-pointer"
+                            >
+                              <Edit2 width={11} height={11} />
+                            </button>
+                            <button
+                              onClick={() => handleDeleteExpense(exp.id)}
+                              className="p-1 rounded hover:bg-red-500/10 text-steel/40 hover:text-red-400 transition-colors duration-150 ease-out cursor-pointer"
+                            >
+                              <Trash2 width={11} height={11} />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </section>
+              )}
+
+              {personnelCostCount > 0 && (
+                <section className={`min-h-0 flex flex-col ${expenses.length > 0 ? 'basis-1/2 pt-3 border-t border-teal/8' : 'flex-1'}`}>
+                  <div className="flex items-center justify-between pb-2">
+                    <p className="text-[10px] text-steel/55 tracking-[0.14em] uppercase font-medium">Személyi jellegű költségek</p>
+                    <span className="text-[10px] text-steel/35">{personnelCostCount} tétel</span>
+                  </div>
+                  <div className="min-h-0 flex-1 overflow-y-auto pr-1 space-y-1.5">
+                    {salaryCostItems.map(employee => {
+                      const salaryAmount = employee.salary_huf ?? employee.monthly_salary;
+                      const salaryCurrency = employee.salary_huf ? 'HUF' : employee.salary_currency || 'HUF';
+                      return (
+                        <div key={employee.id} className="flex items-center gap-3 p-3 bg-surface-900/30 rounded-lg">
+                          <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 bg-violet-500/10">
+                            <Users width={14} height={14} className="text-violet-400" />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <p className="text-sm text-cream truncate font-medium">{employee.name}</p>
+                              <span className="text-[9px] px-1.5 py-0.5 rounded font-medium shrink-0 text-violet-400 bg-violet-500/10">Bérköltség</span>
+                            </div>
+                            <p className="text-[10px] text-steel/50 mt-0.5">{employee.role || 'Alkalmazott'} • havi</p>
+                          </div>
+                          <div className="text-right shrink-0">
+                            <span className="text-sm font-bold text-cream block">{formatCurrency(salaryAmount, salaryCurrency)}</span>
+                            <span className="text-[10px] text-steel/40">havi</span>
+                          </div>
+                        </div>
+                      );
+                    })}
+
+                    {contractorCostItems.map(item => (
+                      <div key={item.id} className="flex items-center gap-3 p-3 bg-surface-900/30 rounded-lg">
+                        <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 bg-indigo-500/10">
+                          <Users width={14} height={14} className="text-indigo-400" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <p className="text-sm text-cream truncate font-medium">{item.member_name}</p>
+                            <span className="text-[9px] px-1.5 py-0.5 rounded font-medium shrink-0 text-indigo-400 bg-indigo-500/10">
+                              {item.employment_type === 'contractor' ? 'Alvállalkozó' : 'Megbízott'}
+                            </span>
+                          </div>
+                          <p className="text-[10px] text-steel/50 mt-0.5">{item.project_name}</p>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <span className="text-sm font-bold text-cream block">{formatCurrency(item.fee_huf ?? item.fee, item.fee_huf ? 'HUF' : item.fee_currency)}</span>
+                          <span className="text-[10px] text-steel/40">egyszeri</span>
+                        </div>
                       </div>
-                      <div className="flex items-center gap-2 mt-0.5">
-                        <p className="text-[10px] text-steel/50">
-                          {exp.type === 'subscription' ? 'Előfizetés' : 'Beruházás'} • {freqLabel}
-                        </p>
-                        {nextPayment && (
-                          <span className="text-[10px] text-steel/40 flex items-center gap-0.5">
-                            <CalendarClock width={8} height={8} /> {nextPayment}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                    <div className="text-right shrink-0">
-                      <span className="text-sm font-bold text-cream block">{formatCurrency(exp.amount, exp.currency)}</span>
-                      {monthlyHuf !== null && exp.frequency !== 'monthly' && (
-                        <span className="text-[10px] text-steel/40">~{formatCurrency(monthlyHuf)}/hó</span>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-150 ease-out shrink-0">
-                      <button
-                        onClick={() => { setEditingExpense(exp); setShowExpenseModal(true); }}
-                        className="p-1 rounded hover:bg-teal/10 text-steel/40 hover:text-cream transition-colors duration-150 ease-out cursor-pointer"
-                      >
-                        <Edit2 width={11} height={11} />
-                      </button>
-                      <button
-                        onClick={() => handleDeleteExpense(exp.id)}
-                        className="p-1 rounded hover:bg-red-500/10 text-steel/40 hover:text-red-400 transition-colors duration-150 ease-out cursor-pointer"
-                      >
-                        <Trash2 width={11} height={11} />
-                      </button>
-                    </div>
+                    ))}
                   </div>
-                );
-              })}
-            </div>
-          {/* Team cost items (contractor/freelancer fees) */}
-          {enhanced?.teamCostItems && enhanced.teamCostItems.length > 0 && (
-            <div className={expenses.length > 0 ? 'mt-3 pt-3 border-t border-teal/8 space-y-1.5' : 'space-y-1.5'}>
-              {enhanced.teamCostItems.map(item => (
-                <div key={item.id} className="flex items-center gap-3 p-3 bg-surface-900/30 rounded-lg">
-                  <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 bg-indigo-500/10">
-                    <Users width={14} height={14} className="text-indigo-400" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <p className="text-sm text-cream truncate font-medium">{item.member_name}</p>
-                      <span className="text-[9px] px-1.5 py-0.5 rounded font-medium shrink-0 text-indigo-400 bg-indigo-500/10">
-                        {item.employment_type === 'contractor' ? 'Alvállalkozó' : 'Megbízott'}
-                      </span>
-                    </div>
-                    <p className="text-[10px] text-steel/50 mt-0.5">{item.project_name}</p>
-                  </div>
-                  <div className="text-right shrink-0">
-                    <span className="text-sm font-bold text-cream block">{formatCurrency(item.fee_huf ?? item.fee, item.fee_huf ? 'HUF' : item.fee_currency)}</span>
-                    <span className="text-[10px] text-steel/40">egyszeri</span>
-                  </div>
-                </div>
-              ))}
+                </section>
+              )}
             </div>
           )}
 
           {/* Empty state */}
-          {expenses.length === 0 && (!enhanced?.teamCostItems || enhanced.teamCostItems.length === 0) && (
+          {visibleCostCount === 0 && (
             <div className="flex-1 flex flex-col items-center justify-center py-8">
               <CreditCard width={28} height={28} className="text-steel/20 mb-2" />
-              <p className="text-xs text-steel/40 italic">Még nincsenek kiadások rögzítve.</p>
-              <p className="text-[10px] text-steel/25 mt-1">Kattints a &quot;Hozzáadás&quot; gombra az első kiadás rögzítéséhez.</p>
+              <p className="text-xs text-steel/40 italic">Még nincsenek költségek rögzítve.</p>
+              <p className="text-[10px] text-steel/25 mt-1">Kattints a &quot;Hozzáadás&quot; gombra az első költség rögzítéséhez.</p>
             </div>
           )}
 
@@ -638,12 +702,12 @@ export default function Finances() {
           )}
         </div>
 
-        {/* ── RIGHT: Donut chart + Trend ── */}
+        {/* ── RIGHT: Donut chart + combined trend ── */}
         <div className="md:col-span-5 flex flex-col gap-4">
 
           {/* Donut chart — category breakdown */}
-          <div className="bg-surface-800/50 rounded-xl border border-teal/10 p-5 flex-1">
-            <p className="text-xs text-steel tracking-[0.15em] font-medium mb-4">KATEGÓRIA MEGOSZLÁS</p>
+          <div className="bg-surface-800/50 rounded-xl border border-teal/10 p-5">
+            <p className="text-xs text-steel tracking-[0.15em] font-medium mb-4">KÖLTSÉGMEGOSZLÁS</p>
             {(() => {
               const cats = enhanced?.expensesByCategory ?? [];
               if (cats.length === 0) return <p className="text-[11px] text-steel/30 italic text-center py-6">Nincs adat</p>;
@@ -698,47 +762,119 @@ export default function Finances() {
             })()}
           </div>
 
-          {/* Expense trend sparkline */}
-          <div className="bg-surface-800/50 rounded-xl border border-teal/10 p-5">
+          {/* Revenue + expense trend */}
+          <div className="bg-surface-800/50 rounded-xl border border-teal/10 p-5 flex-1 min-h-0 flex flex-col">
             <p className="text-xs text-steel tracking-[0.15em] font-medium mb-3 flex items-center gap-1.5">
-              <TrendingUp width={12} height={12} className="text-rose-400" /> KIADÁS TREND
+              <TrendingUp width={12} height={12} className="text-emerald-400" /> BEVÉTEL ÉS KÖLTSÉG
             </p>
             {(() => {
-              const trend = enhanced?.monthlyExpensesTrend ?? [];
-              if (trend.length < 2) return <p className="text-[11px] text-steel/30 italic text-center py-4">Legalább 2 hónapnyi adat szükséges</p>;
-              const maxVal = Math.max(...trend.map(t => t.total), 1);
-              const w = 280, h = 80;
-              const padX = 0, padY = 8;
-              const stepX = (w - padX * 2) / (trend.length - 1);
-              const points = trend.map((t, i) => ({
-                x: padX + i * stepX,
-                y: padY + (h - padY * 2) * (1 - t.total / maxVal),
-                total: t.total,
-                month: t.month,
-              }));
+              const expenseTrend = enhanced?.monthlyExpensesTrend ?? [];
+              const revenueBars = chartData?.bars ?? [];
+              const expensesByMonth = new Map(expenseTrend.map(item => [item.month, item.total]));
+              const revenueByMonth = new Map(revenueBars.map(item => [item.month, item]));
+              const months = [...new Set([...revenueBars.map(item => item.month), ...expenseTrend.map(item => item.month)])].sort();
+              if (months.length < 2) {
+                return (
+                  <div className="flex-1 flex flex-col items-center justify-center py-8">
+                    <BarChart3 width={28} height={28} className="text-steel/25 mb-2" />
+                    <p className="text-[11px] text-steel/35 italic text-center">
+                      {hasInvoicing
+                        ? 'Az első lezárt számlád után a grafikon automatikusan elindul.'
+                        : 'Az első bevétel rögzítése után a grafikon automatikusan elindul.'}
+                    </p>
+                  </div>
+                );
+              }
+
+              const maxVal = Math.max(
+                ...months.map(month => Math.max(revenueByMonth.get(month)?.total ?? 0, expensesByMonth.get(month) ?? 0)),
+                1
+              );
+              const w = 100;
+              const h = 100;
+              const padX = 3;
+              const padY = 8;
+              const points = months.map((month, i) => {
+                const expense = expensesByMonth.get(month) ?? 0;
+                return {
+                  x: months.length === 1 ? 50 : padX + ((w - padX * 2) * i) / (months.length - 1),
+                  y: padY + (h - padY * 2) * (1 - expense / maxVal),
+                  expense,
+                  month,
+                };
+              });
               const linePath = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x},${p.y}`).join(' ');
-              const areaPath = `${linePath} L${points[points.length - 1].x},${h} L${points[0].x},${h} Z`;
+              const areaPath = `${linePath} L${points[points.length - 1].x},${h - padY} L${points[0].x},${h - padY} Z`;
+              const totals = revenueBars.map(bar => bar.total);
+              const recent = totals.slice(-3).reduce((s, v) => s + v, 0) / Math.min(totals.length, 3);
+              const older = totals.slice(0, -3).reduce((s, v) => s + v, 0) / Math.max(totals.length - 3, 1);
+              const pct = older > 0 ? ((recent - older) / older * 100).toFixed(0) : null;
               return (
-                <div>
-                  <svg viewBox={`0 0 ${w} ${h}`} className="w-full h-20">
+                <div className="flex-1 min-h-0 flex flex-col">
+                  <div className="relative flex-1 min-h-44 mb-2">
+                    <div className="absolute inset-0 flex items-end gap-2 pr-1">
+                      {months.map(month => {
+                        const bar = revenueByMonth.get(month);
+                        const revenue = bar?.total ?? 0;
+                        const expense = expensesByMonth.get(month) ?? 0;
+                        return (
+                          <div key={month} className="flex-1 h-full flex flex-col justify-end relative group">
+                            <div className="absolute -top-9 left-1/2 -translate-x-1/2 bg-surface-900 border border-teal/15 rounded px-2 py-1 text-[10px] text-cream whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity duration-150 ease-out z-10 pointer-events-none">
+                              Bevétel: {formatCurrency(revenue)} · Költség: {formatCurrency(expense)}
+                            </div>
+                            {bar && revenue > 0 && (
+                              <div className="flex flex-col justify-end w-full rounded-t-sm overflow-hidden opacity-90" style={{ height: `${Math.max((revenue / maxVal) * 100, 2)}%` }}>
+                                {bar.segments.filter(segment => segment.amount > 0).map(segment => {
+                                  const info = chartData?.clientMap.get(segment.clientId);
+                                  return (
+                                    <div
+                                      key={segment.clientId}
+                                      className="w-full"
+                                      style={{
+                                        height: `${(segment.amount / revenue) * 100}%`,
+                                        backgroundColor: tc(info?.color),
+                                        minHeight: '2px',
+                                      }}
+                                    />
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <svg viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" className="absolute inset-0 w-full h-full overflow-visible pointer-events-none">
                     <defs>
-                      <linearGradient id="expTrendGrad" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor="#fb7185" stopOpacity="0.3" />
+                      <linearGradient id="combinedExpTrendGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor="#fb7185" stopOpacity="0.22" />
                         <stop offset="100%" stopColor="#fb7185" stopOpacity="0" />
                       </linearGradient>
                     </defs>
-                    <path d={areaPath} fill="url(#expTrendGrad)" />
-                    <path d={linePath} fill="none" stroke="#fb7185" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                    {points.map((p, i) => (
-                      <circle key={i} cx={p.x} cy={p.y} r="2.5" fill="#fb7185" stroke="#01161E" strokeWidth="1" />
-                    ))}
+                    <path d={areaPath} fill="url(#combinedExpTrendGrad)" />
+                    <path d={linePath} fill="none" stroke="#fb7185" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
                   </svg>
-                  <div className="flex justify-between mt-1">
-                    {trend.map((t, i) => (
-                      <span key={i} className="text-[8px] text-steel/30" style={{ width: i === 0 ? 'auto' : i === trend.length - 1 ? 'auto' : '0', textAlign: i === 0 ? 'left' : i === trend.length - 1 ? 'right' : 'center', flex: i === 0 || i === trend.length - 1 ? 'none' : '1' }}>
-                        {i === 0 || i === trend.length - 1 ? t.month.slice(5) : ''}
+                  {points.map((p, i) => (
+                    <span
+                      key={i}
+                      className="absolute w-3 h-3 rounded-full bg-rose-400 pointer-events-none"
+                      style={{ left: `${p.x}%`, top: `${p.y}%`, transform: 'translate(-50%, -50%)' }}
+                    />
+                  ))}
+                  </div>
+                  <div className="flex gap-2 mb-3">
+                    {months.map((month, i) => (
+                      <span key={month} className="flex-1 text-[9px] text-steel/35 text-center truncate">
+                        {i === 0 || i === months.length - 1 || months.length <= 6 ? format(parseISO(month + '-01'), 'MMM', { locale: hu }) : ''}
                       </span>
                     ))}
+                  </div>
+                  <div className="flex items-center justify-between gap-3 text-[10px] text-steel/60">
+                    <div className="flex items-center gap-3">
+                      <span className="inline-flex items-center gap-1.5"><span className="w-2 h-2 rounded-sm bg-teal" />Bevétel</span>
+                      <span className="inline-flex items-center gap-1.5"><span className="w-3 h-0.5 rounded-full bg-rose-400" />Költség</span>
+                    </div>
+                    {pct ? <span>{Number(pct) >= 0 ? '+' : ''}{pct}% / 3 hó</span> : <span>Kezd épülni a trend</span>}
                   </div>
                 </div>
               );
@@ -841,75 +977,6 @@ export default function Finances() {
       )}
 
       {/* ══════════════════════════════════════════════════════════
-          REVENUE CHART
-         ══════════════════════════════════════════════════════════ */}
-      <div className="bg-surface-800/50 rounded-xl border border-teal/10 p-5">
-        <h2 className="font-pixel text-sm text-cream mb-4">Bevételi grafikon</h2>
-        {!chartData ? (
-          <div className="text-center py-12">
-            <BarChart3 width={32} height={32} className="text-steel/30 mx-auto mb-3" />
-            <p className="text-sm text-steel/60 italic">
-              {hasInvoicing
-                ? 'Az első lezárt számlád után a bevételi grafikon automatikusan elindul.'
-                : 'Az első bevétel rögzítése után a grafikon automatikusan elindul.'
-              }
-            </p>
-          </div>
-        ) : (
-          <div>
-            {/* Stacked bar chart */}
-            <div className="flex items-end gap-2 h-48 mb-3">
-              {chartData.bars.map((bar) => (
-                <div key={bar.month} className="flex-1 flex flex-col items-stretch justify-end h-full relative group">
-                  <div className="absolute -top-8 left-1/2 -translate-x-1/2 bg-surface-900 border border-teal/15 rounded px-2 py-1 text-[10px] text-cream whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity duration-150 ease-out z-10 pointer-events-none">
-                    {formatCurrency(bar.total)}
-                  </div>
-                  <div className="flex flex-col justify-end" style={{ height: `${(bar.total / chartData.maxTotal) * 100}%` }}>
-                    {bar.segments.filter(s => s.amount > 0).map((seg, i) => {
-                      const info = chartData.clientMap.get(seg.clientId);
-                      return (
-                        <div
-                          key={seg.clientId}
-                          className={`w-full ${i === 0 ? 'rounded-t' : ''}`}
-                          style={{
-                            height: `${(seg.amount / bar.total) * 100}%`,
-                            backgroundColor: tc(info?.color),
-                            minHeight: '2px',
-                          }}
-                        />
-                      );
-                    })}
-                  </div>
-                  <span className="text-[10px] text-steel/50 text-center mt-1.5">
-                    {format(parseISO(bar.month + '-01'), 'MMM', { locale: hu })}
-                  </span>
-                </div>
-              ))}
-            </div>
-            <div className="flex items-center gap-2 text-xs text-steel/60">
-              <TrendingUp width={12} height={12} />
-              {(() => {
-                const totals = chartData.bars.map(b => b.total);
-                const recent = totals.slice(-3).reduce((s, v) => s + v, 0) / Math.min(totals.length, 3);
-                const older = totals.slice(0, -3).reduce((s, v) => s + v, 0) / Math.max(totals.length - 3, 1);
-                if (older === 0) return <span>Kezd épülni a trend...</span>;
-                const pct = ((recent - older) / older * 100).toFixed(0);
-                return <span>{Number(pct) >= 0 ? '+' : ''}{pct}% az elmúlt 3 hónapban</span>;
-              })()}
-            </div>
-            <div className="flex flex-wrap gap-3 mt-3">
-              {[...chartData.clientMap.entries()].map(([id, info]) => (
-                <div key={id} className="flex items-center gap-1.5">
-                  <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: tc(info.color) }} />
-                  <span className="text-xs text-steel">{info.name}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* ══════════════════════════════════════════════════════════
           ROW — Top ügyfelek · Havi profit
          ══════════════════════════════════════════════════════════ */}
       <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
@@ -975,7 +1042,7 @@ export default function Finances() {
                 {/* Expense bar */}
                 <div className="mt-2">
                   <div className="flex items-center justify-between mb-1.5">
-                    <span className="text-sm text-steel/60">Kiadás</span>
+                    <span className="text-sm text-steel/60">Költség</span>
                     <span className="text-sm font-bold text-cream">{formatCurrency(expense)}</span>
                   </div>
                   <div className="h-1.5 bg-surface-900/60 rounded-full overflow-hidden">
@@ -1102,9 +1169,9 @@ export default function Finances() {
                     </td>
                     <td className="py-2.5 px-3 text-right">
                       <div className="flex items-center justify-end gap-1">
-                        {invoice.file_path && (
+                        {(invoice.file_path || (invoice.provider === 'billingo' && invoice.provider_invoice_id)) && (
                           <button
-                            onClick={() => setViewingInvoice(invoice)}
+                            onClick={() => handleOpenInvoicePdf(invoice)}
                             className="p-1 rounded hover:bg-teal/10 text-steel/40 hover:text-cream transition-colors duration-150 ease-out cursor-pointer"
                             title="PDF megnyitása"
                           >

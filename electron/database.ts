@@ -307,6 +307,45 @@ function createTables() {
       FOREIGN KEY (business_type) REFERENCES tax_business_types(id)
     );
 
+    CREATE TABLE IF NOT EXISTS kiva_periods (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      year INTEGER NOT NULL,
+      quarter INTEGER NOT NULL CHECK(quarter BETWEEN 1 AND 4),
+      auto_personal_payments_huf REAL NOT NULL DEFAULT 0,
+      manual_personal_payments_huf REAL,
+      personal_payments_mode TEXT NOT NULL DEFAULT 'auto' CHECK(personal_payments_mode IN ('auto', 'manual', 'auto_plus_manual')),
+      calculated_base_huf REAL NOT NULL DEFAULT 0,
+      calculated_tax_huf REAL NOT NULL DEFAULT 0,
+      completeness TEXT NOT NULL DEFAULT 'partial' CHECK(completeness IN ('missing', 'partial', 'complete')),
+      notes TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(user_id, year, quarter)
+    );
+
+    CREATE TABLE IF NOT EXISTS kiva_adjustments (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      year INTEGER NOT NULL,
+      quarter INTEGER CHECK(quarter BETWEEN 1 AND 4),
+      type TEXT NOT NULL CHECK(type IN ('AAN', 'AACS')),
+      category TEXT NOT NULL,
+      amount_huf REAL NOT NULL,
+      note TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS kiva_settings (
+      user_id TEXT NOT NULL,
+      year INTEGER NOT NULL,
+      include_external_fees_by_default INTEGER NOT NULL DEFAULT 0,
+      manual_note TEXT,
+      updated_at TEXT DEFAULT (datetime('now')),
+      PRIMARY KEY (user_id, year)
+    );
+
     CREATE TABLE IF NOT EXISTS tax_parameters (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       year INTEGER NOT NULL UNIQUE,
@@ -360,8 +399,49 @@ function createTables() {
   `);
 }
 
+function ensureClientInvoiceColumns() {
+  if (!db) throw new Error('Database not initialized');
+
+  const clientCols = db.exec("PRAGMA table_info(clients)");
+  const clientColNames = clientCols[0]?.values.map(row => row[1]) || [];
+  if (!clientColNames.includes('tax_number')) {
+    db.run("ALTER TABLE clients ADD COLUMN tax_number TEXT DEFAULT ''");
+  }
+  if (!clientColNames.includes('representative_name')) {
+    db.run("ALTER TABLE clients ADD COLUMN representative_name TEXT DEFAULT ''");
+  }
+  if (!clientColNames.includes('postal_code')) {
+    db.run("ALTER TABLE clients ADD COLUMN postal_code TEXT DEFAULT ''");
+  }
+  if (!clientColNames.includes('city')) {
+    db.run("ALTER TABLE clients ADD COLUMN city TEXT DEFAULT ''");
+  }
+  if (!clientColNames.includes('street')) {
+    db.run("ALTER TABLE clients ADD COLUMN street TEXT DEFAULT ''");
+  }
+  if (!clientColNames.includes('address_line2')) {
+    db.run("ALTER TABLE clients ADD COLUMN address_line2 TEXT DEFAULT ''");
+  }
+  if (!clientColNames.includes('country_code')) {
+    db.run("ALTER TABLE clients ADD COLUMN country_code TEXT DEFAULT 'HU'");
+  }
+  if (!clientColNames.includes('eu_vat_number')) {
+    db.run("ALTER TABLE clients ADD COLUMN eu_vat_number TEXT DEFAULT ''");
+  }
+  if (!clientColNames.includes('preferred_currency')) {
+    db.run("ALTER TABLE clients ADD COLUMN preferred_currency TEXT DEFAULT 'HUF'");
+  }
+  if (!clientColNames.includes('invoice_language')) {
+    db.run("ALTER TABLE clients ADD COLUMN invoice_language TEXT DEFAULT 'hu'");
+  }
+}
+
 function runMigrations() {
   if (!db) throw new Error('Database not initialized');
+
+  // These client columns are referenced by later VAT backfills, so ensure them before any data migration reads them.
+  ensureClientInvoiceColumns();
+
   // Add color column to projects if it doesn't exist
   const cols = db.exec("PRAGMA table_info(projects)");
   const colNames = cols[0]?.values.map(row => row[1]) || [];
@@ -675,6 +755,43 @@ function runMigrations() {
     }
   }
 
+  db.exec(`
+    UPDATE invoices
+    SET
+      vat_rate = 0,
+      net_amount = amount,
+      vat_amount = 0,
+      net_amount_huf = COALESCE(amount_huf, amount),
+      vat_amount_huf = 0
+    WHERE client_id IN (
+      SELECT id FROM clients
+      WHERE UPPER(COALESCE(country_code, 'HU')) NOT IN (
+        'HU', 'AT', 'BE', 'BG', 'HR', 'CY', 'CZ', 'DK', 'EE', 'FI', 'FR',
+        'DE', 'GR', 'IE', 'IT', 'LV', 'LT', 'LU', 'MT', 'NL', 'PL',
+        'PT', 'RO', 'SK', 'SI', 'ES', 'SE'
+      )
+    )
+      AND COALESCE(vat_amount, 0) != 0;
+
+    UPDATE invoices
+    SET
+      vat_rate = 0,
+      net_amount = amount,
+      vat_amount = 0,
+      net_amount_huf = COALESCE(amount_huf, amount),
+      vat_amount_huf = 0
+    WHERE client_id IN (
+      SELECT id FROM clients
+      WHERE UPPER(COALESCE(country_code, 'HU')) IN (
+        'AT', 'BE', 'BG', 'HR', 'CY', 'CZ', 'DK', 'EE', 'FI', 'FR',
+        'DE', 'GR', 'IE', 'IT', 'LV', 'LT', 'LU', 'MT', 'NL', 'PL',
+        'PT', 'RO', 'SK', 'SI', 'ES', 'SE'
+      )
+        AND TRIM(COALESCE(eu_vat_number, '')) != ''
+    )
+      AND COALESCE(vat_amount, 0) != 0;
+  `);
+
   // Seed tax business types and 2026 rules (idempotent via INSERT OR IGNORE)
   db.exec(`
     INSERT OR IGNORE INTO tax_business_types (id, code, name_hu, description, sort_order) VALUES
@@ -736,43 +853,7 @@ function runMigrations() {
     console.log(`[Database] Seeded ${HIPA_RATES.length} HIPA rates`);
   }
 
-  // Client fields for contracts
-  const clientCols = db.exec("PRAGMA table_info(clients)");
-  const clientColNames = clientCols[0]?.values.map(row => row[1]) || [];
-  if (!clientColNames.includes('tax_number')) {
-    db.run("ALTER TABLE clients ADD COLUMN tax_number TEXT DEFAULT ''");
-  }
-  if (!clientColNames.includes('representative_name')) {
-    db.run("ALTER TABLE clients ADD COLUMN representative_name TEXT DEFAULT ''");
-  }
-
-  // Structured address fields for invoicing
-  if (!clientColNames.includes('postal_code')) {
-    db.run("ALTER TABLE clients ADD COLUMN postal_code TEXT DEFAULT ''");
-  }
-  if (!clientColNames.includes('city')) {
-    db.run("ALTER TABLE clients ADD COLUMN city TEXT DEFAULT ''");
-  }
-  if (!clientColNames.includes('street')) {
-    db.run("ALTER TABLE clients ADD COLUMN street TEXT DEFAULT ''");
-  }
-  if (!clientColNames.includes('address_line2')) {
-    db.run("ALTER TABLE clients ADD COLUMN address_line2 TEXT DEFAULT ''");
-  }
-
-  // International client / foreign invoicing fields
-  if (!clientColNames.includes('country_code')) {
-    db.run("ALTER TABLE clients ADD COLUMN country_code TEXT DEFAULT 'HU'");
-  }
-  if (!clientColNames.includes('eu_vat_number')) {
-    db.run("ALTER TABLE clients ADD COLUMN eu_vat_number TEXT DEFAULT ''");
-  }
-  if (!clientColNames.includes('preferred_currency')) {
-    db.run("ALTER TABLE clients ADD COLUMN preferred_currency TEXT DEFAULT 'HUF'");
-  }
-  if (!clientColNames.includes('invoice_language')) {
-    db.run("ALTER TABLE clients ADD COLUMN invoice_language TEXT DEFAULT 'hu'");
-  }
+  ensureClientInvoiceColumns();
 
   // Add billing provider fields to invoices for API-generated invoices
   const invCols3 = db.exec("PRAGMA table_info(invoices)");
@@ -827,9 +908,10 @@ function runMigrations() {
   }
 
   // Add client_id to ads_accounts for linking Ads accounts to Klient clients
+  // Guard: only run if the table exists (ads module may not be present in all builds)
   const adsAccCols = db.exec("PRAGMA table_info(ads_accounts)");
   const adsAccColNames = adsAccCols[0]?.values.map(row => row[1]) || [];
-  if (!adsAccColNames.includes('client_id')) {
+  if (adsAccColNames.length > 0 && !adsAccColNames.includes('client_id')) {
     db.run("ALTER TABLE ads_accounts ADD COLUMN client_id TEXT REFERENCES clients(id) ON DELETE SET NULL");
     db.run("CREATE INDEX IF NOT EXISTS idx_ads_accounts_client ON ads_accounts(client_id)");
   }

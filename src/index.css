@@ -357,6 +357,7 @@ button.rounded-full[style*="background-color"] {
 }
 
 .goal-preset-selected {
+  opacity: 1;
   animation: goal-glow-pulse 2.2s ease-in-out infinite;
 }
 

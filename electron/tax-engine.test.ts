@@ -4,6 +4,8 @@ import {
   calculateVszja,
   calculateTao,
   calculateKiva,
+  calculateKivaPeriod,
+  calculateKivaEstimate,
   calculateHipa,
   calculateFullEstimate,
   compareTaxForms,
@@ -209,6 +211,66 @@ describe('calculateKiva', () => {
     // kivaAlap = max(10M, 5M) = 10M
     expect(r.kivaAlap).toBe(10_000_000);
     expect(r.kiva).toBe(1_000_000);
+  });
+
+  it('calculates a quarter from auto plus manual personal payments and AAN/AACS', () => {
+    const r = calculateKivaPeriod({
+      year: 2026,
+      quarter: 2,
+      autoPersonalPaymentsHuf: 3_000_000,
+      manualPersonalPaymentsHuf: 500_000,
+      personalPaymentsMode: 'auto_plus_manual',
+      adjustments: [
+        { year: 2026, quarter: 2, type: 'AAN', category: 'penztar_novekedes', amountHuf: 400_000 },
+        { year: 2026, quarter: 2, type: 'AACS', category: 'beruhazas_veszteseg', amountHuf: 100_000 },
+      ],
+    }, p2026);
+
+    expect(r.personalPaymentsHuf).toBe(3_500_000);
+    expect(r.baseBeforeMinimumHuf).toBe(3_800_000);
+    expect(r.baseHuf).toBe(3_800_000);
+    expect(r.taxHuf).toBe(380_000);
+    expect(r.completeness).toBe('complete');
+  });
+
+  it('applies the personal payment minimum when AACS would reduce the base below payroll', () => {
+    const r = calculateKivaPeriod({
+      year: 2026,
+      quarter: 3,
+      autoPersonalPaymentsHuf: 3_000_000,
+      manualPersonalPaymentsHuf: null,
+      personalPaymentsMode: 'auto',
+      adjustments: [
+        { year: 2026, quarter: 3, type: 'AACS', category: 'kapott_osztalek', amountHuf: 1_000_000 },
+      ],
+    }, p2026);
+
+    expect(r.baseBeforeMinimumHuf).toBe(2_000_000);
+    expect(r.baseHuf).toBe(3_000_000);
+    expect(r.taxHuf).toBe(300_000);
+  });
+
+  it('settles annual-only corrections against quarterly advances', () => {
+    const periods = ([1, 2, 3, 4] as const).map(quarter => ({
+      year: 2026,
+      quarter,
+      autoPersonalPaymentsHuf: 3_000_000,
+      manualPersonalPaymentsHuf: null,
+      personalPaymentsMode: 'auto' as const,
+      adjustments: [],
+    }));
+
+    const r = calculateKivaEstimate(periods, [
+      { year: 2026, type: 'AAN', category: 'jovahagyott_osztalek', amountHuf: 1_000_000 },
+      { year: 2026, type: 'AACS', category: 'kapott_osztalek', amountHuf: 250_000 },
+    ], p2026);
+
+    expect(r.annualPersonalPaymentsHuf).toBe(12_000_000);
+    expect(r.annualBaseHuf).toBe(12_750_000);
+    expect(r.annualTaxHuf).toBe(1_275_000);
+    expect(r.quarterlyAdvanceTaxHuf).toBe(1_200_000);
+    expect(r.settlementDifferenceHuf).toBe(75_000);
+    expect(r.warnings.map(w => w.type)).toContain('kiva_adjustments_present');
   });
 });
 

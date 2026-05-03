@@ -7,6 +7,7 @@ type Step = 'auth' | 'confirm-email' | 'user_type' | 'platform' | 'tax_profile' 
 type AuthMode = 'login' | 'register' | 'reset';
 type BizType = 'EV' | 'Kft' | 'Bt' | 'Kkt';
 type TaxForm = 'atalany' | 'vszja' | 'TAO' | 'KIVA';
+type VatFrequency = 'havi' | 'negyedeves' | 'eves';
 
 const INVOICE_PLATFORMS = [
   { id: 'billingo', label: 'Billingo', desc: 'Mély integráció API kulccsal' },
@@ -22,6 +23,12 @@ const GOAL_PRESETS = [
   { value: 15_000_000, label: '15M Ft' },
   { value: 25_000_000, label: '25M Ft' },
   { value: 50_000_000, label: '50M Ft' },
+];
+
+const VAT_FREQUENCY_OPTIONS: { value: VatFrequency; label: string; desc: string }[] = [
+  { value: 'havi', label: 'Havi', desc: '1M Ft feletti elszámolandó áfa' },
+  { value: 'negyedeves', label: 'Negyedéves', desc: 'Általános alapbeállítás' },
+  { value: 'eves', label: 'Éves', desc: '250e Ft alatt, feltételekkel' },
 ];
 
 const FEATURES = [
@@ -48,7 +55,7 @@ const getPasswordStrength = (pwd: string) => {
 };
 
 export default function Onboarding() {
-  const { user, login, register, resetPassword, googleLogin, updateUser, checkEmailConfirmed } = useAuth();
+  const { user, login, register, resetPassword, resendConfirmation, googleLogin, updateUser, checkEmailConfirmed } = useAuth();
   const { theme, setTheme } = useTheme();
 
   // If user is logged in but hasn't completed onboarding, start at setup steps
@@ -70,6 +77,7 @@ export default function Onboarding() {
   const [platform, setPlatform] = useState('none');  const [revenueGoal, setRevenueGoal] = useState(10_000_000);
   const [vatStatus, setVatStatus] = useState<'exempt' | 'standard'>('exempt');
   const [vatRateDefault, setVatRateDefault] = useState<number>(27);
+  const [vatFrequency, setVatFrequency] = useState<VatFrequency>('negyedeves');
   // Tax profile
   const [bizType, setBizType] = useState<BizType>('EV');
   const [taxForm, setTaxForm] = useState<TaxForm>('atalany');
@@ -125,23 +133,28 @@ export default function Onboarding() {
           setSubmitting(false);
           return;
         }
-        await register({ name, email, password });
-        // After register, go to email confirmation step
+        const result = await register({ name, email, password });
         setSubmitting(false);
-        animateStep('confirm-email');
+        if (result.requiresEmailConfirmation) {
+          setSuccessMsg(result.message || 'Regisztráció elindítva. Erősítsd meg az email címed, majd folytasd a beállítást.');
+          animateStep('confirm-email');
+        } else {
+          animateStep('user_type');
+        }
         return;
       }
       // login success → move to setup steps
       setSubmitting(false);
       animateStep('user_type');
-    } catch {
-      setError(
-        authMode === 'login'
-          ? 'Hibás email vagy jelszó'
-          : authMode === 'register'
-            ? 'A regisztráció sikertelen. Lehet, hogy ez az email már foglalt.'
-            : 'Hiba történt. Próbáld újra.'
-      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Hiba történt. Próbáld újra.';
+      if (authMode === 'login' && msg.toLowerCase().includes('megerősít')) {
+        setError(msg);
+        setSubmitting(false);
+        animateStep('confirm-email');
+        return;
+      }
+      setError(msg);
       setSubmitting(false);
     }
   };
@@ -202,7 +215,7 @@ export default function Onboarding() {
             koltseghanyad: taxForm === 'atalany' ? 0.40 : 0,
             szakkepzettseg: false,
             aamValasztott: vatStatus === 'exempt',
-            afaBevallas: 'negyedeves',
+            afaBevallas: vatStatus === 'standard' ? vatFrequency : 'negyedeves',
             hipaKulcs: 0,
             hipaTelepules: '',
             hipaEgyszeru: false,
@@ -532,10 +545,26 @@ export default function Onboarding() {
         </button>
 
         {error && <p className="text-red-400 text-xs">{error}</p>}
+        {successMsg && <p className="text-teal text-xs">{successMsg}</p>}
 
-        <p className="text-[11px] text-steel/40">
-          Nem kaptad meg? Nézd meg a spam mappát is.
-        </p>
+        <button
+          onClick={async () => {
+            setEmailCheckLoading(true);
+            setError('');
+            setSuccessMsg('');
+            try {
+              await resendConfirmation(email);
+              setSuccessMsg('Megerősítő email újraküldve. Nézd meg a postaládád és a spam mappát is.');
+            } catch (err) {
+              setError(err instanceof Error ? err.message : 'Nem sikerült újraküldeni a megerősítő emailt.');
+            }
+            setEmailCheckLoading(false);
+          }}
+          disabled={emailCheckLoading}
+          className="text-[11px] text-steel/60 hover:text-cream transition-colors disabled:opacity-40"
+        >
+          Nem kaptad meg? Újraküldés
+        </button>
       </div>
     ),
 
@@ -814,7 +843,7 @@ export default function Onboarding() {
                 <span className={`text-sm font-medium ${vatStatus === 'exempt' ? 'text-cream' : 'text-steel'}`}>AAM</span>
                 {vatStatus === 'exempt' && <Check width={12} height={12} className="text-teal" />}
               </div>
-              <div className="text-[11px] text-steel/60 mt-0.5">Alanyi mentes – max 18M Ft/év</div>
+              <div className="text-[11px] text-steel/60 mt-0.5">Alanyi mentes – max 20M Ft/év</div>
             </button>
             <button
               onClick={() => setVatStatus('standard')}
@@ -849,6 +878,30 @@ export default function Onboarding() {
                   </button>
                 ))}
               </div>
+            </div>
+          )}
+          {vatStatus === 'standard' && (
+            <div className="mt-3">
+              <p className="text-[11px] text-steel/70 mb-1.5">ÁFA bevallás gyakorisága</p>
+              <div className="grid grid-cols-3 gap-1.5">
+                {VAT_FREQUENCY_OPTIONS.map(option => (
+                  <button
+                    key={option.value}
+                    onClick={() => setVatFrequency(option.value)}
+                    className={`text-left px-2.5 py-2 rounded-lg border transition-colors ${
+                      vatFrequency === option.value
+                        ? 'border-teal bg-teal/15'
+                        : 'border-teal/10 bg-surface-800/50 hover:border-teal/25'
+                    }`}
+                  >
+                    <span className={`block text-xs font-medium ${vatFrequency === option.value ? 'text-cream' : 'text-steel'}`}>{option.label}</span>
+                    <span className="block text-[10px] text-steel/55 mt-0.5 leading-snug">{option.desc}</span>
+                  </button>
+                ))}
+              </div>
+              <p className="text-[10px] text-steel/50 mt-1.5 leading-relaxed">
+                A gyakoriságot jellemzően a tárgyévet megelőző második év adatai, az elszámolandó áfa és a közösségi adószám befolyásolja.
+              </p>
             </div>
           )}
         </div>

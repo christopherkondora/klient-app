@@ -195,8 +195,58 @@ export interface TaoResult {
   osszesen: number;
 }
 
+export type KivaCompleteness = 'missing' | 'partial' | 'complete';
+export type KivaPersonalPaymentsMode = 'auto' | 'manual' | 'auto_plus_manual';
+export type KivaAdjustmentType = 'AAN' | 'AACS';
+
+export interface KivaAdjustmentItem {
+  id?: string;
+  year: number;
+  quarter?: 1 | 2 | 3 | 4;
+  type: KivaAdjustmentType;
+  category: string;
+  amountHuf: number;
+  note?: string | null;
+}
+
+export interface KivaPeriodInput {
+  year: number;
+  quarter: 1 | 2 | 3 | 4;
+  autoPersonalPaymentsHuf: number;
+  manualPersonalPaymentsHuf?: number | null;
+  personalPaymentsMode: KivaPersonalPaymentsMode;
+  adjustments: KivaAdjustmentItem[];
+}
+
+export interface KivaPeriodResult {
+  year: number;
+  quarter: 1 | 2 | 3 | 4;
+  personalPaymentsHuf: number;
+  aanTotalHuf: number;
+  aacsTotalHuf: number;
+  baseBeforeMinimumHuf: number;
+  baseHuf: number;
+  taxHuf: number;
+  completeness: KivaCompleteness;
+}
+
+export interface KivaEstimateResult {
+  year: number;
+  periods: KivaPeriodResult[];
+  annualPersonalPaymentsHuf: number;
+  annualAanTotalHuf: number;
+  annualAacsTotalHuf: number;
+  annualBaseBeforeMinimumHuf: number;
+  annualBaseHuf: number;
+  annualTaxHuf: number;
+  quarterlyAdvanceTaxHuf: number;
+  settlementDifferenceHuf: number;
+  completeness: KivaCompleteness;
+  warnings: TaxWarning[];
+}
+
 /** KIVA calculation result */
-export interface KivaResult {
+export interface KivaResult extends KivaEstimateResult {
   szemelyiKifizetesek: number;
   osztalek: number;
   beruhazas: number;
@@ -250,7 +300,21 @@ export interface TaxEstimate {
 
 /** Tax warning / alert */
 export interface TaxWarning {
-  type: 'aam_limit' | 'atalany_limit' | 'deadline' | 'general';
+  type:
+    | 'aam_limit'
+    | 'atalany_limit'
+    | 'deadline'
+    | 'general'
+    | 'kiva_missing_personal_payments'
+    | 'kiva_auto_personal_payments'
+    | 'kiva_manual_override'
+    | 'kiva_adjustments_present'
+    | 'kiva_minimum_base_applied'
+    | 'kiva_external_fees_not_included'
+    | 'kiva_revenue_limit_near'
+    | 'kiva_revenue_limit_exceeded'
+    | 'kiva_employee_limit_near'
+    | 'kiva_employee_limit_exceeded';
   severity: 'info' | 'warning' | 'danger';
   message: string;
 }
@@ -269,4 +333,6 @@ export interface TaxFormComparison {
   label: string;
   osszesen: number;
   reszletek: AtalanyadoResult | VszjaResult | TaoResult | KivaResult;
+  status?: 'ready' | 'needs_data';
+  note?: string;
 }

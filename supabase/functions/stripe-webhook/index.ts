@@ -7,9 +7,38 @@ const BILLINGO_API_KEY = Deno.env.get('BILLINGO_API_KEY') || '';
 const STRIPE_ENV = Deno.env.get('STRIPE_ENV') || 'test';
 const BILLINGO_ENV = Deno.env.get('BILLINGO_ENV') || 'sandbox';
 const BILLINGO_BLOCK_ID = parseInt(Deno.env.get('BILLINGO_BLOCK_ID') || '315117', 10);
+const BILLING_EVENT_TABLE = 'subscription_billing_events';
 
 // Supabase client with service_role (bypasses RLS)
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+
+type BillingModule = 'klient' | 'ads';
+type BillingEventStatus = 'processing' | 'processed' | 'skipped' | 'failed';
+
+interface BillingoInvoiceResult {
+  invoiceId: number;
+  partnerId: number;
+  emailSent: boolean;
+  emailError?: string;
+}
+
+interface BillingEventInput {
+  stripeEventId: string;
+  stripeEventType: string;
+  stripeInvoiceId?: string | null;
+  stripeCheckoutSessionId?: string | null;
+  stripeSubscriptionId?: string | null;
+  userId?: string | null;
+  module: BillingModule;
+  plan?: string | null;
+  customerEmail?: string | null;
+}
+
+interface SubscriptionLookup {
+  userId: string;
+  module: BillingModule;
+  plan: string;
+}
 
 // ─── Billingo API base URL selection ───
 function getBillingoBaseUrl(): string {
@@ -17,6 +46,257 @@ function getBillingoBaseUrl(): string {
   // Test vs production is determined by which API key and Block ID you use.
   // Always use the production API endpoint.
   return 'https://api.billingo.hu/v3';
+}
+
+function readString(value: unknown): string {
+  return typeof value === 'string' ? value : '';
+}
+
+function readObject(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function readMetadata(value: unknown): Record<string, string> {
+  const objectValue = readObject(value);
+  return Object.fromEntries(
+    Object.entries(objectValue).filter(([, entry]) => typeof entry === 'string')
+  ) as Record<string, string>;
+}
+
+function getStripeEventId(event: { id?: string; type: string }, obj: Record<string, unknown>): string {
+  return event.id || `${event.type}:${readString(obj.id)}`;
+}
+
+function getNestedEmail(obj: Record<string, unknown>): string {
+  const customerDetails = readObject(obj.customer_details);
+  return readString(obj.customer_email)
+    || readString(customerDetails.email)
+    || readString(obj.receipt_email);
+}
+
+function getStripeInvoiceAmountHuf(obj: Record<string, unknown>): number {
+  const amount = Number(obj.amount_paid ?? obj.total ?? obj.amount_due ?? 0);
+  if (!Number.isFinite(amount) || amount <= 0) return 0;
+
+  const currency = readString(obj.currency).toUpperCase();
+  if (currency && currency !== 'HUF') {
+    console.warn('[Webhook] Stripe invoice currency is not HUF, using raw amount for Billingo:', {
+      invoice_id: obj.id,
+      currency,
+      amount,
+    });
+  }
+  return Math.round(amount);
+}
+
+function getPlanFromStripeInvoice(obj: Record<string, unknown>, fallbackPlan: string | null | undefined): string {
+  if (fallbackPlan && fallbackPlan !== 'trial') return fallbackPlan;
+
+  const lines = readObject(obj.lines);
+  const data = Array.isArray(lines.data) ? lines.data as Array<Record<string, unknown>> : [];
+  const price = readObject(readObject(data[0]?.price).recurring);
+  return readString(price.interval) === 'year' ? 'yearly' : 'monthly';
+}
+
+async function getAuthUserEmail(userId: string): Promise<string> {
+  const { data, error } = await supabase.auth.admin.getUserById(userId);
+  if (error) {
+    console.error('[Webhook] Could not load auth user email:', { user_id: userId, error });
+    return '';
+  }
+  return data.user?.email || '';
+}
+
+async function findSubscriptionByStripeSubscriptionId(subscriptionId: string): Promise<SubscriptionLookup | null> {
+  const { data: mainSub, error: mainLookupErr } = await supabase
+    .from('subscriptions')
+    .select('user_id, plan')
+    .eq('stripe_subscription_id', subscriptionId)
+    .maybeSingle();
+
+  if (mainSub) {
+    return {
+      userId: mainSub.user_id as string,
+      module: 'klient',
+      plan: (mainSub.plan as string | null) || 'monthly',
+    };
+  }
+
+  const { data: adsSub, error: adsLookupErr } = await supabase
+    .from('subscriptions')
+    .select('user_id, ads_plan')
+    .eq('ads_stripe_subscription_id', subscriptionId)
+    .maybeSingle();
+
+  if (adsSub) {
+    return {
+      userId: adsSub.user_id as string,
+      module: 'ads',
+      plan: (adsSub.ads_plan as string | null) || 'monthly',
+    };
+  }
+
+  console.error('[Webhook] Subscription not found for Stripe subscription:', {
+    subscription_id: subscriptionId,
+    main_error: mainLookupErr,
+    ads_error: adsLookupErr,
+  });
+  return null;
+}
+
+async function beginBillingEvent(input: BillingEventInput): Promise<{ shouldProcess: boolean; tableAvailable: boolean }> {
+  const payload = {
+    stripe_event_id: input.stripeEventId,
+    stripe_event_type: input.stripeEventType,
+    stripe_invoice_id: input.stripeInvoiceId || null,
+    stripe_checkout_session_id: input.stripeCheckoutSessionId || null,
+    stripe_subscription_id: input.stripeSubscriptionId || null,
+    user_id: input.userId || null,
+    module: input.module,
+    plan: input.plan || null,
+    customer_email: input.customerEmail || null,
+    status: 'processing' as BillingEventStatus,
+  };
+
+  const { error } = await supabase.from(BILLING_EVENT_TABLE).insert(payload);
+  if (!error) return { shouldProcess: true, tableAvailable: true };
+
+  if (error.code === '42P01') {
+    console.warn('[Webhook] Billing event table missing; processing without idempotency:', {
+      stripe_event_id: input.stripeEventId,
+    });
+    return { shouldProcess: true, tableAvailable: false };
+  }
+
+  if (error.code === '23505') {
+    const { data: existing, error: selectErr } = await supabase
+      .from(BILLING_EVENT_TABLE)
+      .select('id, status, billingo_invoice_id')
+      .eq('stripe_event_id', input.stripeEventId)
+      .maybeSingle();
+
+    if (selectErr) {
+      console.error('[Webhook] Could not read duplicate billing event:', {
+        stripe_event_id: input.stripeEventId,
+        error: selectErr,
+      });
+      return { shouldProcess: false, tableAvailable: true };
+    }
+
+    let duplicate = existing;
+    if (!duplicate && input.stripeInvoiceId) {
+      const { data: invoiceDuplicate, error: invoiceDuplicateErr } = await supabase
+        .from(BILLING_EVENT_TABLE)
+        .select('id, status, billingo_invoice_id')
+        .eq('stripe_invoice_id', input.stripeInvoiceId)
+        .maybeSingle();
+
+      if (invoiceDuplicateErr) {
+        console.error('[Webhook] Could not read duplicate invoice billing event:', {
+          stripe_invoice_id: input.stripeInvoiceId,
+          error: invoiceDuplicateErr,
+        });
+        return { shouldProcess: false, tableAvailable: true };
+      }
+      duplicate = invoiceDuplicate;
+    }
+
+    if (duplicate?.status === 'failed') {
+      await supabase.from(BILLING_EVENT_TABLE).update({
+        ...payload,
+        error: null,
+        billingo_email_error: null,
+      }).eq('id', duplicate.id);
+      return { shouldProcess: true, tableAvailable: true };
+    }
+
+    console.log('[Webhook] Billing event already handled, skipping duplicate:', {
+      stripe_event_id: input.stripeEventId,
+      stripe_invoice_id: input.stripeInvoiceId,
+      status: duplicate?.status,
+      billingo_invoice_id: duplicate?.billingo_invoice_id,
+    });
+    return { shouldProcess: false, tableAvailable: true };
+  }
+
+  console.error('[Webhook] Could not create billing event log row; processing anyway:', {
+    stripe_event_id: input.stripeEventId,
+    error,
+  });
+  return { shouldProcess: true, tableAvailable: false };
+}
+
+async function finishBillingEvent(stripeEventId: string, patch: {
+  status: BillingEventStatus;
+  billingoInvoiceId?: number;
+  billingoPartnerId?: number;
+  billingoEmailSent?: boolean;
+  billingoEmailError?: string;
+  error?: string;
+}): Promise<void> {
+  const { error } = await supabase.from(BILLING_EVENT_TABLE).update({
+    status: patch.status,
+    billingo_invoice_id: patch.billingoInvoiceId ? String(patch.billingoInvoiceId) : undefined,
+    billingo_partner_id: patch.billingoPartnerId,
+    billingo_email_sent: patch.billingoEmailSent ?? false,
+    billingo_email_error: patch.billingoEmailError || null,
+    error: patch.error || null,
+  }).eq('stripe_event_id', stripeEventId);
+
+  if (error && error.code !== '42P01') {
+    console.error('[Webhook] Could not update billing event log:', { stripe_event_id: stripeEventId, error });
+  }
+}
+
+async function sendBillingoInvoice(invoiceId: number, email: string, userId: string): Promise<{ success: boolean; error?: string }> {
+  if (!email) {
+    return { success: false, error: 'Missing customer email' };
+  }
+
+  try {
+    const sendRes = await fetch(`${getBillingoBaseUrl()}/documents/${invoiceId}/send`, {
+      method: 'POST',
+      headers: {
+        'X-API-KEY': BILLINGO_API_KEY,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ emails: [email] }),
+    });
+
+    if (sendRes.ok) {
+      console.log('[Billingo] Invoice email sent successfully:', {
+        timestamp: new Date().toISOString(),
+        user_id: userId,
+        invoice_id: invoiceId,
+        email,
+      });
+      return { success: true };
+    }
+
+    const errorText = await sendRes.text();
+    console.error('[Billingo] Invoice email send failed:', {
+      timestamp: new Date().toISOString(),
+      user_id: userId,
+      invoice_id: invoiceId,
+      email,
+      status: sendRes.status,
+      status_text: sendRes.statusText,
+      error_detail: errorText,
+    });
+    return { success: false, error: errorText || `HTTP ${sendRes.status}` };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error('[Billingo] Unexpected invoice email send error:', {
+      timestamp: new Date().toISOString(),
+      user_id: userId,
+      invoice_id: invoiceId,
+      email,
+      error: message,
+    });
+    return { success: false, error: message };
+  }
 }
 
 // ─── Stripe signature verification using Web Crypto ───
@@ -59,9 +339,21 @@ async function createBillingoInvoice(params: {
   plan: string;
   amountHuf: number;
   userId: string;
-}): Promise<{ invoiceId: number; partnerId: number } | null> {
+  stripeReference?: string;
+  sendEmail?: boolean;
+}): Promise<BillingoInvoiceResult | null> {
   if (!BILLINGO_API_KEY) {
     console.log('[Billingo] No API key configured, skipping invoice');
+    return null;
+  }
+
+  if (!params.customerEmail) {
+    console.error('[Billingo] Missing customer email, skipping invoice:', {
+      timestamp: new Date().toISOString(),
+      user_id: params.userId,
+      plan: params.plan,
+      amount: params.amountHuf,
+    });
     return null;
   }
 
@@ -175,6 +467,31 @@ async function createBillingoInvoice(params: {
       ads_yearly: 'Klient Ads Éves előfizetés',
     };
 
+    const documentBody: Record<string, unknown> = {
+      partner_id: partnerId,
+      block_id: BILLINGO_BLOCK_ID,
+      type: 'invoice',
+      fulfillment_date: new Date().toISOString().split('T')[0],
+      due_date: new Date().toISOString().split('T')[0],
+      payment_method: 'bankcard',
+      language: 'hu',
+      currency: 'HUF',
+      electronic: true,
+      items: [
+        {
+          name: planNames[params.plan] || 'Klient előfizetés',
+          unit_price: params.amountHuf,
+          unit_price_type: 'net',
+          quantity: 1,
+          unit: 'db',
+          vat: 'AAM',
+        },
+      ],
+    };
+    if (params.stripeReference) {
+      documentBody.vendor_id = params.stripeReference;
+    }
+
     // Create the invoice
     const invoiceRes = await fetch(`${billingoBaseUrl}/documents`, {
       method: 'POST',
@@ -182,31 +499,20 @@ async function createBillingoInvoice(params: {
         'X-API-KEY': BILLINGO_API_KEY,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        partner_id: partnerId,
-        block_id: BILLINGO_BLOCK_ID,
-        type: 'invoice',
-        fulfillment_date: new Date().toISOString().split('T')[0],
-        due_date: new Date().toISOString().split('T')[0],
-        payment_method: 'bankcard',
-        language: 'hu',
-        currency: 'HUF',
-        electronic: true,
-        items: [
-          {
-            name: planNames[params.plan] || 'Klient előfizetés',
-            unit_price: params.amountHuf,
-            unit_price_type: 'net',
-            quantity: 1,
-            unit: 'db',
-            vat: 'AAM',
-          },
-        ],
-      }),
+      body: JSON.stringify(documentBody),
     });
 
     if (invoiceRes.ok) {
       const invoice = await invoiceRes.json();
+      let emailSent = false;
+      let emailError: string | undefined;
+
+      if (params.sendEmail !== false) {
+        const sendResult = await sendBillingoInvoice(invoice.id, params.customerEmail, params.userId);
+        emailSent = sendResult.success;
+        emailError = sendResult.error;
+      }
+
       console.log('[Billingo] Invoice created successfully:', {
         timestamp: new Date().toISOString(),
         user_id: params.userId,
@@ -215,8 +521,9 @@ async function createBillingoInvoice(params: {
         amount: params.amountHuf,
         partner_id: partnerId,
         email: params.customerEmail,
+        email_sent: emailSent,
       });
-      return { invoiceId: invoice.id, partnerId };
+      return { invoiceId: invoice.id, partnerId, emailSent, emailError };
     } else {
       const errorText = await invoiceRes.text();
       console.error('[Billingo] Invoice creation failed:', {
@@ -248,9 +555,9 @@ async function createBillingoInvoice(params: {
 
 // ─── Plan amount mapping ───
 const PLAN_AMOUNTS: Record<string, number> = {
-  monthly: 3990,
-  yearly: 39900,
-  lifetime: 119900,
+  monthly: 4990,
+  yearly: 49900,
+  lifetime: 149900,
 };
 
 const ADS_PLAN_AMOUNTS: Record<string, number> = {
@@ -273,6 +580,7 @@ Deno.serve(async (req) => {
   }
 
   let event: {
+    id?: string;
     type: string;
     data: {
       object: Record<string, unknown>;
@@ -297,12 +605,13 @@ Deno.serve(async (req) => {
       // ── Checkout completed (both subscription and one-time) ──
       case 'checkout.session.completed': {
         const userId = (obj.client_reference_id || (obj.metadata as Record<string, string>)?.user_id) as string;
-        const customerEmail = obj.customer_email as string || '';
+        const customerEmail = getNestedEmail(obj);
         const stripeCustomerId = obj.customer as string || '';
         const mode = obj.mode as string;
-        const metadata = obj.metadata as Record<string, string> || {};
+        const metadata = readMetadata(obj.metadata);
         const plan = metadata.plan || 'monthly';
         const paymentStatus = obj.payment_status as string;
+        const stripeEventId = getStripeEventId(event, obj);
 
         console.log('[Webhook] Checkout completed:', {
           user_id: userId,
@@ -375,17 +684,42 @@ Deno.serve(async (req) => {
           }
 
           // Create Billingo invoice for Ads module
+          const adsBillingEvent = await beginBillingEvent({
+            stripeEventId,
+            stripeEventType: event.type,
+            stripeCheckoutSessionId: readString(obj.id),
+            stripeSubscriptionId: stripeSubId,
+            userId,
+            module: 'ads',
+            plan,
+            customerEmail,
+          });
+          if (!adsBillingEvent.shouldProcess) break;
+
           const adsBillingoResult = await createBillingoInvoice({
             customerEmail,
             plan: `ads_${plan}`,
             amountHuf: ADS_PLAN_AMOUNTS[plan] || 0,
             userId,
+            stripeReference: readString(obj.id),
           });
           if (adsBillingoResult && userId) {
             await supabase.from('subscriptions').update({
               billingo_invoice_id: adsBillingoResult.invoiceId.toString(),
               billingo_partner_id: adsBillingoResult.partnerId,
             }).eq('user_id', userId);
+            await finishBillingEvent(stripeEventId, {
+              status: 'processed',
+              billingoInvoiceId: adsBillingoResult.invoiceId,
+              billingoPartnerId: adsBillingoResult.partnerId,
+              billingoEmailSent: adsBillingoResult.emailSent,
+              billingoEmailError: adsBillingoResult.emailError,
+            });
+          } else {
+            await finishBillingEvent(stripeEventId, {
+              status: 'failed',
+              error: 'Billingo invoice creation failed for Ads checkout',
+            });
           }
           break;
         }
@@ -502,6 +836,18 @@ Deno.serve(async (req) => {
           }
         }
 
+        const billingEvent = await beginBillingEvent({
+          stripeEventId,
+          stripeEventType: event.type,
+          stripeCheckoutSessionId: readString(obj.id),
+          stripeSubscriptionId: mode === 'subscription' ? readString(obj.subscription) : null,
+          userId,
+          module: 'klient',
+          plan,
+          customerEmail,
+        });
+        if (!billingEvent.shouldProcess) break;
+
         // Create Billingo invoice
         console.log('[Webhook] Creating Billingo invoice:', {
           timestamp: new Date().toISOString(),
@@ -515,6 +861,7 @@ Deno.serve(async (req) => {
           plan,
           amountHuf: PLAN_AMOUNTS[plan] || 0,
           userId,
+          stripeReference: readString(obj.id),
         });
 
         // Store Billingo IDs if invoice was created successfully
@@ -541,6 +888,19 @@ Deno.serve(async (req) => {
               partner_id: billingoResult.partnerId,
             });
           }
+
+          await finishBillingEvent(stripeEventId, {
+            status: 'processed',
+            billingoInvoiceId: billingoResult.invoiceId,
+            billingoPartnerId: billingoResult.partnerId,
+            billingoEmailSent: billingoResult.emailSent,
+            billingoEmailError: billingoResult.emailError,
+          });
+        } else {
+          await finishBillingEvent(stripeEventId, {
+            status: 'failed',
+            error: 'Billingo invoice creation failed for checkout',
+          });
         }
 
         break;
@@ -549,7 +909,7 @@ Deno.serve(async (req) => {
       // ── Subscription created or updated ──
       case 'customer.subscription.created':
       case 'customer.subscription.updated': {
-        const metadata = obj.metadata as Record<string, string> || {};
+        const metadata = readMetadata(obj.metadata);
         const userId = metadata.user_id;
         const status = obj.status as string;
         const stripeCustomerId = obj.customer as string || '';
@@ -666,9 +1026,111 @@ Deno.serve(async (req) => {
         break;
       }
 
+      // ── Recurring subscription payment succeeded ──
+      case 'invoice.paid':
+      case 'invoice.payment_succeeded': {
+        const stripeEventId = getStripeEventId(event, obj);
+        const stripeInvoiceId = readString(obj.id);
+        const subscriptionId = readString(obj.subscription);
+        const billingReason = readString(obj.billing_reason);
+
+        console.log('[Webhook] Invoice payment succeeded:', {
+          event: event.type,
+          invoice_id: stripeInvoiceId,
+          subscription_id: subscriptionId,
+          billing_reason: billingReason,
+        });
+
+        if (billingReason !== 'subscription_cycle') {
+          console.log('[Webhook] Skipping non-renewal invoice payment for Billingo:', {
+            invoice_id: stripeInvoiceId,
+            billing_reason: billingReason,
+          });
+          break;
+        }
+
+        if (!subscriptionId) {
+          console.error('[Webhook] No subscription_id in paid invoice');
+          break;
+        }
+
+        const lookup = await findSubscriptionByStripeSubscriptionId(subscriptionId);
+        if (!lookup) break;
+
+        const plan = getPlanFromStripeInvoice(obj, lookup.plan);
+        const amountHuf = getStripeInvoiceAmountHuf(obj) || (
+          lookup.module === 'ads' ? ADS_PLAN_AMOUNTS[plan] || 0 : PLAN_AMOUNTS[plan] || 0
+        );
+        const customerEmail = getNestedEmail(obj) || await getAuthUserEmail(lookup.userId);
+
+        if (!amountHuf) {
+          console.error('[Webhook] Paid invoice has no billable amount, skipping Billingo:', {
+            invoice_id: stripeInvoiceId,
+            subscription_id: subscriptionId,
+            user_id: lookup.userId,
+          });
+          break;
+        }
+
+        const billingEvent = await beginBillingEvent({
+          stripeEventId,
+          stripeEventType: event.type,
+          stripeInvoiceId,
+          stripeSubscriptionId: subscriptionId,
+          userId: lookup.userId,
+          module: lookup.module,
+          plan,
+          customerEmail,
+        });
+        if (!billingEvent.shouldProcess) break;
+
+        const billingoPlan = lookup.module === 'ads' ? `ads_${plan}` : plan;
+        const billingoResult = await createBillingoInvoice({
+          customerEmail,
+          plan: billingoPlan,
+          amountHuf,
+          userId: lookup.userId,
+          stripeReference: stripeInvoiceId,
+        });
+
+        if (billingoResult) {
+          const { error: billingoUpdateErr } = await supabase
+            .from('subscriptions')
+            .update({
+              billingo_invoice_id: billingoResult.invoiceId.toString(),
+              billingo_partner_id: billingoResult.partnerId,
+            })
+            .eq('user_id', lookup.userId);
+
+          if (billingoUpdateErr) {
+            console.error('[Webhook] Failed to store renewal Billingo IDs:', {
+              user_id: lookup.userId,
+              invoice_id: billingoResult.invoiceId,
+              partner_id: billingoResult.partnerId,
+              error: billingoUpdateErr,
+            });
+          }
+
+          await finishBillingEvent(stripeEventId, {
+            status: 'processed',
+            billingoInvoiceId: billingoResult.invoiceId,
+            billingoPartnerId: billingoResult.partnerId,
+            billingoEmailSent: billingoResult.emailSent,
+            billingoEmailError: billingoResult.emailError,
+          });
+        } else {
+          await finishBillingEvent(stripeEventId, {
+            status: 'failed',
+            error: 'Billingo invoice creation failed for recurring Stripe invoice',
+          });
+        }
+
+        break;
+      }
+
       // ── Subscription deleted (cancelled + period ended) ──
       case 'customer.subscription.deleted': {
-        const metadata = obj.metadata as Record<string, string> || {};
+        const metadata = readMetadata(obj.metadata);
         const userId = metadata.user_id;
 
         console.log('[Webhook] Subscription deleted:', {

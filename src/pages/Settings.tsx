@@ -7,6 +7,7 @@ import PageHeader from '../components/PageHeader';
 import { Crown, Check, Zap, User, Palette, SlidersHorizontal, Info, LogOut, KeyRound, Eye, EyeOff, XCircle, RotateCcw, CreditCard, X, Loader2, Receipt, CheckCircle, AlertCircle, Link as LinkIcon, Trash2, Megaphone, Calculator, Building2, FileCheck2, Percent, Briefcase, MapPin, Shield, Edit3 } from 'lucide-react';
 import { version } from '../../package.json';
 import TaxProfileWizard from '../components/TaxProfileWizard';
+import { SUBSCRIPTION_PLANS as PLANS } from '../constants/subscriptionPlans';
 
 // Platform selection now handled in the Számlázás tab
 // const INVOICE_PLATFORMS = [
@@ -16,28 +17,6 @@ import TaxProfileWizard from '../components/TaxProfileWizard';
 //   { id: 'kulcs', label: 'Kulcs-Soft' },
 //   { id: 'none', label: 'Nincs / Egyéb' },
 // ];
-
-const PLANS = [
-  {
-    id: 'monthly' as const,
-    name: 'Havi',
-    price: '3 990 Ft',
-    period: '/hó',
-  },
-  {
-    id: 'yearly' as const,
-    name: 'Éves',
-    price: '39 900 Ft',
-    period: '/év',
-    badge: '2 hónap ingyen',
-  },
-  {
-    id: 'lifetime' as const,
-    name: 'Lifetime',
-    price: '119 900 Ft',
-    period: ' egyszeri',
-  },
-];
 
 type Tab = 'fiok' | 'elofizetes' | 'megjelenes' | 'szamlazas' | 'adozas' | 'altalanos' | 'alkalmazas' | 'ads';
 

@@ -6,6 +6,9 @@ export default function InvoicePdfViewer({ invoice, onClose }: {
 }) {
   if (!invoice.file_path) return null;
 
+  const normalizedPath = invoice.file_path.replace(/\\/g, '/');
+  const fileUrl = `file:///${normalizedPath.replace(/^\/+/, '')}`;
+
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onDoubleClick={onClose}>
       <div className="bg-surface-800 rounded-xl border border-teal/15 shadow-2xl w-[85vw] h-[85vh] flex flex-col overflow-hidden" onDoubleClick={e => e.stopPropagation()}>
@@ -32,7 +35,7 @@ export default function InvoicePdfViewer({ invoice, onClose }: {
           </button>
         </div>
         <webview
-          src={`file://${invoice.file_path}`}
+          src={fileUrl}
           partition="persist:shortcuts"
           className="flex-1"
           style={{ width: '100%', height: '100%' }}

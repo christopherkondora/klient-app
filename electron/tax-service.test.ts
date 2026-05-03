@@ -28,8 +28,33 @@ import {
   getUserTaxSettings,
   setUserTaxSettings,
   getTaxCalculationHistory,
+  calculateAutoKivaPersonalPayments,
+  calculateKivaEstimateForUser,
+  compareTaxFormsService,
   type TaxCalcInput,
 } from './tax-service';
+
+const taxParametersRow2026 = {
+  year: 2026,
+  minimalber_havi: 322_800,
+  garantalt_berminimum_havi: 373_200,
+  szja_kulcs: 0.15,
+  tb_kulcs: 0.185,
+  szocho_kulcs: 0.13,
+  tao_kulcs: 0.09,
+  kiva_kulcs: 0.10,
+  aam_limit: 20_000_000,
+  atalany_altalanos: 0.45,
+  atalany_specialis: 0.80,
+  atalany_kisker: 0.90,
+  atalany_limit_szorzo: 5.167,
+  atalany_adomentes_szorzo: 1,
+  szocho_plafon_szorzo: 24,
+  hipa_max_kulcs: 2.0,
+  afa_standard: 0.27,
+  afa_reduced: 0.18,
+  afa_super_reduced: 0.05,
+};
 
 const mockQueryAll = vi.mocked(queryAll);
 const mockQueryOne = vi.mocked(queryOne);
@@ -283,14 +308,15 @@ describe('calculateTax', () => {
   // ── KIVA ──
 
   describe('kiva', () => {
-    it('calculates KIVA tax at 10% on revenue - expenses', () => {
+    it('does not calculate KIVA from revenue minus expenses without user data', () => {
       setupCalculation('kiva', [{ rate_percent: 10, rate_label: 'base' }]);
       const result = calculateTax({ businessType: 'kiva', year: 2026, revenue: 10_000_000, expenses: 3_000_000 });
 
-      expect(result.taxAmount).toBe(700_000); // (10M - 3M) * 0.10
+      expect(result.taxAmount).toBe(0);
       expect(result.breakdown.appliedRate).toBe(10);
-      expect(result.breakdown.taxableBase).toBe(7_000_000);
+      expect(result.breakdown.taxableBase).toBe(0);
       expect(result.breakdown.appliedRateLabel).toBe('base');
+      expect(result.warnings).toContain('KIVA számításhoz bejelentkezett felhasználó és személyi kifizetési adatok szükségesek.');
     });
 
     it('uses fallback rate 10% when no rule found', () => {
@@ -299,17 +325,17 @@ describe('calculateTax', () => {
       expect(result.breakdown.appliedRate).toBe(10);
     });
 
-    it('floors taxable base to 0 when expenses exceed revenue', () => {
+    it('keeps KIVA base at 0 instead of using revenue and expenses fallback', () => {
       setupCalculation('kiva', [{ rate_percent: 10, rate_label: 'base' }]);
       const result = calculateTax({ businessType: 'kiva', year: 2026, revenue: 1_000_000, expenses: 5_000_000 });
       expect(result.taxAmount).toBe(0);
       expect(result.breakdown.taxableBase).toBe(0);
     });
 
-    it('defaults expenses to 0', () => {
+    it('defaults expenses to 0 in the audit breakdown', () => {
       setupCalculation('kiva', [{ rate_percent: 10, rate_label: 'base' }]);
       const result = calculateTax({ businessType: 'kiva', year: 2026, revenue: 10_000_000 });
-      expect(result.taxAmount).toBe(1_000_000);
+      expect(result.breakdown.deductibleExpenses).toBe(0);
     });
   });
 
@@ -434,11 +460,11 @@ describe('calculateTax', () => {
     });
 
     it('rounds effective rate to 2 decimal places', () => {
-      setupCalculation('kiva', [{ rate_percent: 11, rate_label: 'base' }]);
-      const result = calculateTax({ businessType: 'kiva', year: 2026, revenue: 10_000_000, expenses: 3_000_000 });
+      setupCalculation('kft_tao', [{ rate_percent: 9, rate_label: 'base' }]);
+      const result = calculateTax({ businessType: 'kft_tao', year: 2026, revenue: 10_000_000, expenses: 3_000_000 });
 
-      // effectiveRate = (770000 / 10000000) * 100 = 7.7
-      expect(result.effectiveRate).toBe(7.7);
+      // effectiveRate = (630000 / 10000000) * 100 = 6.3
+      expect(result.effectiveRate).toBe(6.3);
     });
   });
 
@@ -463,8 +489,8 @@ describe('calculateTax', () => {
     });
 
     it('has no warnings when eligible', () => {
-      setupCalculation('kiva', [{ rate_percent: 11, rate_label: 'base' }]);
-      const result = calculateTax({ businessType: 'kiva', year: 2026, revenue: 5_000_000 });
+      setupCalculation('afa', [{ rate_percent: 27, rate_label: 'standard' }]);
+      const result = calculateTax({ businessType: 'afa', year: 2026, revenue: 5_000_000 });
       expect(result.eligible).toBe(true);
       expect(result.warnings).toEqual([]);
     });
@@ -474,16 +500,16 @@ describe('calculateTax', () => {
 
   describe('audit logging', () => {
     it('logs calculation to audit table when user is logged in', () => {
-      setupCalculation('kiva', [{ rate_percent: 11, rate_label: 'base' }]);
+      setupCalculation('afa', [{ rate_percent: 27, rate_label: 'standard' }]);
       mockGetCurrentUserId.mockReturnValue('user-123');
 
-      const result = calculateTax({ businessType: 'kiva', year: 2026, revenue: 10_000_000 });
+      const result = calculateTax({ businessType: 'afa', year: 2026, revenue: 10_000_000 });
 
       expect(mockExecute).toHaveBeenCalledWith(
         expect.stringContaining('INSERT INTO tax_calculations'),
-        expect.arrayContaining(['test-uuid-1234', 'user-123', 'kiva', 2026, 10_000_000, 0, expect.any(Number), expect.any(String)])
+        expect.arrayContaining(['test-uuid-1234', 'user-123', 'afa', 2026, 10_000_000, 0, expect.any(Number), expect.any(String)])
       );
-      expect(result.taxAmount).toBe(1_100_000);
+      expect(result.taxAmount).toBe(2_700_000);
     });
 
     it('does not log when no user is logged in', () => {
@@ -499,11 +525,11 @@ describe('calculateTax', () => {
 
   describe('result structure', () => {
     it('returns all expected fields', () => {
-      setupCalculation('kiva', [{ rate_percent: 11, rate_label: 'base' }]);
-      const result = calculateTax({ businessType: 'kiva', year: 2026, revenue: 10_000_000, expenses: 2_000_000 });
+      setupCalculation('kft_tao', [{ rate_percent: 9, rate_label: 'base' }]);
+      const result = calculateTax({ businessType: 'kft_tao', year: 2026, revenue: 10_000_000, expenses: 2_000_000 });
 
       expect(result).toEqual({
-        businessType: 'kiva',
+        businessType: 'kft_tao',
         year: 2026,
         taxAmount: expect.any(Number),
         effectiveRate: expect.any(Number),
@@ -513,18 +539,130 @@ describe('calculateTax', () => {
           revenue: 10_000_000,
           deductibleExpenses: 2_000_000,
           taxableBase: expect.any(Number),
-          appliedRate: 11,
+          appliedRate: 9,
           appliedRateLabel: 'base',
         },
       });
     });
 
     it('rounds taxAmount to integer', () => {
-      setupCalculation('kiva', [{ rate_percent: 11, rate_label: 'base' }]);
-      const result = calculateTax({ businessType: 'kiva', year: 2026, revenue: 1_000_001 });
+      setupCalculation('afa', [{ rate_percent: 27, rate_label: 'standard' }]);
+      const result = calculateTax({ businessType: 'afa', year: 2026, revenue: 1_000_001 });
       expect(Number.isInteger(result.taxAmount)).toBe(true);
       expect(Number.isInteger(result.breakdown.taxableBase)).toBe(true);
     });
+  });
+});
+
+// ─── KIVA service data ───────────────────────────────────────────
+
+describe('KIVA service data', () => {
+  it('calculates automatic personal payments from monthly employee salaries', () => {
+    mockQueryOne.mockReturnValue({ total: 1_250_000 });
+
+    const result = calculateAutoKivaPersonalPayments('user-123', 2026, 1);
+
+    expect(result).toBe(3_750_000);
+    expect(mockQueryOne).toHaveBeenCalledWith(expect.stringContaining("employment_type = 'employee'"));
+  });
+
+  it('builds an annual KIVA estimate from salary data and AAN/AACS adjustments', () => {
+    mockQueryOne.mockImplementation((sql: string) => {
+      if (sql.includes('tax_parameters')) return taxParametersRow2026;
+      if (sql.includes('SUM(COALESCE(salary_huf')) return { total: 1_000_000 };
+      if (sql.includes('project_assignments')) return { total: 500_000 };
+      return undefined;
+    });
+    mockQueryAll.mockImplementation((sql: string) => {
+      if (sql.includes('kiva_periods')) {
+        return [{
+          id: 'period-q1', user_id: 'user-123', year: 2026, quarter: 1,
+          auto_personal_payments_huf: 0, manual_personal_payments_huf: null,
+          personal_payments_mode: 'auto', calculated_base_huf: 0,
+          calculated_tax_huf: 0, completeness: 'missing', notes: null,
+        }];
+      }
+      if (sql.includes('kiva_adjustments')) {
+        return [
+          { id: 'adj-1', user_id: 'user-123', year: 2026, quarter: 1, type: 'AAN', category: 'penztar_novekedes', amount_huf: 200_000, note: null },
+          { id: 'adj-2', user_id: 'user-123', year: 2026, quarter: null, type: 'AACS', category: 'kapott_osztalek', amount_huf: 100_000, note: null },
+        ];
+      }
+      return [];
+    });
+
+    const result = calculateKivaEstimateForUser('user-123', 2026);
+
+    expect(result).not.toBeNull();
+    expect(result?.annualPersonalPaymentsHuf).toBe(12_000_000);
+    expect(result?.annualAanTotalHuf).toBe(200_000);
+    expect(result?.annualAacsTotalHuf).toBe(100_000);
+    expect(result?.annualBaseHuf).toBe(12_100_000);
+    expect(result?.annualTaxHuf).toBe(1_210_000);
+    expect(result?.quarterlyAdvanceTaxHuf).toBe(1_220_000);
+    expect(result?.settlementDifferenceHuf).toBe(-10_000);
+    expect(result?.warnings.map(w => w.type)).toEqual(expect.arrayContaining(['kiva_adjustments_present', 'kiva_external_fees_not_included']));
+    expect(mockExecute).toHaveBeenCalledWith(expect.stringContaining('UPDATE kiva_periods'), expect.arrayContaining([3_000_000, 3_200_000, 320_000, 'complete', 'period-q1']));
+  });
+});
+
+describe('compareTaxFormsService', () => {
+  it('adds a ready KIVA comparison row for company profiles with payroll data', () => {
+    mockGetCurrentUserId.mockReturnValue('user-123');
+    mockQueryOne.mockImplementation((sql: string) => {
+      if (sql.includes('tax_parameters')) return taxParametersRow2026;
+      if (sql.includes('business_profile')) {
+        return {
+          user_id: 'user-123', vallalkozas_tipus: 'Kft', adozas_forma: 'KIVA', foglalkozas: 'fofoglalkozasu',
+          koltseghanyad: 0.45, szakkepzettseg: 0, aam_valasztott: 0, afa_bevallas: 'negyedeves',
+          hipa_kulcs: 2.0, hipa_telepules: 'Budapest', hipa_egyszeru: 0, adoev: 2026, beallitva: 1,
+        };
+      }
+      if (sql.includes('SUM(COALESCE(salary_huf')) return { total: 1_000_000 };
+      if (sql.includes('project_assignments')) return { total: 0 };
+      return undefined;
+    });
+    mockQueryAll.mockImplementation((sql: string) => {
+      if (sql.includes('kiva_periods') || sql.includes('kiva_adjustments')) return [];
+      return [];
+    });
+
+    const result = compareTaxFormsService(20_000_000, 8_000_000, 2026, 2.0);
+    const kiva = result.find(item => item.forma === 'KIVA');
+
+    expect(kiva).toBeDefined();
+    expect(kiva?.status).toBe('ready');
+    expect(kiva?.note).toContain('KIVA becslés');
+    expect(kiva?.osszesen).toBeGreaterThan(0);
+  });
+
+  it('marks KIVA comparison as needs-data when payroll base is missing', () => {
+    mockGetCurrentUserId.mockReturnValue('user-123');
+    mockQueryOne.mockImplementation((sql: string) => {
+      if (sql.includes('tax_parameters')) return taxParametersRow2026;
+      if (sql.includes('business_profile')) {
+        return {
+          user_id: 'user-123', vallalkozas_tipus: 'Kft', adozas_forma: 'KIVA', foglalkozas: 'fofoglalkozasu',
+          koltseghanyad: 0.45, szakkepzettseg: 0, aam_valasztott: 0, afa_bevallas: 'negyedeves',
+          hipa_kulcs: 2.0, hipa_telepules: 'Budapest', hipa_egyszeru: 0, adoev: 2026, beallitva: 1,
+        };
+      }
+      if (sql.includes('SUM(COALESCE(salary_huf')) return { total: 0 };
+      if (sql.includes('project_assignments')) return { total: 0 };
+      return undefined;
+    });
+    mockQueryAll.mockImplementation((sql: string) => {
+      if (sql.includes('kiva_periods') || sql.includes('kiva_adjustments')) return [];
+      return [];
+    });
+
+    const result = compareTaxFormsService(20_000_000, 8_000_000, 2026, 2.0);
+    const kiva = result.find(item => item.forma === 'KIVA');
+
+    expect(kiva).toBeDefined();
+    expect(kiva?.status).toBe('needs_data');
+    expect(kiva?.note).toContain('Adat szükséges');
+    expect(kiva?.osszesen).toBe(0);
   });
 });
 

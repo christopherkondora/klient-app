@@ -5,7 +5,8 @@ import {
   calculateAtalanyado,
   calculateVszja,
   calculateTao,
-  calculateKiva,
+  calculateHipa,
+  calculateKivaEstimate as calculateKivaEstimateEngine,
   calculateFullEstimate,
   generateTaxDeadlines,
   generateTaxWarnings,
@@ -19,6 +20,11 @@ import type {
   TaxWarning,
   TaxFormComparison,
   HipaRate,
+  KivaAdjustmentItem,
+  KivaEstimateResult,
+  KivaPeriodInput,
+  KivaPersonalPaymentsMode,
+  KivaResult,
 } from './tax-types';
 
 export interface TaxRuleRow {
@@ -61,6 +67,31 @@ export interface TaxCalcResult {
     appliedRate: number;
     appliedRateLabel: string;
   };
+}
+
+interface KivaPeriodRow {
+  id: string;
+  user_id: string;
+  year: number;
+  quarter: number;
+  auto_personal_payments_huf: number;
+  manual_personal_payments_huf: number | null;
+  personal_payments_mode: KivaPersonalPaymentsMode;
+  calculated_base_huf: number;
+  calculated_tax_huf: number;
+  completeness: 'missing' | 'partial' | 'complete';
+  notes: string | null;
+}
+
+interface KivaAdjustmentRow {
+  id: string;
+  user_id: string;
+  year: number;
+  quarter: number | null;
+  type: 'AAN' | 'AACS';
+  category: string;
+  amount_huf: number;
+  note: string | null;
 }
 
 /** Resolve all tax rules for a business type and year */
@@ -137,6 +168,7 @@ export function calculateTax(input: TaxCalcInput): TaxCalcResult {
 
   const rules = resolveTaxRules(businessType, year);
   const eligibility = checkEligibility(businessType, revenue, employeeCount, year);
+  const userId = getCurrentUserId();
 
   const warnings: string[] = [];
   if (!eligibility.eligible) {
@@ -150,12 +182,26 @@ export function calculateTax(input: TaxCalcInput): TaxCalcResult {
 
   switch (businessType) {
     case 'kiva': {
-      // KIVA: 10% on special tax basis (personnel costs + profit adjustments)
-      // Simplified: revenue - expenses as base
       const baseRule = rules.find(r => r.rate_label === 'base');
       appliedRate = baseRule?.rate_percent ?? 10;
-      taxableBase = Math.max(revenue - expenses, 0);
-      taxAmount = taxableBase * (appliedRate / 100);
+      appliedRateLabel = 'base';
+
+      if (userId) {
+        const estimate = calculateKivaEstimateForUser(userId, year);
+        if (estimate) {
+          taxableBase = estimate.annualBaseHuf;
+          taxAmount = estimate.annualTaxHuf;
+          warnings.push(...estimate.warnings.map(w => w.message));
+        } else {
+          taxableBase = 0;
+          taxAmount = 0;
+          warnings.push('KIVA számításhoz hiányoznak az adóparaméterek vagy a KIVA profil.');
+        }
+      } else {
+        taxableBase = 0;
+        taxAmount = 0;
+        warnings.push('KIVA számításhoz bejelentkezett felhasználó és személyi kifizetési adatok szükségesek.');
+      }
       appliedRateLabel = 'base';
       break;
     }
@@ -219,7 +265,6 @@ export function calculateTax(input: TaxCalcInput): TaxCalcResult {
   const effectiveRate = revenue > 0 ? (taxAmount / revenue) * 100 : 0;
 
   // Log calculation to audit table
-  const userId = getCurrentUserId();
   if (userId) {
     const result: TaxCalcResult = {
       businessType,
@@ -330,6 +375,200 @@ export function getTaxCalculationHistory(limit: number = 50) {
     'SELECT * FROM tax_calculations WHERE user_id = ? ORDER BY created_at DESC LIMIT ?',
     [userId, limit]
   );
+}
+
+// ── KIVA service functions ──
+
+export function calculateAutoKivaPersonalPayments(userId: string, year: number, quarter: 1 | 2 | 3 | 4): number {
+  void userId;
+  void year;
+  void quarter;
+  const row = queryOne(
+    `SELECT COALESCE(SUM(COALESCE(salary_huf, monthly_salary, 0)), 0) as total
+     FROM team_members
+     WHERE employment_type = 'employee'
+       AND (status IS NULL OR status = 'active')
+       AND COALESCE(salary_huf, monthly_salary, 0) > 0`
+  ) as Record<string, number> | undefined;
+  return Math.round((row?.total ?? 0) * 3);
+}
+
+export function getKivaPeriods(userId: string | undefined, year: number): KivaPeriodRow[] {
+  const uid = userId ?? getCurrentUserId();
+  if (!uid) return [];
+  return queryAll(
+    `SELECT * FROM kiva_periods WHERE user_id = ? AND year = ? ORDER BY quarter ASC`,
+    [uid, year]
+  ) as unknown as KivaPeriodRow[];
+}
+
+export function saveKivaPeriod(userId: string | undefined, input: Pick<KivaPeriodInput, 'year' | 'quarter' | 'manualPersonalPaymentsHuf' | 'personalPaymentsMode'> & { notes?: string | null }): KivaPeriodRow | null {
+  const uid = userId ?? getCurrentUserId();
+  if (!uid) throw new Error('No user logged in');
+
+  const existing = queryOne(
+    `SELECT id FROM kiva_periods WHERE user_id = ? AND year = ? AND quarter = ?`,
+    [uid, input.year, input.quarter]
+  ) as { id: string } | undefined;
+
+  const autoPersonalPayments = calculateAutoKivaPersonalPayments(uid, input.year, input.quarter);
+  const manualPersonalPayments = input.manualPersonalPaymentsHuf ?? null;
+  const mode = input.personalPaymentsMode ?? 'auto';
+
+  if (existing) {
+    execute(
+      `UPDATE kiva_periods SET
+        auto_personal_payments_huf = ?, manual_personal_payments_huf = ?, personal_payments_mode = ?,
+        notes = ?, updated_at = datetime('now')
+       WHERE id = ?`,
+      [autoPersonalPayments, manualPersonalPayments, mode, input.notes ?? null, existing.id]
+    );
+  } else {
+    execute(
+      `INSERT INTO kiva_periods (
+        id, user_id, year, quarter, auto_personal_payments_huf,
+        manual_personal_payments_huf, personal_payments_mode, notes
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [uuidv4(), uid, input.year, input.quarter, autoPersonalPayments, manualPersonalPayments, mode, input.notes ?? null]
+    );
+  }
+
+  calculateKivaEstimateForUser(uid, input.year);
+  return queryOne(
+    `SELECT * FROM kiva_periods WHERE user_id = ? AND year = ? AND quarter = ?`,
+    [uid, input.year, input.quarter]
+  ) as unknown as KivaPeriodRow | null;
+}
+
+export function getKivaAdjustments(userId: string | undefined, year: number): KivaAdjustmentRow[] {
+  const uid = userId ?? getCurrentUserId();
+  if (!uid) return [];
+  return queryAll(
+    `SELECT * FROM kiva_adjustments WHERE user_id = ? AND year = ? ORDER BY quarter ASC, created_at ASC`,
+    [uid, year]
+  ) as unknown as KivaAdjustmentRow[];
+}
+
+export function createKivaAdjustment(userId: string | undefined, item: Omit<KivaAdjustmentItem, 'id'>): KivaAdjustmentRow | null {
+  const uid = userId ?? getCurrentUserId();
+  if (!uid) throw new Error('No user logged in');
+  const id = uuidv4();
+  execute(
+    `INSERT INTO kiva_adjustments (id, user_id, year, quarter, type, category, amount_huf, note)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [id, uid, item.year, item.quarter ?? null, item.type, item.category, item.amountHuf, item.note ?? null]
+  );
+  calculateKivaEstimateForUser(uid, item.year);
+  return queryOne(`SELECT * FROM kiva_adjustments WHERE id = ?`, [id]) as unknown as KivaAdjustmentRow | null;
+}
+
+export function updateKivaAdjustment(userId: string | undefined, id: string, patch: Partial<Omit<KivaAdjustmentItem, 'id'>>): KivaAdjustmentRow | null {
+  const uid = userId ?? getCurrentUserId();
+  if (!uid) throw new Error('No user logged in');
+  const allowedFields: Record<string, unknown> = {};
+  if ('year' in patch) allowedFields.year = patch.year;
+  if ('quarter' in patch) allowedFields.quarter = patch.quarter ?? null;
+  if ('type' in patch) allowedFields.type = patch.type;
+  if ('category' in patch) allowedFields.category = patch.category;
+  if ('amountHuf' in patch) allowedFields.amount_huf = patch.amountHuf;
+  if ('note' in patch) allowedFields.note = patch.note ?? null;
+
+  const fields = Object.keys(allowedFields).map(key => `${key} = ?`).join(', ');
+  if (fields) {
+    execute(
+      `UPDATE kiva_adjustments SET ${fields}, updated_at = datetime('now') WHERE id = ? AND user_id = ?`,
+      [...Object.values(allowedFields), id, uid]
+    );
+  }
+  const row = queryOne(`SELECT * FROM kiva_adjustments WHERE id = ? AND user_id = ?`, [id, uid]) as unknown as KivaAdjustmentRow | null;
+  if (row) calculateKivaEstimateForUser(uid, row.year);
+  return row;
+}
+
+export function deleteKivaAdjustment(userId: string | undefined, id: string): { success: boolean } {
+  const uid = userId ?? getCurrentUserId();
+  if (!uid) throw new Error('No user logged in');
+  execute(`DELETE FROM kiva_adjustments WHERE id = ? AND user_id = ?`, [id, uid]);
+  return { success: true };
+}
+
+export function calculateKivaEstimateForUser(userId: string | undefined, year: number): KivaEstimateResult | null {
+  const uid = userId ?? getCurrentUserId();
+  if (!uid) return null;
+  const params = getTaxParameters(year);
+  if (!params) return null;
+
+  const rows = getKivaPeriods(uid, year);
+  const rowByQuarter = new Map(rows.map(row => [row.quarter, row]));
+  const adjustments = getKivaAdjustments(uid, year).map(mapKivaAdjustmentRow);
+  const periodInputs: KivaPeriodInput[] = ([1, 2, 3, 4] as const).map(quarter => {
+    const row = rowByQuarter.get(quarter);
+    return {
+      year,
+      quarter,
+      autoPersonalPaymentsHuf: calculateAutoKivaPersonalPayments(uid, year, quarter),
+      manualPersonalPaymentsHuf: row?.manual_personal_payments_huf ?? null,
+      personalPaymentsMode: row?.personal_payments_mode ?? 'auto',
+      adjustments: adjustments.filter(adjustment => adjustment.quarter === quarter),
+    };
+  });
+  const annualAdjustments = adjustments.filter(adjustment => adjustment.quarter === undefined);
+  const estimate = calculateKivaEstimateEngine(periodInputs, annualAdjustments, params);
+
+  for (const period of estimate.periods) {
+    const row = rowByQuarter.get(period.quarter);
+    if (!row) continue;
+    execute(
+      `UPDATE kiva_periods SET
+        auto_personal_payments_huf = ?, calculated_base_huf = ?, calculated_tax_huf = ?,
+        completeness = ?, updated_at = datetime('now')
+       WHERE id = ?`,
+      [periodInputs[period.quarter - 1].autoPersonalPaymentsHuf, period.baseHuf, period.taxHuf, period.completeness, row.id]
+    );
+  }
+
+  const externalFees = queryOne(
+    `SELECT COALESCE(SUM(COALESCE(pa.fee_huf, pa.fee, 0)), 0) as total
+     FROM project_assignments pa
+     JOIN team_members tm ON pa.team_member_id = tm.id
+     WHERE tm.employment_type IN ('contractor', 'freelancer')
+       AND pa.fee IS NOT NULL
+       AND strftime('%Y', pa.assigned_at) = ?`,
+    [String(year)]
+  ) as Record<string, number> | undefined;
+  if ((externalFees?.total ?? 0) > 0) {
+    estimate.warnings.push({
+      type: 'kiva_external_fees_not_included',
+      severity: 'info',
+      message: 'KIVA: a külsős/projektdíjak nincsenek automatikusan személyi jellegű kifizetésként beszámítva.',
+    });
+  }
+
+  return estimate;
+}
+
+function mapKivaAdjustmentRow(row: KivaAdjustmentRow): KivaAdjustmentItem {
+  return {
+    id: row.id,
+    year: row.year,
+    quarter: row.quarter === null ? undefined : row.quarter as 1 | 2 | 3 | 4,
+    type: row.type,
+    category: row.category,
+    amountHuf: row.amount_huf,
+    note: row.note,
+  };
+}
+
+function toKivaResult(estimate: KivaEstimateResult): KivaResult {
+  return {
+    ...estimate,
+    szemelyiKifizetesek: estimate.annualPersonalPaymentsHuf,
+    osztalek: estimate.annualAanTotalHuf,
+    beruhazas: estimate.annualAacsTotalHuf,
+    kivaAlap: estimate.annualBaseHuf,
+    kiva: estimate.annualTaxHuf,
+    osszesen: estimate.annualTaxHuf,
+  };
 }
 
 // ── New service functions ──
@@ -459,6 +698,45 @@ export function getFullTaxEstimate(userId: string | undefined, adoev: number, ev
   const params = getTaxParameters(adoev);
   if (!params) return null;
 
+  if (profil.adozasForma === 'KIVA') {
+    const kivaEstimate = calculateKivaEstimateForUser(uid, adoev);
+    if (!kivaEstimate) return null;
+    const kivaResult = toKivaResult(kivaEstimate);
+    const hipaReszletek = profil.hipaKulcs > 0
+      ? calculateHipa(evesBevétel, profil, profil.hipaKulcs, params, kivaEstimate.annualBaseHuf)
+      : null;
+    const hipa = hipaReszletek?.osszeg ?? 0;
+    const totalPeriodTax = kivaEstimate.periods.reduce((sum, period) => sum + period.taxHuf, 0) || 1;
+    const negyedevek = kivaEstimate.periods.map(period => {
+      const ratio = period.taxHuf / totalPeriodTax;
+      const qHipa = Math.round(hipa * ratio);
+      return {
+        quarter: period.quarter,
+        bevétel: Math.round(evesBevétel / 4),
+        szja: 0,
+        tb: 0,
+        szocho: 0,
+        hipa: qHipa,
+        osszesen: period.taxHuf + qHipa,
+      };
+    });
+
+    return {
+      adoev,
+      profil,
+      evesBevétel,
+      szja: 0,
+      tb: 0,
+      szocho: 0,
+      hipa,
+      egyebAdo: kivaEstimate.annualTaxHuf,
+      osszesen: kivaEstimate.annualTaxHuf + hipa,
+      negyedevek,
+      reszletek: kivaResult,
+      hipaReszletek,
+    };
+  }
+
   return calculateFullEstimate(evesBevétel, profil, params);
 }
 
@@ -484,7 +762,12 @@ export function getTaxWarnings(userId: string | undefined, bevétel: number, ado
   const params = getTaxParameters(adoev);
   if (!params) return [];
 
-  return generateTaxWarnings(bevétel, profil, params);
+  const warnings = generateTaxWarnings(bevétel, profil, params);
+  if (profil.adozasForma === 'KIVA') {
+    const kivaEstimate = calculateKivaEstimateForUser(uid, adoev);
+    warnings.push(...(kivaEstimate?.warnings ?? []));
+  }
+  return warnings;
 }
 
 /** Compare tax forms for a user */
@@ -504,7 +787,49 @@ export function compareTaxFormsService(
     ? { foglalkozas: profil.foglalkozas, szakkepzettseg: profil.szakkepzettseg, koltseghanyad: profil.koltseghanyad }
     : { foglalkozas: 'fofoglalkozasu' as const, szakkepzettseg: false, koltseghanyad: params.atalanyAltalanos };
 
-  return compareTaxForms(bevétel, koltsegek, params, hipaKulcs, profilFields, kivet);
+  const comparisons = compareTaxForms(bevétel, koltsegek, params, hipaKulcs, profilFields, kivet);
+
+  if (profil && uid && profil.vallalkozasTipus !== 'EV') {
+    const kivaEstimate = calculateKivaEstimateForUser(uid, adoev);
+    const missingKivaResult: KivaResult = {
+      year: adoev,
+      periods: [],
+      annualPersonalPaymentsHuf: 0,
+      annualAanTotalHuf: 0,
+      annualAacsTotalHuf: 0,
+      annualBaseBeforeMinimumHuf: 0,
+      annualBaseHuf: 0,
+      annualTaxHuf: 0,
+      quarterlyAdvanceTaxHuf: 0,
+      settlementDifferenceHuf: 0,
+      completeness: 'missing',
+      warnings: [],
+      szemelyiKifizetesek: 0,
+      osztalek: 0,
+      beruhazas: 0,
+      kivaAlap: 0,
+      kiva: 0,
+      osszesen: 0,
+    };
+
+    const ready = !!kivaEstimate && kivaEstimate.completeness !== 'missing';
+    const kivaHipa = ready
+      ? calculateHipa(bevétel, profil, hipaKulcs, params, kivaEstimate.annualBaseHuf).osszeg
+      : 0;
+
+    comparisons.push({
+      forma: 'KIVA',
+      label: `KIVA (${profil.vallalkozasTipus})`,
+      osszesen: ready && kivaEstimate ? kivaEstimate.annualTaxHuf + kivaHipa : 0,
+      reszletek: kivaEstimate ? toKivaResult(kivaEstimate) : missingKivaResult,
+      status: ready ? 'ready' : 'needs_data',
+      note: ready
+        ? 'A KIVA becslés a rögzített személyi jellegű kifizetéseket és AAN/AACS korrekciókat használja.'
+        : 'Adat szükséges: a KIVA összehasonlításhoz személyi jellegű kifizetés vagy AAN/AACS korrekció kell.',
+    });
+  }
+
+  return comparisons;
 }
 
 /** Sync tax deadlines into calendar_events.

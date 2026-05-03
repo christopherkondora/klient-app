@@ -4,10 +4,11 @@ interface AuthContextType {
   user: UserSettings | null;
   loading: boolean;
   login: (email: string, password: string) => Promise<void>;
-  register: (data: { name: string; email: string; password: string; invoice_platform?: string }) => Promise<void>;
+  register: (data: { name: string; email: string; password: string; invoice_platform?: string }) => Promise<AuthRegisterResult>;
   updateUser: (data: Partial<UserSettings>) => Promise<void>;
   logout: () => Promise<void>;
   resetPassword: (email: string) => Promise<void>;
+  resendConfirmation: (email: string) => Promise<void>;
   changePassword: (currentPassword: string, newPassword: string) => Promise<void>;
   googleLogin: () => Promise<void>;
   checkEmailConfirmed: (email: string, password: string) => Promise<boolean>;
@@ -17,10 +18,11 @@ const AuthContext = createContext<AuthContextType>({
   user: null,
   loading: true,
   login: async () => {},
-  register: async () => {},
+  register: async () => ({ requiresEmailConfirmation: true }),
   updateUser: async () => {},
   logout: async () => {},
   resetPassword: async () => {},
+  resendConfirmation: async () => {},
   changePassword: async () => {},
   googleLogin: async () => {},
   checkEmailConfirmed: async () => false,
@@ -45,8 +47,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const register = async (data: { name: string; email: string; password: string; invoice_platform?: string }) => {
-    const u = await window.electronAPI.registerUser(data);
-    setUser(u);
+    const result = await window.electronAPI.registerUser(data);
+    if (result.user) setUser(result.user);
+    return result;
   };
 
   const updateUser = async (data: Partial<UserSettings>) => {
@@ -62,6 +65,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const resetPassword = async (email: string) => {
     await window.electronAPI.resetPassword(email);
+  };
+
+  const resendConfirmation = async (email: string) => {
+    await window.electronAPI.resendConfirmation(email);
   };
 
   const changePassword = async (currentPassword: string, newPassword: string) => {
@@ -82,7 +89,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, register, updateUser, logout, resetPassword, changePassword, googleLogin, checkEmailConfirmed }}>
+    <AuthContext.Provider value={{ user, loading, login, register, updateUser, logout, resetPassword, resendConfirmation, changePassword, googleLogin, checkEmailConfirmed }}>
       {children}
     </AuthContext.Provider>
   );

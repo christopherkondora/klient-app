@@ -7,6 +7,7 @@ const ENDPOINT = 'https://www.szamlazz.hu/szamla/';
 
 export interface SzamlazzBuyerData {
   name: string;
+  countryCode?: string;
   zip: string;
   city: string;
   address: string;
@@ -20,7 +21,7 @@ export interface SzamlazzInvoiceItem {
   quantity: number;
   unit: string;
   netUnitPrice: number;
-  /** Százalékban (pl. 27) vagy szöveges kód (pl. "AAM", "TAM", "EU"). */
+  /** Százalékban (pl. 27) vagy szöveges kód (pl. "AAM", "TAM", "EU", "EUK"). */
   vatRate: number | string;
 }
 
@@ -125,6 +126,7 @@ export function buildInvoiceXml(request: SzamlazzInvoiceRequest, agentKey: strin
 
   const buyerBlock = [
     tag('nev', request.buyer.name),
+    ...(request.buyer.countryCode ? [tag('orszag', request.buyer.countryCode)] : []),
     tag('irsz', request.buyer.zip),
     tag('telepules', request.buyer.city),
     tag('cim', request.buyer.address),

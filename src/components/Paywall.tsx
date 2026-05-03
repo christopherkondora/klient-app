@@ -2,34 +2,26 @@ import { useState, useEffect, useRef } from 'react';
 import { useSubscription } from '../contexts/SubscriptionContext';
 import { useAuth } from '../contexts/AuthContext';
 import { Crown, Zap, Check, Loader2, Sparkles, X, CreditCard } from 'lucide-react';
+import { SUBSCRIPTION_PLANS } from '../constants/subscriptionPlans';
 
 const PLANS = [
   {
-    id: 'monthly' as const,
-    name: 'Havi',
-    price: '3 990 Ft',
-    period: '/hó',
+    ...SUBSCRIPTION_PLANS[0],
     features: ['Korlátlan ügyfelek', 'Korlátlan projektek', 'AI funkciók', 'Fájlkezelés'],
     highlight: false,
   },
   {
-    id: 'yearly' as const,
-    name: 'Éves',
-    price: '39 900 Ft',
-    period: '/év',
+    ...SUBSCRIPTION_PLANS[1],
     badge: 'Népszerű',
     features: ['Minden havi funkció', '2 hónap ingyen', 'Prioritásos támogatás', 'Korai hozzáférés'],
     highlight: true,
   },
   {
-    id: 'lifetime' as const,
-    name: 'Lifetime',
-    price: '119 900 Ft',
-    period: ' egyszeri',
+    ...SUBSCRIPTION_PLANS[2],
     features: ['Örökös hozzáférés', 'Minden jövőbeli frissítés', 'VIP támogatás', 'Korai béta hozzáférés'],
     highlight: false,
   },
-];
+] as const;
 
 const CELEBRATION_COLORS = ['#124559', '#598392', '#AEC3B0', '#EFF6E0', '#10B981', '#F59E0B', '#EC4899', '#8B5CF6'];
 const CONFETTI_PARTICLES = Array.from({ length: 40 }, (_, i) => ({

@@ -298,6 +298,7 @@ async function createSzamlazzInvoice(request: InvoiceRequest): Promise<InvoiceRe
     language,
     buyer: {
       name: request.clientName,
+      countryCode: request.clientCountryCode,
       zip: addr.post_code,
       city: addr.city,
       address: addr.address,

@@ -9,10 +9,11 @@ interface ElectronAPI {
 
   // User / Auth
   getUser: () => Promise<UserSettings | null>;
-  registerUser: (data: { name: string; email: string; password: string; invoice_platform?: string; onboarding_complete?: boolean }) => Promise<UserSettings>;
+  registerUser: (data: { name: string; email: string; password: string; invoice_platform?: string; onboarding_complete?: boolean }) => Promise<AuthRegisterResult>;
   loginUser: (data: { email: string; password: string }) => Promise<UserSettings>;
   logoutUser: () => Promise<{ success: boolean }>;
   resetPassword: (email: string) => Promise<{ success: boolean }>;
+  resendConfirmation: (email: string) => Promise<{ success: boolean }>;
   changePassword: (data: { currentPassword: string; newPassword: string }) => Promise<{ success: boolean }>;
   checkEmailConfirmed: (data: { email: string; password: string }) => Promise<{ confirmed: boolean; user?: UserSettings }>;
   googleAuth: () => Promise<UserSettings>;
@@ -175,6 +176,13 @@ interface ElectronAPI {
   getTaxDeadlines: (userId: string | undefined, adoev: number) => Promise<TaxDeadlineRow[]>;
   getTaxWarnings: (userId: string | undefined, bevétel: number, adoev: number) => Promise<TaxWarningRow[]>;
   compareTaxForms: (bevétel: number, koltsegek: number, adoev: number, hipaKulcs: number, kivet?: number) => Promise<TaxFormComparisonRow[]>;
+  getKivaPeriods: (userId: string | undefined, year: number) => Promise<KivaPeriodRow[]>;
+  saveKivaPeriod: (userId: string | undefined, input: KivaPeriodSaveInput) => Promise<KivaPeriodRow | null>;
+  getKivaAdjustments: (userId: string | undefined, year: number) => Promise<KivaAdjustmentRow[]>;
+  createKivaAdjustment: (userId: string | undefined, item: KivaAdjustmentInput) => Promise<KivaAdjustmentRow | null>;
+  updateKivaAdjustment: (userId: string | undefined, id: string, patch: Partial<KivaAdjustmentInput>) => Promise<KivaAdjustmentRow | null>;
+  deleteKivaAdjustment: (userId: string | undefined, id: string) => Promise<{ success: boolean }>;
+  getKivaEstimate: (userId: string | undefined, year: number) => Promise<KivaEstimateRow | null>;
 
   // Billing / Invoicing config
   setBillingConfig: (data: { platform: string; apiKey?: string; url?: string }) => Promise<{ success: boolean }>;
@@ -188,6 +196,7 @@ interface ElectronAPI {
   billingoEnsurePartner: (clientData: BillingoPartnerInput) => Promise<{ success: boolean; partnerId?: number; error?: string }>;
   billingoCreateInvoice: (request: BillingoInvoiceInput) => Promise<{ success: boolean; data?: BillingoInvoiceResult; error?: string }>;
   billingoGetPdf: (invoiceId: number) => Promise<{ success: boolean; data?: string; error?: string }>;
+  ensureInvoicePdf: (data: EnsureInvoicePdfInput) => Promise<{ success: boolean; filePath?: string; error?: string }>;
   billingoCancelInvoice: (invoiceId: number) => Promise<{ success: boolean; error?: string }>;
   billingoGetStatus: (invoiceId: number) => Promise<{ success: boolean; status?: string; error?: string }>;
 
@@ -253,6 +262,7 @@ interface UnifiedInvoiceResult {
 
 interface SzamlazzBuyerData {
   name: string;
+  countryCode?: string;
   zip: string;
   city: string;
   address: string;
@@ -266,7 +276,7 @@ interface SzamlazzInvoiceItemInput {
   quantity: number;
   unit: string;
   netUnitPrice: number;
-  vatRate: number;
+  vatRate: number | string;
 }
 
 interface SzamlazzInvoiceInput {
@@ -280,6 +290,7 @@ interface SzamlazzInvoiceInput {
   items: SzamlazzInvoiceItemInput[];
   sellerBankName?: string;
   sellerBankAccount?: string;
+  comment?: string;
 }
 
 interface SzamlazzInvoiceResult {
@@ -714,6 +725,22 @@ interface UserSettings {
   created_at: string;
 }
 
+interface AuthRegisterResult {
+  requiresEmailConfirmation: boolean;
+  email?: string;
+  message?: string;
+  user?: UserSettings;
+}
+
+interface EnsureInvoicePdfInput {
+  invoiceId?: string;
+  filePath?: string | null;
+  provider?: string | null;
+  providerInvoiceId?: string | null;
+  clientName?: string | null;
+  invoiceNumber?: string | null;
+}
+
 interface Subscription {
   id: string;
   user_id: string;
@@ -790,6 +817,79 @@ interface TaxCalculationRow {
   tax_amount: number;
   calculation_json: string;
   created_at: string;
+}
+
+type KivaCompleteness = 'missing' | 'partial' | 'complete';
+type KivaPersonalPaymentsMode = 'auto' | 'manual' | 'auto_plus_manual';
+type KivaAdjustmentType = 'AAN' | 'AACS';
+
+interface KivaPeriodRow {
+  id: string;
+  user_id: string;
+  year: number;
+  quarter: 1 | 2 | 3 | 4;
+  auto_personal_payments_huf: number;
+  manual_personal_payments_huf: number | null;
+  personal_payments_mode: KivaPersonalPaymentsMode;
+  calculated_base_huf: number;
+  calculated_tax_huf: number;
+  completeness: KivaCompleteness;
+  notes: string | null;
+}
+
+interface KivaPeriodSaveInput {
+  year: number;
+  quarter: 1 | 2 | 3 | 4;
+  manualPersonalPaymentsHuf?: number | null;
+  personalPaymentsMode: KivaPersonalPaymentsMode;
+  notes?: string | null;
+}
+
+interface KivaAdjustmentRow {
+  id: string;
+  user_id: string;
+  year: number;
+  quarter: 1 | 2 | 3 | 4 | null;
+  type: KivaAdjustmentType;
+  category: string;
+  amount_huf: number;
+  note: string | null;
+}
+
+interface KivaAdjustmentInput {
+  year: number;
+  quarter?: 1 | 2 | 3 | 4;
+  type: KivaAdjustmentType;
+  category: string;
+  amountHuf: number;
+  note?: string | null;
+}
+
+interface KivaPeriodResultRow {
+  year: number;
+  quarter: 1 | 2 | 3 | 4;
+  personalPaymentsHuf: number;
+  aanTotalHuf: number;
+  aacsTotalHuf: number;
+  baseBeforeMinimumHuf: number;
+  baseHuf: number;
+  taxHuf: number;
+  completeness: KivaCompleteness;
+}
+
+interface KivaEstimateRow {
+  year: number;
+  periods: KivaPeriodResultRow[];
+  annualPersonalPaymentsHuf: number;
+  annualAanTotalHuf: number;
+  annualAacsTotalHuf: number;
+  annualBaseBeforeMinimumHuf: number;
+  annualBaseHuf: number;
+  annualTaxHuf: number;
+  quarterlyAdvanceTaxHuf: number;
+  settlementDifferenceHuf: number;
+  completeness: KivaCompleteness;
+  warnings: TaxWarningRow[];
 }
 
 // Tax module types
@@ -878,6 +978,8 @@ interface TaxFormComparisonRow {
   label: string;
   osszesen: number;
   reszletek: Record<string, unknown>;
+  status?: 'ready' | 'needs_data';
+  note?: string;
 }
 
 interface Window {

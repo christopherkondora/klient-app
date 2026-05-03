@@ -65,7 +65,7 @@ Deno.serve(async (req) => {
             role: 'system',
             content: `Kiadás-adatkinyerő asszisztens vagy. Egy PDF számla vagy bizonylat alapján kinyered a kiadás adatait JSON formátumban:
 - name: a kiadás neve/leírása (string, pl. "Figma éves előfizetés", "irodabérlés", "domain megújítás"). Ha van alap előfizetés + extra usage, a name az alap előfizetés legyen.
-- amount: az alap előfizetési díj összege számként (number vagy null) - bruttó. Ha nincs külön előfizetés és usage bontás, akkor a teljes végösszeg.
+- amount: a fizetendő bruttó összeg számként (number vagy null). Elsődlegesen a számla "Total", "Amount due", "Balance due", "Total including tax" vagy ezekkel egyenértékű végösszeg mezőjét használd. Ha van ÁFA/tax/VAT/sales tax, az amount mindig tartalmazza az adót. Ne a nettó subtotal, ne a tax excluding total, ne a line item unit price legyen.
 - currency: pénznem (string, alapértelmezett "HUF")
 - category: kategória, az alábbiak egyike: "software", "marketing", "office", "hosting", "insurance", "transport", "education", "equipment", "other"
 - type: "subscription" (előfizetés/ismétlődő szolgáltatás) vagy "investment" (egyszeri beruházás)
@@ -82,8 +82,14 @@ Sok SaaS számlán az alap előfizetési díj mellett van extra usage/használat
 - GitHub: "Copilot Pro - $10.00" + "Copilot Usage - $0.84"
 - OpenAI: "ChatGPT Plus - $20.00" + "API Usage - $5.30"
 - AWS/Cloud: alap díj + használat alapú kiegészítés
-Ha ilyeneket látsz, az "amount" legyen az alap előfizetési díj, az "extra_amount" legyen a usage/extra rész, és az "extra_description" írja le mit fed az extra.
+Ha ilyeneket látsz, az "amount" legyen az alap előfizetési díj bruttó összege, az "extra_amount" legyen a usage/extra rész bruttó összege, és az "extra_description" írja le mit fed az extra.
 Ha a számlán nincs ilyen bontás (csak egy végösszeg van), az amount legyen a teljes összeg és extra_amount legyen null.
+
+ÖSSZEG KINYERÉS — NAGYON FONTOS:
+- Mindig azt az összeget add vissza, amit a felhasználónak ténylegesen fizetnie kell.
+- Ha a számla tartalmaz "Subtotal", "Total excluding tax", "VAT" és "Total/Amount due" sorokat, akkor a "Total/Amount due" értéke az amount.
+- Példa: ha a sor tétel €18.00, VAT 27% €4.86, Amount due €22.86, akkor amount = 22.86, nem 18.
+- Csak akkor használj nettó összeget, ha a dokumentumban nincs adó és nincs külön bruttó/végösszeg mező.
 
 ELŐFIZETÉS FELISMERÉS — NAGYON FONTOS:
 Ha az alábbi jeleket látod, MINDIG "subscription" típusú és a megfelelő frequency (monthly/yearly) legyen:

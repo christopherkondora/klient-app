@@ -16,6 +16,10 @@ import type {
   TaxWarning,
   TaxDeadline,
   TaxFormComparison,
+  KivaAdjustmentItem,
+  KivaEstimateResult,
+  KivaPeriodInput,
+  KivaPeriodResult,
 } from './tax-types';
 
 // ── Helper ──
@@ -188,19 +192,132 @@ export function calculateKiva(
   beruhazas: number,
   params: TaxParameters
 ): KivaResult {
-  // Alap = max(személyi kifizetések, szem.kif + osztalék - beruházás)
-  const adjusted = szemelyiKifizetesek + osztalek - beruhazas;
-  const kivaAlap = Math.max(szemelyiKifizetesek, adjusted);
-  const kiva = round(kivaAlap * params.kivaKulcs);
+  const period = calculateKivaPeriod({
+    year: params.year,
+    quarter: 1,
+    autoPersonalPaymentsHuf: szemelyiKifizetesek,
+    manualPersonalPaymentsHuf: null,
+    personalPaymentsMode: 'auto',
+    adjustments: [
+      { year: params.year, quarter: 1, type: 'AAN', category: 'legacy_osztalek', amountHuf: osztalek },
+      { year: params.year, quarter: 1, type: 'AACS', category: 'legacy_beruhazas', amountHuf: beruhazas },
+    ],
+  }, params);
+
+  const estimate = calculateKivaEstimate([{
+    year: params.year,
+    quarter: 1,
+    autoPersonalPaymentsHuf: szemelyiKifizetesek,
+    manualPersonalPaymentsHuf: null,
+    personalPaymentsMode: 'auto',
+    adjustments: [
+      { year: params.year, quarter: 1, type: 'AAN', category: 'legacy_osztalek', amountHuf: osztalek },
+      { year: params.year, quarter: 1, type: 'AACS', category: 'legacy_beruhazas', amountHuf: beruhazas },
+    ],
+  }], [], params);
 
   return {
+    ...estimate,
     szemelyiKifizetesek,
     osztalek,
     beruhazas,
-    kivaAlap,
-    kiva,
-    osszesen: kiva,
+    kivaAlap: period.baseHuf,
+    kiva: period.taxHuf,
+    osszesen: period.taxHuf,
   };
+}
+
+export function calculateKivaPeriod(input: KivaPeriodInput, params: TaxParameters): KivaPeriodResult {
+  const manual = input.manualPersonalPaymentsHuf ?? 0;
+  let personalPaymentsHuf: number;
+
+  switch (input.personalPaymentsMode) {
+    case 'manual':
+      personalPaymentsHuf = manual;
+      break;
+    case 'auto_plus_manual':
+      personalPaymentsHuf = input.autoPersonalPaymentsHuf + manual;
+      break;
+    case 'auto':
+    default:
+      personalPaymentsHuf = input.autoPersonalPaymentsHuf;
+      break;
+  }
+
+  const aanTotalHuf = sumKivaAdjustments(input.adjustments, 'AAN');
+  const aacsTotalHuf = sumKivaAdjustments(input.adjustments, 'AACS');
+  const baseBeforeMinimumHuf = personalPaymentsHuf + aanTotalHuf - aacsTotalHuf;
+  const baseHuf = Math.max(personalPaymentsHuf, baseBeforeMinimumHuf);
+  const taxHuf = round(baseHuf * params.kivaKulcs);
+
+  const completeness = personalPaymentsHuf > 0 || input.adjustments.length > 0 ? 'complete' : 'missing';
+
+  return {
+    year: input.year,
+    quarter: input.quarter,
+    personalPaymentsHuf: round(personalPaymentsHuf),
+    aanTotalHuf: round(aanTotalHuf),
+    aacsTotalHuf: round(aacsTotalHuf),
+    baseBeforeMinimumHuf: round(baseBeforeMinimumHuf),
+    baseHuf: round(baseHuf),
+    taxHuf,
+    completeness,
+  };
+}
+
+export function calculateKivaEstimate(
+  periodInputs: KivaPeriodInput[],
+  annualAdjustments: KivaAdjustmentItem[],
+  params: TaxParameters
+): KivaEstimateResult {
+  const periods = periodInputs.map(input => calculateKivaPeriod(input, params));
+  const annualOnlyAanTotal = sumKivaAdjustments(annualAdjustments, 'AAN');
+  const annualOnlyAacsTotal = sumKivaAdjustments(annualAdjustments, 'AACS');
+
+  const annualPersonalPaymentsHuf = periods.reduce((sum, period) => sum + period.personalPaymentsHuf, 0);
+  const annualAanTotalHuf = periods.reduce((sum, period) => sum + period.aanTotalHuf, 0) + annualOnlyAanTotal;
+  const annualAacsTotalHuf = periods.reduce((sum, period) => sum + period.aacsTotalHuf, 0) + annualOnlyAacsTotal;
+  const annualBaseBeforeMinimumHuf = annualPersonalPaymentsHuf + annualAanTotalHuf - annualAacsTotalHuf;
+  const annualBaseHuf = Math.max(annualPersonalPaymentsHuf, annualBaseBeforeMinimumHuf);
+  const annualTaxHuf = round(annualBaseHuf * params.kivaKulcs);
+  const quarterlyAdvanceTaxHuf = periods.reduce((sum, period) => sum + period.taxHuf, 0);
+  const settlementDifferenceHuf = annualTaxHuf - quarterlyAdvanceTaxHuf;
+
+  const warnings: TaxWarning[] = [];
+  if (annualPersonalPaymentsHuf <= 0) {
+    warnings.push({ type: 'kiva_missing_personal_payments', severity: 'warning', message: 'KIVA: nincs személyi jellegű kifizetés rögzítve vagy becsülve.' });
+  }
+  if (annualAanTotalHuf > 0 || annualAacsTotalHuf > 0) {
+    warnings.push({ type: 'kiva_adjustments_present', severity: 'info', message: 'KIVA: AAN/AACS korrekciók módosítják az adóalapot.' });
+  }
+  if (annualBaseBeforeMinimumHuf < annualPersonalPaymentsHuf) {
+    warnings.push({ type: 'kiva_minimum_base_applied', severity: 'info', message: 'KIVA: a minimum adóalap a személyi jellegű kifizetések összege.' });
+  }
+
+  const completeness = annualPersonalPaymentsHuf > 0
+    ? (periods.some(period => period.completeness !== 'complete') ? 'partial' : 'complete')
+    : 'missing';
+
+  return {
+    year: params.year,
+    periods,
+    annualPersonalPaymentsHuf: round(annualPersonalPaymentsHuf),
+    annualAanTotalHuf: round(annualAanTotalHuf),
+    annualAacsTotalHuf: round(annualAacsTotalHuf),
+    annualBaseBeforeMinimumHuf: round(annualBaseBeforeMinimumHuf),
+    annualBaseHuf: round(annualBaseHuf),
+    annualTaxHuf,
+    quarterlyAdvanceTaxHuf: round(quarterlyAdvanceTaxHuf),
+    settlementDifferenceHuf: round(settlementDifferenceHuf),
+    completeness,
+    warnings,
+  };
+}
+
+function sumKivaAdjustments(adjustments: KivaAdjustmentItem[], type: 'AAN' | 'AACS'): number {
+  return adjustments
+    .filter(adjustment => adjustment.type === type)
+    .reduce((sum, adjustment) => sum + Math.max(0, adjustment.amountHuf || 0), 0);
 }
 
 // ── HIPA (Helyi iparűzési adó) ──

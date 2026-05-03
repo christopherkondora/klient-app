@@ -133,6 +133,24 @@ export default function ClientDetail() {
     }
   }
 
+  async function handleOpenInvoicePdf(invoice: Invoice) {
+    const result = await window.electronAPI.ensureInvoicePdf({
+      invoiceId: invoice.id,
+      filePath: invoice.file_path,
+      provider: invoice.provider,
+      providerInvoiceId: invoice.provider_invoice_id,
+      clientName: client?.name,
+      invoiceNumber: invoice.invoice_number,
+    });
+
+    if (result.success && result.filePath) {
+      setViewingInvoice({ ...invoice, file_path: result.filePath });
+      if (result.filePath !== invoice.file_path) loadData();
+    } else {
+      console.warn('[ClientDetail] Could not open invoice PDF:', result.error);
+    }
+  }
+
   // Recording functions
   async function startRecording() {
     try {
@@ -686,7 +704,7 @@ export default function ClientDetail() {
                   </span>
                   {invoice.file_path && (
                     <button
-                      onClick={() => setViewingInvoice(invoice)}
+                      onClick={() => handleOpenInvoicePdf(invoice)}
                       className="px-2 py-1 text-xs text-steel hover:text-cream hover:bg-teal/10 rounded opacity-0 group-hover:opacity-100 transition-all"
                     >
                       Megnyitás
@@ -694,20 +712,7 @@ export default function ClientDetail() {
                   )}
                   {!invoice.file_path && invoice.provider === 'billingo' && invoice.provider_invoice_id && (
                     <button
-                      onClick={async () => {
-                        try {
-                          const res = await window.electronAPI.billingoGetPdf(Number(invoice.provider_invoice_id));
-                          if (res.success && res.data && client) {
-                            const fileName = `${(invoice.invoice_number || 'invoice').replace(/\//g, '-')}.pdf`;
-                            const saved = await window.electronAPI.filesSaveToClientInvoices(client.name, fileName, res.data);
-                            await window.electronAPI.updateInvoice(invoice.id, { file_path: saved.absolutePath });
-                            setViewingInvoice({ ...invoice, file_path: saved.absolutePath });
-                            loadData();
-                          }
-                        } catch (err) {
-                          console.warn('Could not download invoice PDF:', err);
-                        }
-                      }}
+                      onClick={() => handleOpenInvoicePdf(invoice)}
                       className="px-2 py-1 text-xs text-steel hover:text-cream hover:bg-teal/10 rounded opacity-0 group-hover:opacity-100 transition-all"
                     >
                       Megnyitás

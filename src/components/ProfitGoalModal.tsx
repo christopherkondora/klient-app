@@ -133,10 +133,11 @@ export default function ProfitGoalModal({ currentGoal, currentProfit, onClose, o
                 <button
                   key={p.value}
                   onClick={() => setGoalInput(String(p.value))}
+                  aria-pressed={isSelected}
                   style={{ animationDelay: `${i * 40}ms` }}
                   className={`goal-preset group relative overflow-hidden rounded-xl py-3 px-2 cursor-pointer transition-all duration-200 border ${
                     isSelected
-                      ? 'bg-gradient-to-br from-teal/30 to-teal/10 border-teal text-cream goal-preset-selected'
+                      ? 'bg-gradient-to-br from-teal/35 to-teal/10 border-teal/80 text-cream ring-1 ring-teal/35 shadow-lg shadow-teal/15 goal-preset-selected'
                       : 'bg-surface-900/60 border-steel/15 text-steel hover:border-teal/40 hover:text-cream hover:bg-surface-900/90 hover:-translate-y-0.5'
                   }`}
                 >

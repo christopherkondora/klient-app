@@ -462,7 +462,7 @@ export default function Dashboard() {
                 ))}
               </div>
               <div
-                className="flex-1 grid grid-cols-7 gap-1"
+                className="flex-1 grid grid-cols-7 gap-1 pb-0.5"
                 style={{ gridTemplateRows: `repeat(${Math.ceil(calendarDays.length / 7)}, minmax(0, 1fr))` }}
               >
                 {calendarDays.map((day, idx) => {

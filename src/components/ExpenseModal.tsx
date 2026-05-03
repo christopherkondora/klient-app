@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { X, Receipt, Coins, RefreshCw, Loader2, Monitor, Megaphone, Building, Server, ShieldCheck, Truck, GraduationCap, Wrench, MoreHorizontal, Upload, Sparkles, FileText, AlertCircle, Plus, ChevronDown } from 'lucide-react';
-import { fmtNum, parseNum } from '../utils/numberFormat';
+import { fmtDecimalNum, fmtNum, parseDecimalNum, parseNum } from '../utils/numberFormat';
 
 interface ExpenseModalProps {
   expense: Expense | null;
@@ -36,6 +36,18 @@ const FREQUENCIES = [
   { value: 'yearly', label: 'Éves' },
   { value: 'one-time', label: 'Egyszeri' },
 ] as const;
+
+function normalizeAmountForCurrency(value: string, currency: string): string {
+  if (currency === 'HUF') {
+    if (value.includes('.') || value.includes(',')) {
+      const decimalAmount = Number.parseFloat(parseDecimalNum(value));
+      return Number.isFinite(decimalAmount) ? String(Math.round(decimalAmount)) : '';
+    }
+    return parseNum(value);
+  }
+
+  return parseDecimalNum(value);
+}
 
 export default function ExpenseModal({ expense, onClose, onSaved }: ExpenseModalProps) {
   const [step, setStep] = useState<'choose' | 'form'>(expense ? 'form' : 'choose');
@@ -178,6 +190,9 @@ export default function ExpenseModal({ expense, onClose, onSaved }: ExpenseModal
   }
 
   const selectedCurrency = CURRENCIES.find(c => c.code === fields.currency)!;
+  const acceptsDecimalAmount = fields.currency !== 'HUF';
+  const formatAmount = acceptsDecimalAmount ? fmtDecimalNum : fmtNum;
+  const parseAmount = acceptsDecimalAmount ? parseDecimalNum : parseNum;
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onDoubleClick={onClose}>
@@ -188,7 +203,7 @@ export default function ExpenseModal({ expense, onClose, onSaved }: ExpenseModal
 
         <div className="p-5">
           <div className="flex items-center justify-between mb-5">
-            <h2 className="font-pixel text-[14px] text-cream">{expense ? 'Kiadás szerkesztése' : 'Új kiadás'}</h2>
+            <h2 className="font-pixel text-[14px] text-cream">{expense ? 'Költség szerkesztése' : 'Új költség'}</h2>
             <button type="button" onClick={onClose} className="p-1.5 rounded-lg hover:bg-teal/10 text-steel hover:text-cream cursor-pointer transition-colors duration-150 ease-out">
               <X width={14} height={14} />
             </button>
@@ -281,9 +296,9 @@ export default function ExpenseModal({ expense, onClose, onSaved }: ExpenseModal
               <div className="flex items-baseline gap-2">
                 <input
                   type="text"
-                  inputMode="numeric"
-                  value={fmtNum(fields.amount)}
-                  onChange={e => setFields(f => ({ ...f, amount: parseNum(e.target.value) }))}
+                  inputMode={acceptsDecimalAmount ? 'decimal' : 'numeric'}
+                  value={formatAmount(fields.amount)}
+                  onChange={e => setFields(f => ({ ...f, amount: parseAmount(e.target.value) }))}
                   className="w-full px-0 py-1 bg-transparent border-none text-3xl font-bold text-cream focus:outline-none placeholder:text-steel/20"
                   placeholder="0"
                   required
@@ -298,7 +313,12 @@ export default function ExpenseModal({ expense, onClose, onSaved }: ExpenseModal
                 <button
                   key={c.code}
                   type="button"
-                  onClick={() => setFields(f => ({ ...f, currency: c.code }))}
+                  onClick={() => setFields(f => ({
+                    ...f,
+                    currency: c.code,
+                    amount: normalizeAmountForCurrency(f.amount, c.code),
+                    extra_amount: normalizeAmountForCurrency(f.extra_amount, c.code),
+                  }))}
                   className={`px-2 py-1 rounded-md text-xs font-medium transition-all duration-150 ease-out cursor-pointer ${
                     fields.currency === c.code
                       ? 'bg-teal/20 text-cream'
@@ -356,9 +376,9 @@ export default function ExpenseModal({ expense, onClose, onSaved }: ExpenseModal
                       <div className="flex-1">
                         <input
                           type="text"
-                          inputMode="numeric"
-                          value={fmtNum(fields.extra_amount)}
-                          onChange={e => setFields(f => ({ ...f, extra_amount: parseNum(e.target.value) }))}
+                          inputMode={acceptsDecimalAmount ? 'decimal' : 'numeric'}
+                          value={formatAmount(fields.extra_amount)}
+                          onChange={e => setFields(f => ({ ...f, extra_amount: parseAmount(e.target.value) }))}
                           className="w-full px-0 py-1 bg-transparent border-b border-teal/15 text-sm font-medium text-cream focus:outline-none focus:border-teal/30 placeholder:text-steel/20"
                           placeholder="0"
                         />

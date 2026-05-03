@@ -14,7 +14,46 @@ import * as billingService from './billing/billing-service';
 import * as syncService from './billing/sync-service';
 
 function sanitizeFolderName(name: string): string {
-  return name.replace(/[<>:"/\\|?*]/g, '_').trim();
+  const sanitized = name
+    .replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
+    .trim()
+    .replace(/[. ]+$/g, '');
+  return sanitized || 'Nevtelen';
+}
+
+function sanitizeFileName(name: string): string {
+  const sanitized = name
+    .replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
+    .trim()
+    .replace(/[. ]+$/g, '');
+  return sanitized || 'file';
+}
+
+function hasWindowsUnsafePathSegment(filePath: string): boolean {
+  return filePath.split(/[\\/]+/).some(segment => /[. ]$/.test(segment));
+}
+
+function savePdfToClientInvoices(filesRoot: string, clientName: string, fileName: string, base64Data: string) {
+  const sanitizedClient = sanitizeFolderName(clientName);
+  const invoicesDir = path.join(filesRoot, sanitizedClient, 'Szamlak');
+  if (!fs.existsSync(invoicesDir)) {
+    fs.mkdirSync(invoicesDir, { recursive: true });
+  }
+
+  const safeName = sanitizeFileName(fileName);
+  const filePath = path.join(invoicesDir, safeName);
+  if (!filePath.startsWith(invoicesDir)) {
+    throw new Error('Invalid file path');
+  }
+
+  const buffer = Buffer.from(base64Data, 'base64');
+  fs.writeFileSync(filePath, buffer);
+  const stat = fs.statSync(filePath);
+  if (stat.size !== buffer.length) {
+    throw new Error('PDF mentése sikertelen');
+  }
+
+  return { relativePath: `${sanitizedClient}/Szamlak/${safeName}`, absolutePath: filePath };
 }
 
 function getFilesRoot(): string {
@@ -44,7 +83,40 @@ function fetchExchangeRate(from: string, to: string): Promise<number> {
   });
 }
 
+function roundMoney(amount: number): number {
+  return Math.round(amount * 100) / 100;
+}
+
+function resolveLocalInvoiceVatRate(data: Record<string, unknown>, vatStatus: string, defaultRate: number): number {
+  if (data.vat_rate !== undefined && data.vat_rate !== null) {
+    return Number(data.vat_rate);
+  }
+
+  const clientId = data.client_id as string | undefined;
+  const client = clientId
+    ? queryOne('SELECT country_code, eu_vat_number FROM clients WHERE id = ?', [clientId]) as Record<string, unknown> | undefined
+    : undefined;
+
+  const resolved = billingService.resolveVatCode(
+    client?.country_code as string | undefined,
+    client?.eu_vat_number as string | undefined,
+    vatStatus,
+    defaultRate as 27 | 18 | 5 | 0,
+  );
+  return resolved.vatRate;
+}
+
+function calculateInvoiceVatSplit(amount: number, amountHuf: number, vatRate: number) {
+  const divisor = 1 + (vatRate / 100);
+  const netAmount = roundMoney(amount / divisor);
+  const vatAmount = roundMoney(amount - netAmount);
+  const netAmountHuf = roundMoney(amountHuf / divisor);
+  const vatAmountHuf = roundMoney(amountHuf - netAmountHuf);
+  return { netAmount, vatAmount, netAmountHuf, vatAmountHuf };
+}
+
 const USER_FIELDS = 'id, name, email, invoice_platform, onboarding_complete, pomodoro_project_tracking, revenue_goal_yearly, profit_goal_yearly, company_name, tax_number, address, bank_account, team_mode, vat_status, vat_rate_default, vat_number, is_business, created_at';
+const AUTH_EMAIL_REDIRECT = 'https://klient.work/confirmed';
 
 /** Ensure a local user_settings row exists for a Supabase user, return it */
 function ensureLocalUser(supabaseId: string, email: string, name?: string): Record<string, unknown> {
@@ -59,6 +131,35 @@ function ensureLocalUser(supabaseId: string, email: string, name?: string): Reco
     local = queryOne(`SELECT ${USER_FIELDS} FROM user_settings WHERE id = ?`, [supabaseId]);
   }
   return local as Record<string, unknown>;
+}
+
+async function initializeAuthenticatedUser(supabaseId: string, email: string, name?: string): Promise<Record<string, unknown>> {
+  await switchDatabase(supabaseId);
+  const local = ensureLocalUser(supabaseId, email, name);
+  syncService.startPolling();
+  setTimeout(() => {
+    try { taxService.syncTaxDeadlinesToCalendar(supabaseId); } catch {}
+  }, 0);
+  return local;
+}
+
+function mapLoginError(message: string): string {
+  const lower = message.toLowerCase();
+  if (lower.includes('email not confirmed')) {
+    return 'Az email cím még nincs megerősítve. Ellenőrizd a postaládádat, majd próbáld újra.';
+  }
+  if (lower.includes('invalid login') || lower.includes('invalid credentials')) {
+    return 'Hibás email vagy jelszó.';
+  }
+  return message;
+}
+
+function mapRegisterError(message: string): string {
+  const lower = message.toLowerCase();
+  if (lower.includes('already') || lower.includes('registered') || lower.includes('taken')) {
+    return 'Ehhez az email címhez már tartozik fiók. Ha nem kaptad meg a megerősítő emailt, kérd újra a megerősítést.';
+  }
+  return message;
 }
 
 export function registerIpcHandlers() {
@@ -104,55 +205,69 @@ export function registerIpcHandlers() {
   // Register via Supabase Auth
   ipcMain.handle('db:user:register', async (_event, data: Record<string, unknown>) => {
     const sb = getSupabase();
-    const email = data.email as string;
+    const email = String(data.email ?? '').trim().toLowerCase();
     const { data: authData, error } = await sb.auth.signUp({
       email,
       password: data.password as string,
       options: {
         data: { name: data.name as string },
-        emailRedirectTo: 'https://klient.work/confirmed',
+        emailRedirectTo: AUTH_EMAIL_REDIRECT,
       },
     });
-    if (error) { console.error('[Auth] Register error:', error.message); throw new Error(error.message); }
+    if (error) { console.error('[Auth] Register error:', error.message); throw new Error(mapRegisterError(error.message)); }
     if (!authData.user) throw new Error('Regisztráció sikertelen');
     const authUser = authData.user;
 
-    // If identities is empty, the email already exists but is unconfirmed — resend confirmation
+    // Supabase returns identities=[] when the email already exists. Do not create a local
+    // authenticated user in this state; the app still needs a confirmed Supabase session.
     if (authUser.identities?.length === 0) {
-      await sb.auth.resend({ type: 'signup', email, options: { emailRedirectTo: 'https://klient.work/confirmed' } });
+      try {
+        await sb.auth.resend({ type: 'signup', email, options: { emailRedirectTo: AUTH_EMAIL_REDIRECT } });
+      } catch (err) {
+        console.warn('[Auth] Confirmation resend after duplicate signup failed:', err);
+      }
+      return {
+        requiresEmailConfirmation: true,
+        email,
+        message: 'Ehhez az email címhez már tartozik fiók. Ha még nincs megerősítve, újraküldtük a megerősítő emailt.',
+      };
     }
 
-    // Initialize user-specific database
-    await switchDatabase(authUser.id);
+    if (!authData.session) {
+      return {
+        requiresEmailConfirmation: true,
+        email,
+        message: 'Regisztráció elindítva. Erősítsd meg az email címed, majd jelentkezz be.',
+      };
+    }
 
-    const local = ensureLocalUser(authUser.id, authUser.email ?? '', data.name as string);
-    syncService.startPolling();
-    setTimeout(() => {
-      try { taxService.syncTaxDeadlinesToCalendar(authUser.id); } catch {}
-    }, 0);
-    return local;
+    const local = await initializeAuthenticatedUser(authUser.id, authUser.email ?? email, data.name as string);
+    return { requiresEmailConfirmation: false, user: local };
   });
 
   // Login via Supabase Auth
   ipcMain.handle('db:user:login', async (_event, data: Record<string, unknown>) => {
     const sb = getSupabase();
     const { data: authData, error } = await sb.auth.signInWithPassword({
-      email: data.email as string,
+      email: String(data.email ?? '').trim().toLowerCase(),
       password: data.password as string,
     });
-    if (error) { console.error('[Auth] Login error:', error.message); throw new Error(error.message); }
+    if (error) { console.error('[Auth] Login error:', error.message); throw new Error(mapLoginError(error.message)); }
     if (!authData.user) throw new Error('Bejelentkezés sikertelen');
     const authUser = authData.user;
 
-    // Switch to user-specific database
-    await switchDatabase(authUser.id);
+    return initializeAuthenticatedUser(authUser.id, authUser.email ?? '', authUser.user_metadata?.name as string);
+  });
 
-    const local = ensureLocalUser(authUser.id, authUser.email ?? '', authUser.user_metadata?.name as string);
-    syncService.startPolling();
-    setTimeout(() => {
-      try { taxService.syncTaxDeadlinesToCalendar(authUser.id); } catch {}
-    }, 0);
-    return local;
+  ipcMain.handle('db:user:resendConfirmation', async (_event, email: string) => {
+    const sb = getSupabase();
+    const { error } = await sb.auth.resend({
+      type: 'signup',
+      email: String(email ?? '').trim().toLowerCase(),
+      options: { emailRedirectTo: AUTH_EMAIL_REDIRECT },
+    });
+    if (error) { console.error('[Auth] Resend confirmation error:', error.message); throw new Error(mapRegisterError(error.message)); }
+    return { success: true };
   });
 
   // Logout
@@ -201,7 +316,7 @@ export function registerIpcHandlers() {
   ipcMain.handle('db:user:checkEmailConfirmed', async (_event, data: Record<string, unknown>) => {
     const sb = getSupabase();
     const { data: authData, error } = await sb.auth.signInWithPassword({
-      email: data.email as string,
+      email: String(data.email ?? '').trim().toLowerCase(),
       password: data.password as string,
     });
     if (error) {
@@ -210,15 +325,11 @@ export function registerIpcHandlers() {
       if (msg.includes('email not confirmed') || msg.includes('invalid login')) {
         return { confirmed: false };
       }
-      throw new Error(error.message);
+      throw new Error(mapLoginError(error.message));
     }
     if (!authData.user) return { confirmed: false };
 
-    // Login succeeded → email is confirmed, session is now active
-    // Switch to user-specific database
-    await switchDatabase(authData.user.id);
-
-    const local = ensureLocalUser(authData.user.id, authData.user.email ?? '', authData.user.user_metadata?.name as string);
+    const local = await initializeAuthenticatedUser(authData.user.id, authData.user.email ?? '', authData.user.user_metadata?.name as string);
     return { confirmed: true, user: local };
   });
 
@@ -543,24 +654,32 @@ export function registerIpcHandlers() {
     return { success: true };
   });
 
-  ipcMain.handle('db:projects:markPaid', (_event, id: string, invoiceData: Record<string, unknown>) => {
+  ipcMain.handle('db:projects:markPaid', async (_event, id: string, invoiceData: Record<string, unknown>) => {
     const project = queryOne('SELECT * FROM projects WHERE id = ?', [id]);
     if (!project) throw new Error('Project not found');
 
     const invoiceId = uuidv4();
-    // ÁFA szétbontás a user áfa-státusza alapján
     const user = queryOne('SELECT vat_status, vat_rate_default FROM user_settings LIMIT 1') as Record<string, unknown> | null;
     const vatStatus = (user?.vat_status as string) || 'exempt';
     const defaultRate = (user?.vat_rate_default as number) ?? 27;
     const amount = Number(invoiceData.amount);
     const currency = (invoiceData.currency as string) || 'HUF';
-    const amountHuf = (invoiceData.amount_huf as number | undefined) ?? amount;
-    const vatRate = vatStatus === 'exempt' ? 0 : defaultRate;
-    const divisor = 1 + (vatRate / 100);
-    const netAmount = Math.round((amount / divisor) * 100) / 100;
-    const vatAmount = Math.round((amount - netAmount) * 100) / 100;
-    const netAmountHuf = Math.round((amountHuf / divisor) * 100) / 100;
-    const vatAmountHuf = Math.round((amountHuf - netAmountHuf) * 100) / 100;
+    let amountHuf = invoiceData.amount_huf as number | undefined;
+    if (amountHuf === undefined) {
+      if (currency === 'HUF') {
+        amountHuf = amount;
+      } else {
+        try {
+          const rate = await fetchExchangeRate(currency, 'HUF');
+          amountHuf = Math.round(amount * rate);
+        } catch (err) {
+          console.warn('[Project] Could not fetch exchange rate for paid invoice, using amount fallback:', err);
+          amountHuf = amount;
+        }
+      }
+    }
+    const vatRate = resolveLocalInvoiceVatRate({ ...invoiceData, client_id: project.client_id }, vatStatus, defaultRate);
+    const { netAmount, vatAmount, netAmountHuf, vatAmountHuf } = calculateInvoiceVatSplit(amount, amountHuf, vatRate);
     execute(
       `INSERT INTO invoices (id, project_id, client_id, file_path, invoice_number, amount, currency, amount_huf, vat_rate, net_amount, vat_amount, net_amount_huf, vat_amount_huf, issue_date, due_date, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [invoiceId, id, project.client_id, invoiceData.file_path, invoiceData.invoice_number, amount, currency, amountHuf, vatRate, netAmount, vatAmount, netAmountHuf, vatAmountHuf, invoiceData.issue_date, invoiceData.due_date, invoiceData.notes]
@@ -960,16 +1079,16 @@ export function registerIpcHandlers() {
     let vatAmount = data.vat_amount as number | undefined;
     let netAmountHuf = data.net_amount_huf as number | undefined;
     let vatAmountHuf = data.vat_amount_huf as number | undefined;
-    if (vatRate === undefined) vatRate = vatStatus === 'exempt' ? 0 : defaultRate;
+    if (vatRate === undefined) vatRate = resolveLocalInvoiceVatRate(data, vatStatus, defaultRate);
     if (netAmount === undefined || vatAmount === undefined) {
-      const divisor = 1 + (vatRate / 100);
-      netAmount = Math.round((amount / divisor) * 100) / 100;
-      vatAmount = Math.round((amount - netAmount) * 100) / 100;
+      const split = calculateInvoiceVatSplit(amount, amountHuf, vatRate);
+      netAmount = split.netAmount;
+      vatAmount = split.vatAmount;
     }
     if (netAmountHuf === undefined || vatAmountHuf === undefined) {
-      const divisor = 1 + (vatRate / 100);
-      netAmountHuf = Math.round((amountHuf / divisor) * 100) / 100;
-      vatAmountHuf = Math.round((amountHuf - netAmountHuf) * 100) / 100;
+      const split = calculateInvoiceVatSplit(amount, amountHuf, vatRate);
+      netAmountHuf = split.netAmountHuf;
+      vatAmountHuf = split.vatAmountHuf;
     }
     execute(
       `INSERT INTO invoices (id, project_id, client_id, file_path, invoice_number, amount, currency, amount_huf, vat_rate, net_amount, vat_amount, net_amount_huf, vat_amount_huf, issue_date, due_date, status, notes, type, provider, provider_invoice_id, provider_synced_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -1059,15 +1178,9 @@ export function registerIpcHandlers() {
         try {
           const client = queryOne('SELECT name FROM clients WHERE id = ?', [invoice.client_id]) as { name: string } | undefined;
           if (client) {
-            const sanitizedClient = client.name.replace(/[<>:"/\\|?*]/g, '_').trim();
-            const invoicesDir = path.join(filesRoot, sanitizedClient, 'Számlák');
-            if (!fs.existsSync(invoicesDir)) {
-              fs.mkdirSync(invoicesDir, { recursive: true });
-            }
             const safeName = `${stornoResult.stornoInvoiceNumber.replace(/\//g, '-')}.pdf`;
-            const fpth = path.join(invoicesDir, safeName);
-            fs.writeFileSync(fpth, Buffer.from(stornoResult.pdfBase64, 'base64'));
-            stornoFilePath = fpth;
+            const saved = savePdfToClientInvoices(filesRoot, client.name, safeName, stornoResult.pdfBase64);
+            stornoFilePath = saved.absolutePath;
           }
         } catch (err: any) {
           console.warn('[IPC] Could not save storno PDF:', err.message);
@@ -1252,6 +1365,13 @@ export function registerIpcHandlers() {
     const yearStart = new Date(today.getFullYear(), 0, 1);
     const currentMonthKey = monthKey(today);
     const firstOfCurrentMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+    const parseSqlDate = (value: string | null | undefined) => {
+      if (!value) return yearStart;
+      const parsed = new Date(value.includes('T') ? value : value.replace(' ', 'T'));
+      if (Number.isNaN(parsed.getTime())) return yearStart;
+      parsed.setHours(0, 0, 0, 0);
+      return parsed;
+    };
 
     // Trend window: last 12 months including current
     const trendMonths: { key: string; firstOfMonth: Date }[] = [];
@@ -1338,14 +1458,18 @@ export function registerIpcHandlers() {
     }
 
     const monthlyExpenses = Math.round(actualThisMonth);
-    // Team monthly payroll costs (aktív alkalmazottak bérköltsége HUF-ban)
-    const monthlyPayroll = (queryOne(
-      `SELECT COALESCE(SUM(COALESCE(salary_huf, monthly_salary, 0)), 0) as total
+    // Active employee salary items. YTD payroll is counted from the local record creation month,
+    // so a newly added employee does not backfill costs to January.
+    const employeeSalaryItems = queryAll(
+      `SELECT id, name, role, monthly_salary, salary_currency, salary_huf, created_at
        FROM team_members
        WHERE employment_type = 'employee'
          AND (status IS NULL OR status = 'active')
-         AND monthly_salary IS NOT NULL`
-    ) as Record<string, number>)?.total ?? 0;
+         AND monthly_salary IS NOT NULL AND monthly_salary > 0
+       ORDER BY name ASC`
+    ) as { id: string; name: string; role: string | null; monthly_salary: number; salary_currency: string | null; salary_huf: number | null; created_at: string | null }[];
+    const salaryHufOf = (employee: typeof employeeSalaryItems[number]) => employee.salary_huf ?? employee.monthly_salary ?? 0;
+    const monthlyPayroll = employeeSalaryItems.reduce((sum, employee) => sum + salaryHufOf(employee), 0);
     // Open contractor/freelancer fees on active projects (alvállalkozói díjak)
     const openContractorFees = (queryOne(
       `SELECT COALESCE(SUM(COALESCE(pa.fee_huf, pa.fee, 0)), 0) as total
@@ -1374,9 +1498,11 @@ export function registerIpcHandlers() {
          AND pa.fee IS NOT NULL
          AND strftime('%Y', pa.assigned_at) = strftime('%Y', 'now')`
     ) as Record<string, number>)?.total ?? 0;
-    // Payroll already paid YTD (number of months elapsed this year × monthly payroll)
-    const monthsElapsedYTD = today.getMonth() + 1;
-    const payrollYTD = monthlyPayroll * monthsElapsedYTD;
+    const payrollYTD = employeeSalaryItems.reduce((sum, employee) => {
+      const start = parseSqlDate(employee.created_at);
+      const effectiveStart = start > yearStart ? start : yearStart;
+      return sum + Math.max(0, monthsInclusive(effectiveStart, today)) * salaryHufOf(employee);
+    }, 0);
     // Team cost items for list display (all time — kész projektek is)
     const teamCostItems = queryAll(
       `SELECT pa.id, pa.assigned_at, pa.fee, pa.fee_currency, pa.fee_huf,
@@ -1389,15 +1515,6 @@ export function registerIpcHandlers() {
          AND pa.fee IS NOT NULL
        ORDER BY pa.assigned_at DESC`
     ) as { id: string; assigned_at: string; fee: number; fee_currency: string; fee_huf: number | null; member_name: string; member_role: string | null; employment_type: string; project_name: string }[];
-    // Employee salary items for list display
-    const employeeSalaryItems = queryAll(
-      `SELECT id, name, role, monthly_salary, salary_currency, salary_huf
-       FROM team_members
-       WHERE employment_type = 'employee'
-         AND (status IS NULL OR status = 'active')
-         AND monthly_salary IS NOT NULL AND monthly_salary > 0
-       ORDER BY name ASC`
-    ) as { id: string; name: string; role: string | null; monthly_salary: number; salary_currency: string | null; salary_huf: number | null }[];
     // Final totals
     const monthlyExpensesTotal = Math.round(monthlyExpenses + monthlyPayroll + contractorFeesThisMonth);
     const goalsRow = queryOne('SELECT revenue_goal_yearly, profit_goal_yearly FROM user_settings LIMIT 1') as Record<string, number> | null;
@@ -1424,9 +1541,20 @@ export function registerIpcHandlers() {
        GROUP BY month`
     ) as { month: string; total: number }[];
     const feeByMonth = new Map(contractorFeesByMonth.map(r => [r.month, r.total]));
+    const payrollByMonth = new Map(trendMonths.map(tm => [tm.key, 0]));
+    for (const employee of employeeSalaryItems) {
+      const start = parseSqlDate(employee.created_at);
+      const salary = salaryHufOf(employee);
+      for (const tm of trendMonths) {
+        const monthEnd = new Date(tm.firstOfMonth.getFullYear(), tm.firstOfMonth.getMonth() + 1, 0);
+        if (start <= monthEnd) {
+          payrollByMonth.set(tm.key, (payrollByMonth.get(tm.key) ?? 0) + salary);
+        }
+      }
+    }
     const monthlyExpensesTrend = trendMonths.map(tm => ({
       month: tm.key,
-      total: Math.round((trendTotals.get(tm.key) ?? 0) + monthlyPayroll + (feeByMonth.get(tm.key) ?? 0)),
+      total: Math.round((trendTotals.get(tm.key) ?? 0) + (payrollByMonth.get(tm.key) ?? 0) + (feeByMonth.get(tm.key) ?? 0)),
     }));
     return {
       paidLastMonth,
@@ -1668,7 +1796,7 @@ export function registerIpcHandlers() {
   });
 
   ipcMain.handle('files:ensureClientFolder', (_event, clientName: string) => {
-    const sanitized = clientName.replace(/[<>:"/\\|?*]/g, '_').trim();
+    const sanitized = sanitizeFolderName(clientName);
     const dirPath = path.join(filesRoot, sanitized);
     if (!fs.existsSync(dirPath)) {
       fs.mkdirSync(dirPath, { recursive: true });
@@ -1677,8 +1805,8 @@ export function registerIpcHandlers() {
   });
 
   ipcMain.handle('files:ensureProjectFolder', (_event, clientName: string, projectName: string) => {
-    const sanitizedClient = clientName.replace(/[<>:"/\\|?*]/g, '_').trim();
-    const sanitizedProject = projectName.replace(/[<>:"/\\|?*]/g, '_').trim();
+    const sanitizedClient = sanitizeFolderName(clientName);
+    const sanitizedProject = sanitizeFolderName(projectName);
     const dirPath = path.join(filesRoot, sanitizedClient, sanitizedProject);
     if (!fs.existsSync(dirPath)) {
       fs.mkdirSync(dirPath, { recursive: true });
@@ -1687,19 +1815,7 @@ export function registerIpcHandlers() {
   });
 
   ipcMain.handle('files:saveToClientInvoices', (_event, clientName: string, fileName: string, base64Data: string) => {
-    const sanitizedClient = clientName.replace(/[<>:"/\\|?*]/g, '_').trim();
-    const invoicesDir = path.join(filesRoot, sanitizedClient, 'Számlák');
-    if (!fs.existsSync(invoicesDir)) {
-      fs.mkdirSync(invoicesDir, { recursive: true });
-    }
-    const safeName = fileName.replace(/[<>:"/\\|?*]/g, '_').trim();
-    const filePath = path.join(invoicesDir, safeName);
-    // Prevent directory traversal
-    if (!filePath.startsWith(invoicesDir)) {
-      throw new Error('Invalid file path');
-    }
-    fs.writeFileSync(filePath, Buffer.from(base64Data, 'base64'));
-    return { relativePath: `${sanitizedClient}/Számlák/${safeName}`, absolutePath: filePath };
+    return savePdfToClientInvoices(filesRoot, clientName, fileName, base64Data);
   });
 
   ipcMain.handle('files:renameFolder', (_event, oldRelPath: string, newRelPath: string) => {
@@ -2051,6 +2167,34 @@ export function registerIpcHandlers() {
     return taxService.compareTaxFormsService(bevétel, koltsegek, adoev, hipaKulcs, kivet);
   });
 
+  ipcMain.handle('db:tax:kiva:getPeriods', (_event, userId: string | undefined, year: number) => {
+    return taxService.getKivaPeriods(userId, year);
+  });
+
+  ipcMain.handle('db:tax:kiva:savePeriod', (_event, userId: string | undefined, input: Parameters<typeof taxService.saveKivaPeriod>[1]) => {
+    return taxService.saveKivaPeriod(userId, input);
+  });
+
+  ipcMain.handle('db:tax:kiva:getAdjustments', (_event, userId: string | undefined, year: number) => {
+    return taxService.getKivaAdjustments(userId, year);
+  });
+
+  ipcMain.handle('db:tax:kiva:createAdjustment', (_event, userId: string | undefined, item: Parameters<typeof taxService.createKivaAdjustment>[1]) => {
+    return taxService.createKivaAdjustment(userId, item);
+  });
+
+  ipcMain.handle('db:tax:kiva:updateAdjustment', (_event, userId: string | undefined, id: string, patch: Parameters<typeof taxService.updateKivaAdjustment>[2]) => {
+    return taxService.updateKivaAdjustment(userId, id, patch);
+  });
+
+  ipcMain.handle('db:tax:kiva:deleteAdjustment', (_event, userId: string | undefined, id: string) => {
+    return taxService.deleteKivaAdjustment(userId, id);
+  });
+
+  ipcMain.handle('db:tax:kiva:estimate', (_event, userId: string | undefined, year: number) => {
+    return taxService.calculateKivaEstimateForUser(userId, year);
+  });
+
   // ============ BILLING / INVOICING CONFIG ============
 
   ipcMain.handle('billing:set-config', (_event, data: { platform: string; apiKey?: string; url?: string }) => {
@@ -2135,6 +2279,53 @@ export function registerIpcHandlers() {
       return { success: true, data: buffer.toString('base64') };
     } catch (err: any) {
       return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('billing:ensure-invoice-pdf', async (_event, data: {
+    invoiceId?: string;
+    filePath?: string | null;
+    provider?: string | null;
+    providerInvoiceId?: string | null;
+    clientName?: string | null;
+    invoiceNumber?: string | null;
+  }) => {
+    try {
+      const existingPath = data.filePath || '';
+      if (existingPath && !hasWindowsUnsafePathSegment(existingPath) && fs.existsSync(existingPath)) {
+        return { success: true, filePath: existingPath };
+      }
+
+      if (data.provider !== 'billingo' || !data.providerInvoiceId) {
+        return { success: false, error: 'A PDF fájl nem található, és ehhez a számlához nincs újraletöltési lehetőség.' };
+      }
+
+      let clientName = data.clientName || '';
+      let invoiceNumber = data.invoiceNumber || data.providerInvoiceId;
+      if ((!clientName || !invoiceNumber) && data.invoiceId) {
+        const row = queryOne(
+          `SELECT i.invoice_number, c.name as client_name
+           FROM invoices i
+           LEFT JOIN clients c ON i.client_id = c.id
+           WHERE i.id = ?`,
+          [data.invoiceId]
+        ) as { invoice_number?: string; client_name?: string } | undefined;
+        clientName = clientName || row?.client_name || 'Szamlak';
+        invoiceNumber = invoiceNumber || row?.invoice_number || data.providerInvoiceId;
+      }
+
+      const buffer = await billingoAdapter.getInvoicePdf(Number(data.providerInvoiceId));
+      const fileName = `${String(invoiceNumber).replace(/\//g, '-')}.pdf`;
+      const saved = savePdfToClientInvoices(filesRoot, clientName || 'Szamlak', fileName, buffer.toString('base64'));
+
+      if (data.invoiceId) {
+        execute('UPDATE invoices SET file_path = ? WHERE id = ?', [saved.absolutePath, data.invoiceId]);
+      }
+
+      return { success: true, filePath: saved.absolutePath };
+    } catch (err: any) {
+      const message = typeof err?.message === 'string' ? err.message : JSON.stringify(err);
+      return { success: false, error: message };
     }
   });
 

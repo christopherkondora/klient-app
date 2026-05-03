@@ -118,6 +118,25 @@ export default function ProjectDetail() {
     }
   }
 
+  async function handleOpenInvoicePdf(invoice: Invoice) {
+    const client = allClients.find(item => item.id === invoice.client_id || item.id === project?.client_id);
+    const result = await window.electronAPI.ensureInvoicePdf({
+      invoiceId: invoice.id,
+      filePath: invoice.file_path,
+      provider: invoice.provider,
+      providerInvoiceId: invoice.provider_invoice_id,
+      clientName: client?.name,
+      invoiceNumber: invoice.invoice_number,
+    });
+
+    if (result.success && result.filePath) {
+      setViewingInvoice({ ...invoice, file_path: result.filePath });
+      if (result.filePath !== invoice.file_path) loadData();
+    } else {
+      console.warn('[ProjectDetail] Could not open invoice PDF:', result.error);
+    }
+  }
+
   async function handleDeleteNote(noteId: string) {
     try {
       await window.electronAPI.deleteNote(noteId);
@@ -469,9 +488,9 @@ export default function ProjectDetail() {
                         {isStorno ? 'Sztornó számla' : 'Sztornózva'}
                       </span>
                     )}
-                    {invoice.file_path && (
+                    {(invoice.file_path || (invoice.provider === 'billingo' && invoice.provider_invoice_id)) && (
                       <button
-                        onClick={() => setViewingInvoice(invoice)}
+                        onClick={() => handleOpenInvoicePdf(invoice)}
                         className="px-2 py-1 text-xs text-steel hover:text-cream hover:bg-teal/10 rounded opacity-0 group-hover:opacity-100 transition-all"
                       >
                         PDF megnyitása
