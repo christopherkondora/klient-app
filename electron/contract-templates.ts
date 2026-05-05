@@ -149,7 +149,7 @@ function partyBlock(role: string, name: string, company: string, address: string
   const lines: ContractLine[] = [];
   lines.push(L('party-label', `${role}:`));
   if (company) lines.push(L('party-field', `Név / Cégnév: ${company}`));
-  else lines.push(L('party-field', `Név: ${name}`));
+  else lines.push(L('party-field', `Név / Cégnév: ${name}`));
   if (address) lines.push(L('party-field', `Székhely / Lakcím: ${address}`));
   if (taxNumber) lines.push(L('party-field', `Adószám: ${taxNumber}`));
   if (representative) lines.push(L('party-field', `Képviselő neve: ${representative}`));

@@ -4,7 +4,7 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
-    include: ['electron/**/*.test.ts'],
+    include: ['electron/**/*.test.ts', 'src/**/*.test.ts', 'shared/**/*.test.ts'],
     coverage: {
       provider: 'v8',
       include: ['electron/tax-service.ts', 'electron/tax-engine.ts'],

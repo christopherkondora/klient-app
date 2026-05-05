@@ -1,6 +1,7 @@
-import { getBillingConfig, getBillingApiKey } from '../billing-store';
+import { getBillingConfig } from '../billing-store';
 import * as billingoAdapter from './billingo-adapter';
 import * as szamlazzAdapter from './szamlazz-adapter';
+import type { DomesticVatRate, HungarianVatCode } from '../../shared/invoice-scenario';
 
 // ── Unified types ──
 
@@ -20,9 +21,9 @@ export interface InvoiceRequest {
     quantity: number;
     unit: string;
     netUnitPrice: number;
-    vatRate: 27 | 18 | 5 | 0;
+    vatRate: DomesticVatRate;
     /** Speciális áfa kód, pl. 'AAM' (alanyi adómentes), 'TAM' (tárgyi adómentes). Ha meg van adva, a vatRate 0 kell legyen. */
-    vatCode?: 'AM' | 'AAM' | 'TAM' | 'EU' | 'EUK' | 'ATHK' | 'MAA' | 'FAD' | 'AKK' | 'K_AFA';
+    vatCode?: HungarianVatCode;
   }>;
   fulfillmentDate: string;
   dueDate: string;
@@ -59,49 +60,6 @@ export function getActiveProvider(): 'billingo' | 'szamlazz' | null {
     return cfg.platform;
   }
   return null;
-}
-
-// ── EU country codes (ISO 3166-1 alpha-2, excluding HU since seller is in HU) ──
-
-export const EU_COUNTRY_CODES = new Set([
-  'AT', 'BE', 'BG', 'HR', 'CY', 'CZ', 'DK', 'EE', 'FI', 'FR',
-  'DE', 'GR', 'IE', 'IT', 'LV', 'LT', 'LU', 'MT', 'NL', 'PL',
-  'PT', 'RO', 'SK', 'SI', 'ES', 'SE'
-]);
-
-export function isEuCountry(countryCode: string | undefined | null): boolean {
-  if (!countryCode) return false;
-  return EU_COUNTRY_CODES.has(countryCode.toUpperCase());
-}
-
-/**
- * Determines the appropriate VAT code/rate for an invoice based on buyer location and VAT registration.
- * Returns either a percentage rate (number) for HU domestic, or a special VAT code (string).
- *
- * Hungarian invoicing rules (Billingo official codes):
- * - HU domestic: standard rate (27%/18%/5%) or 'AAM' if seller is alanyi adómentes
- * - EU B2B (buyer has EU VAT number): 'EU' — EU-n belül (reverse charge Art. 196)
- * - EU B2C (no EU VAT number): domestic rate applies (no special code)
- * - Third country (non-EU): 'EUK' — EU-n kívül, export
- */
-export function resolveVatCode(
-  countryCode: string | undefined | null,
-  euVatNumber: string | undefined | null,
-  sellerVatStatus: 'standard' | 'exempt' | string,
-  defaultDomesticRate: 27 | 18 | 5 | 0 = 27,
-): { vatRate: 27 | 18 | 5 | 0; vatCode?: 'AM' | 'AAM' | 'TAM' | 'EU' | 'EUK' | 'ATHK' | 'MAA' | 'FAD' | 'AKK' | 'K_AFA' } {
-  const cc = (countryCode || 'HU').toUpperCase();
-  if (cc === 'HU') {
-    if (sellerVatStatus === 'exempt') return { vatRate: 0, vatCode: 'AAM' };
-    return { vatRate: defaultDomesticRate };
-  }
-  if (isEuCountry(cc)) {
-    if (euVatNumber && euVatNumber.trim()) return { vatRate: 0, vatCode: 'EU' };
-    // EU B2C: no special code, domestic rate applies
-    return { vatRate: defaultDomesticRate };
-  }
-  // Third country (non-EU): EU-n kívül
-  return { vatRate: 0, vatCode: 'EUK' };
 }
 
 // ── Mark invoice as paid on provider ──

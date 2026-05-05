@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useThemedColor } from '../utils/colors';
 import { useAuth } from '../contexts/AuthContext';
 import {
-  Plus, Search, Mail, Phone, Building2, Trash2, SquarePen,
+  Plus, Search, Mail, Phone, UserRound, Trash2, SquarePen,
   LayoutGrid, List, Briefcase, ChevronRight, X, AlertTriangle,
   Globe, Check, Loader2,
 } from 'lucide-react';
@@ -219,7 +219,7 @@ export default function Clients() {
           <Search width={16} height={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-steel" />
           <input
             type="text"
-            placeholder="Keresés név, cég vagy email alapján..."
+            placeholder="Keresés számlázási név, kapcsolattartó vagy email alapján..."
             value={search}
             onChange={e => setSearch(e.target.value)}
             className="w-full pl-10 pr-4 py-2.5 bg-surface-800/50 border border-teal/10 rounded-lg text-sm text-cream placeholder:text-steel/50 focus:outline-none focus:ring-2 focus:ring-teal/30 focus:border-teal/30"
@@ -316,7 +316,7 @@ export default function Clients() {
                           <div className={`w-2 h-2 rounded-full shrink-0 ${isActive ? 'bg-emerald-400' : 'bg-steel/40'}`} />
                         </div>
                         {client.company && (
-                          <p className="text-muted text-xs mt-0.5">{client.company}</p>
+                          <p className="text-muted text-xs mt-0.5">Kapcsolattartó: {client.company}</p>
                         )}
                       </div>
                     </div>
@@ -384,13 +384,13 @@ export default function Clients() {
                   )}
                 </div>
 
-                {/* Name + Company */}
+                {/* Name + contact */}
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
                     <h3 className="font-semibold text-cream truncate">{client.name}</h3>
                     <div className={`w-2 h-2 rounded-full shrink-0 ${isActive ? 'bg-emerald-400' : 'bg-steel/40'}`} />
                     {client.company && (
-                      <span className="text-muted text-xs shrink-0">· {client.company}</span>
+                      <span className="text-muted text-xs shrink-0">· Kapcsolattartó: {client.company}</span>
                     )}
                   </div>
                 </div>
@@ -674,7 +674,7 @@ export function ClientForm({ client, onSubmit, onClose }: { client: Client | nul
                 value={name}
                 onChange={e => setName(e.target.value)}
                 className="flex-1 px-0 py-2 bg-transparent border-b border-teal/15 text-cream text-lg font-medium focus:outline-none focus:border-teal/40 placeholder:text-steel/50 transition-colors"
-                placeholder="Ügyfél neve..."
+                placeholder="Cégnév / számlázási név..."
                 required
                 autoFocus
               />
@@ -684,7 +684,7 @@ export function ClientForm({ client, onSubmit, onClose }: { client: Client | nul
           {/* Scrollable body */}
           <div className="px-5 overflow-y-auto flex-1 min-h-0 space-y-4 pb-2">
 
-            {/* Email + Cég */}
+            {/* Email + kapcsolattartó */}
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <span className="text-[10px] text-steel tracking-wider uppercase mb-1 block">Email</span>
@@ -700,15 +700,15 @@ export function ClientForm({ client, onSubmit, onClose }: { client: Client | nul
                 </div>
               </div>
               <div>
-                <span className="text-[10px] text-steel tracking-wider uppercase mb-1 block">Cég</span>
+                <span className="text-[10px] text-steel tracking-wider uppercase mb-1 block">Kapcsolattartó</span>
                 <div className="flex items-center gap-2 border-b border-teal/8 py-1.5">
-                  <Building2 width={12} height={12} className="text-steel/60 shrink-0" />
+                  <UserRound width={12} height={12} className="text-steel/60 shrink-0" />
                   <input
                     type="text"
                     value={company}
                     onChange={e => setCompany(e.target.value)}
                     className="flex-1 min-w-0 bg-transparent text-sm text-cream focus:outline-none placeholder:text-steel/40"
-                    placeholder="Opcionális"
+                    placeholder="pl. Martin Turnhofer"
                   />
                 </div>
               </div>

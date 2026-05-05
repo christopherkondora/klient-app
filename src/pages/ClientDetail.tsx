@@ -2,7 +2,7 @@ import { useEffect, useState, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import {
-  ArrowLeft, Mail, Phone, Building2, MapPin, Briefcase,
+  ArrowLeft, Mail, Phone, UserRound, MapPin, Briefcase,
   Mic, Receipt, Plus, Play, Pause, Square, Trash2, Clock, FileText, X, ExternalLink,
   ChevronDown, ChevronUp, Loader2, Sparkles, ScrollText, FolderOpen, Ban, SquarePen,
 } from 'lucide-react';
@@ -320,7 +320,7 @@ export default function ClientDetail() {
             <div className="flex flex-wrap gap-4 mt-3">
               {client.company && (
                 <span className="flex items-center gap-1.5 text-sm text-steel">
-                  <Building2 width={14} height={14} /> {client.company}
+                  <UserRound width={14} height={14} /> Kapcsolattartó: {client.company}
                 </span>
               )}
               {client.email && (

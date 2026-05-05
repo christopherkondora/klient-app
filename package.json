@@ -1,12 +1,12 @@
 {
   "name": "klient",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Business management system for marketing agencies and freelancers",
-  "main": "dist-electron/main.js",
+  "main": "dist-electron/electron/main.js",
   "scripts": {
     "dev:react": "vite",
     "dev:electron:build": "npx tsc -p tsconfig.electron.json --watch --preserveWatchOutput",
-    "dev:electron": "wait-on tcp:5173 dist-electron/main.js dist-electron/preload.js && nodemon --watch dist-electron --delay 150ms --ext js --exec \"electron .\"",
+    "dev:electron": "wait-on tcp:5173 dist-electron/electron/main.js dist-electron/electron/preload.js && nodemon --watch dist-electron --delay 150ms --ext js --exec \"electron .\"",
     "dev": "concurrently -k \"npm run dev:react\" \"npm run dev:electron:build\" \"npm run dev:electron\"",
     "build:react": "npx tsc && vite build",
     "build:electron": "npx tsc -p tsconfig.electron.json",

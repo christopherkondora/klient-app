@@ -1,5 +1,11 @@
 /// <reference types="vite/client" />
 
+import type { Client as _SharedClient } from '../shared/types/client';
+
+declare global {
+
+type Client = _SharedClient;
+
 interface ElectronAPI {
   // Window controls
   minimizeWindow: () => void;
@@ -359,29 +365,6 @@ interface FileEntry {
   size: number;
   modifiedAt: string;
   path: string;
-}
-
-interface Client {
-  id: string;
-  name: string;
-  email: string;
-  phone: string;
-  company: string;
-  address: string;
-  postal_code: string;
-  city: string;
-  street: string;
-  address_line2: string;
-  tax_number: string;
-  representative_name: string;
-  country_code: string;
-  eu_vat_number: string;
-  preferred_currency: string;
-  invoice_language: string;
-  notes: string;
-  color: string;
-  created_at: string;
-  updated_at: string;
 }
 
 interface Project {
@@ -984,4 +967,6 @@ interface TaxFormComparisonRow {
 
 interface Window {
   electronAPI: ElectronAPI;
+}
+
 }

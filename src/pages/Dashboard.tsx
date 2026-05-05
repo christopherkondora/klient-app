@@ -24,6 +24,7 @@ import { ProjectForm, TimeSlot } from './Projects';
 import { ClientForm } from './Clients';
 import ProfitGoalModal from '../components/ProfitGoalModal';
 import { useThemedColor } from '../utils/colors';
+import { loadDashboardSnapshot, loadCalendarSnapshot } from '../view-models/dashboard-view-model';
 
 export default function Dashboard() {
   const navigate = useNavigate();
@@ -69,24 +70,15 @@ export default function Dashboard() {
   }, [calendarMonth, calendarView]);
   async function loadData() {
     try {
-      const [statsData, notesData, deadlinesData, clientsData, projectsData, teamMembersData, billingCfg, enhancedStats] = await Promise.all([
-        window.electronAPI.getDashboardStats(),
-        window.electronAPI.getNotes(),
-        window.electronAPI.getUpcomingDeadlines(),
-        window.electronAPI.getClients(),
-        window.electronAPI.getProjects(),
-        window.electronAPI.getTeamMembers(),
-        window.electronAPI.getBillingConfig(),
-        window.electronAPI.getEnhancedFinanceStats(),
-      ]);
-      setStats(statsData);
-      setRecentNotes(notesData.slice(0, 2));
-      setDeadlines(deadlinesData);
-      setClients(clientsData);
-      setProjects(projectsData.filter(p => p.status === 'active'));
-      setTeamMembers(teamMembersData);
-      setBillingPlatform(billingCfg.platform || 'none');
-      setEnhanced(enhancedStats);
+      const snapshot = await loadDashboardSnapshot(window.electronAPI);
+      setStats(snapshot.stats);
+      setRecentNotes(snapshot.recentNotes);
+      setDeadlines(snapshot.deadlines);
+      setClients(snapshot.clients);
+      setProjects(snapshot.activeProjects);
+      setTeamMembers(snapshot.teamMembers);
+      setBillingPlatform(snapshot.billingPlatform);
+      setEnhanced(snapshot.enhanced);
     } catch (err) {
       console.error('Failed to load dashboard data:', err);
     } finally {
@@ -96,18 +88,7 @@ export default function Dashboard() {
 
   async function loadCalendarEvents() {
     try {
-      let start: string, end: string;
-      if (calendarView === 'month') {
-        start = format(startOfWeek(startOfMonth(calendarMonth), { weekStartsOn: 1 }), 'yyyy-MM-dd');
-        end = format(endOfWeek(endOfMonth(calendarMonth), { weekStartsOn: 1 }), 'yyyy-MM-dd');
-      } else if (calendarView === 'week') {
-        start = format(startOfWeek(calendarMonth, { weekStartsOn: 1 }), 'yyyy-MM-dd');
-        end = format(endOfWeek(calendarMonth, { weekStartsOn: 1 }), 'yyyy-MM-dd');
-      } else {
-        start = format(calendarMonth, 'yyyy-MM-dd');
-        end = format(calendarMonth, 'yyyy-MM-dd');
-      }
-      const events = await window.electronAPI.getCalendarEvents(start, end);
+      const events = await loadCalendarSnapshot(window.electronAPI, calendarView, calendarMonth);
       setCalendarEvents(events);
     } catch (err) {
       console.error('Failed to load calendar events:', err);

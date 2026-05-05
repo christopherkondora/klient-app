@@ -5,13 +5,18 @@ import fs from 'fs';
 import path from 'path';
 import { app } from 'electron';
 import { getSupabase } from './supabase';
-import { switchDatabase, closeDatabase, getCurrentUserId, saveDb } from './database';
+import { switchDatabase, closeDatabase, getCurrentUserId, saveDb, getDb } from './database';
 import * as taxService from './tax-service';
 import { setBillingConfig, getBillingConfig, getBillingApiKey, clearBillingConfig } from './billing-store';
 import * as billingoAdapter from './billing/billingo-adapter';
 import * as szamlazzAdapter from './billing/szamlazz-adapter';
 import * as billingService from './billing/billing-service';
 import * as syncService from './billing/sync-service';
+import { resolveInvoiceScenario, type SellerVatStatus } from '../shared/invoice-scenario';
+import { createClientsStore } from './stores/clients-store';
+import type { Client } from '../shared/types/client';
+
+const clientsStore = createClientsStore({ getDb, saveDb });
 
 function sanitizeFolderName(name: string): string {
   const sanitized = name
@@ -97,13 +102,13 @@ function resolveLocalInvoiceVatRate(data: Record<string, unknown>, vatStatus: st
     ? queryOne('SELECT country_code, eu_vat_number FROM clients WHERE id = ?', [clientId]) as Record<string, unknown> | undefined
     : undefined;
 
-  const resolved = billingService.resolveVatCode(
-    client?.country_code as string | undefined,
-    client?.eu_vat_number as string | undefined,
-    vatStatus,
-    defaultRate as 27 | 18 | 5 | 0,
-  );
-  return resolved.vatRate;
+  const scenario = resolveInvoiceScenario({
+    buyerCountryCode: client?.country_code as string | undefined,
+    buyerEuVatNumber: client?.eu_vat_number as string | undefined,
+    sellerVatStatus: (vatStatus === 'exempt' ? 'exempt' : 'standard') as SellerVatStatus,
+    defaultDomesticRate: defaultRate as 27 | 18 | 5 | 0,
+  });
+  return scenario.vatRate;
 }
 
 function calculateInvoiceVatSplit(amount: number, amountHuf: number, vatRate: number) {
@@ -478,56 +483,38 @@ export function registerIpcHandlers() {
   });
 
   // ============ CLIENTS ============
-  ipcMain.handle('db:clients:getAll', () => {
-    return queryAll('SELECT * FROM clients ORDER BY name ASC');
-  });
+  ipcMain.handle('db:clients:getAll', () => clientsStore.list());
 
-  ipcMain.handle('db:clients:get', (_event, id: string) => {
-    return queryOne('SELECT * FROM clients WHERE id = ?', [id]);
-  });
+  ipcMain.handle('db:clients:get', (_event, id: string) => clientsStore.byId(id));
 
-  ipcMain.handle('db:clients:create', (_event, data: Record<string, unknown>) => {
-    const id = uuidv4();
-    execute(
-      `INSERT INTO clients (id, name, email, phone, company, address, postal_code, city, street, address_line2, tax_number, country_code, eu_vat_number, preferred_currency, invoice_language, notes, color) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [id, data.name, data.email, data.phone, data.company, data.address, data.postal_code, data.city, data.street, data.address_line2, data.tax_number, data.country_code || 'HU', data.eu_vat_number || '', data.preferred_currency || 'HUF', data.invoice_language || 'hu', data.notes, data.color || '#6366f1']
-    );
-    // Auto-create client folder
-    if (data.name) {
-      const folderPath = path.join(getFilesRoot(), sanitizeFolderName(data.name as string));
+  ipcMain.handle('db:clients:create', (_event, data: Partial<Client>) => {
+    const created = clientsStore.create(data);
+    // Auto-create client folder (filesystem side-effect)
+    if (created.name) {
+      const folderPath = path.join(getFilesRoot(), sanitizeFolderName(created.name));
       if (!fs.existsSync(folderPath)) fs.mkdirSync(folderPath, { recursive: true });
     }
-    return queryOne('SELECT * FROM clients WHERE id = ?', [id]);
+    return created;
   });
 
-  ipcMain.handle('db:clients:update', (_event, id: string, data: Record<string, unknown>) => {
-    // Auto-rename client folder if name changed
+  ipcMain.handle('db:clients:update', (_event, id: string, data: Partial<Client>) => {
+    // Auto-rename client folder if name changed (filesystem side-effect)
     if (data.name) {
-      const oldClient = queryOne('SELECT name FROM clients WHERE id = ?', [id]) as Record<string, string> | null;
-      if (oldClient && oldClient.name !== data.name) {
+      const previous = clientsStore.byId(id);
+      if (previous && previous.name !== data.name) {
         const root = getFilesRoot();
-        const oldPath = path.join(root, sanitizeFolderName(oldClient.name));
-        const newPath = path.join(root, sanitizeFolderName(data.name as string));
+        const oldPath = path.join(root, sanitizeFolderName(previous.name));
+        const newPath = path.join(root, sanitizeFolderName(data.name));
         if (fs.existsSync(oldPath) && !fs.existsSync(newPath)) {
           fs.renameSync(oldPath, newPath);
         }
       }
     }
-    const allowedFields = ['name', 'email', 'phone', 'company', 'address', 'postal_code', 'city', 'street', 'address_line2', 'notes', 'color', 'tax_number', 'representative_name', 'country_code', 'eu_vat_number', 'preferred_currency', 'invoice_language'];
-    const filteredData: Record<string, unknown> = {};
-    for (const key of allowedFields) {
-      if (key in data) filteredData[key] = data[key];
-    }
-    const fields = Object.keys(filteredData).map(k => `${k} = ?`).join(', ');
-    const values = Object.values(filteredData);
-    if (fields) {
-      execute(`UPDATE clients SET ${fields}, updated_at = datetime('now') WHERE id = ?`, [...values, id]);
-    }
-    return queryOne('SELECT * FROM clients WHERE id = ?', [id]);
+    return clientsStore.update(id, data);
   });
 
   ipcMain.handle('db:clients:delete', (_event, id: string) => {
-    execute('DELETE FROM clients WHERE id = ?', [id]);
+    clientsStore.remove(id);
     return { success: true };
   });
 
@@ -962,10 +949,10 @@ export function registerIpcHandlers() {
       userEmail: user.email || '',
       userPhone: '',
       clientName: client.name || '',
-      clientCompany: client.company || '',
+      clientCompany: '',
       clientAddress: clientAddress,
       clientTaxNumber: client.tax_number || '',
-      clientRepresentative: client.representative_name || '',
+      clientRepresentative: client.representative_name || client.company || '',
       clientEmail: client.email || '',
       clientPhone: client.phone || '',
       fields: data.fields,

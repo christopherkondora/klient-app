@@ -2,10 +2,13 @@ import { useState, useMemo, useEffect, useRef } from 'react';
 import { X, Loader2, Receipt, Info, Globe } from 'lucide-react';
 import { format, addDays } from 'date-fns';
 import { useAuth } from '../contexts/AuthContext';
+import { currencySymbol, formatAmount } from '../utils/vat';
 import {
-  resolveInvoiceScenario, scenarioVatCode, scenarioComment,
-  currencySymbol, formatAmount, AAM_COMMENT,
-} from '../utils/vat';
+  resolveInvoiceScenario,
+  AAM_COMMENT,
+  type DomesticVatRate,
+  type InvoiceLanguage,
+} from '../../shared/invoice-scenario';
 
 interface InvoiceGenerateModalProps {
   project: Project;
@@ -31,16 +34,24 @@ const PAYMENT_METHODS = [
 export default function InvoiceGenerateModal({ project, client, onClose, onSuccess, onSwitchToUpload }: InvoiceGenerateModalProps) {
   const { user } = useAuth();
   const isAam = user?.vat_status === 'exempt';
-  const userDefaultRate = (user?.vat_rate_default as 27 | 18 | 5 | 0) ?? 27;
+  const userDefaultRate = (user?.vat_rate_default as DomesticVatRate) ?? 27;
   const [aamTooltipVisible, setAamTooltipVisible] = useState(false);
   const aamTooltipRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // ── International client detection ──
   const clientCountry = (client?.country_code || 'HU').toUpperCase();
-  const isForeignClient = clientCountry !== 'HU';
-  const invoiceScenario = resolveInvoiceScenario(clientCountry, client?.eu_vat_number);
-  const foreignVatCode = scenarioVatCode(invoiceScenario);
-  const foreignComment = scenarioComment(invoiceScenario);
+  const invoiceLanguage: InvoiceLanguage =
+    (client?.invoice_language as InvoiceLanguage) || (clientCountry === 'HU' ? 'hu' : 'en');
+
+  const scenario = useMemo(() => resolveInvoiceScenario({
+    buyerCountryCode: client?.country_code,
+    buyerEuVatNumber: client?.eu_vat_number,
+    sellerVatStatus: isAam ? 'exempt' : 'standard',
+    defaultDomesticRate: userDefaultRate,
+    invoiceLanguage,
+  }), [client?.country_code, client?.eu_vat_number, isAam, userDefaultRate, invoiceLanguage]);
+
+  const isHuDomestic = scenario.kind === 'hu-domestic-standard' || scenario.kind === 'hu-domestic-aam';
+  const isForeignClient = !isHuDomestic;
 
   const today = format(new Date(), 'yyyy-MM-dd');
   const defaultDue = format(addDays(new Date(), 8), 'yyyy-MM-dd');
@@ -48,25 +59,27 @@ export default function InvoiceGenerateModal({ project, client, onClose, onSucce
   const [fulfillmentDate, setFulfillmentDate] = useState(today);
   const [dueDate, setDueDate] = useState(defaultDue);
   const [paymentMethod, setPaymentMethod] = useState<'bank_transfer' | 'cash' | 'bankcard'>('bank_transfer');
+  const [billingName, setBillingName] = useState(client?.name || '');
   const [itemName, setItemName] = useState(project.name);
   const [quantity, setQuantity] = useState(1);
   const [unit, setUnit] = useState('db');
   const [netUnitPrice, setNetUnitPrice] = useState<number | ''>('');
-  const [vatRate, setVatRate] = useState<27 | 18 | 5 | 0>(isForeignClient ? 0 : (isAam ? 0 : userDefaultRate));
+  const [vatRate, setVatRate] = useState<DomesticVatRate>(scenario.vatRate);
   const [currency, setCurrency] = useState<string>(client?.preferred_currency || 'HUF');
-  const [comment, setComment] = useState<string>(
-    isForeignClient ? foreignComment : (isAam ? AAM_COMMENT : '')
-  );
+  const [comment, setComment] = useState<string>(scenario.comment);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  // AAM váltás követése (ritka, de ha a user közben beállítja)
+  // Ha a szcenárió változik (pl. user közben AAM-ra vált, vagy más kliens jön),
+  // igazítsuk a `vatRate`-et és üres megjegyzés esetén a záradékot is.
   useEffect(() => {
-    if (isAam) {
-      setVatRate(0);
-      setComment(prev => (prev && prev !== AAM_COMMENT ? prev : AAM_COMMENT));
-    }
-  }, [isAam]);
+    setVatRate(scenario.vatRate);
+    setComment(prev => (prev.trim() === '' || prev === AAM_COMMENT ? scenario.comment : prev));
+  }, [scenario.kind, scenario.vatRate, scenario.comment]);
+
+  useEffect(() => {
+    setBillingName(client?.name || '');
+  }, [client?.id, client?.name]);
 
   const totals = useMemo(() => {
     const price = typeof netUnitPrice === 'number' ? netUnitPrice : 0;
@@ -91,19 +104,20 @@ export default function InvoiceGenerateModal({ project, client, onClose, onSucce
       setError('Nincs ügyfél hozzárendelve a projekthez');
       return;
     }
+    if (!billingName.trim()) {
+      setError('Add meg a számlázási nevet');
+      return;
+    }
 
     setLoading(true);
     setError('');
 
     try {
-      // Determine vatCode for Billingo/Számlázz.hu
-      const vatCode: 'AAM' | 'EU' | 'EUK' | undefined = foreignVatCode
-        ?? (isAam ? 'AAM' : undefined);
-      const invoiceLanguage = client?.invoice_language || (isForeignClient ? 'en' : 'hu');
+      const vatCode = scenario.vatCode;
 
       const res = await window.electronAPI.billingCreateInvoice({
         externalId: `${project.id}-${Date.now()}`,
-        clientName: client.name,
+        clientName: billingName.trim(),
         clientAddress: {
           postCode: client.postal_code || '',
           city: client.city || '',
@@ -200,8 +214,14 @@ export default function InvoiceGenerateModal({ project, client, onClose, onSucce
           {/* Client info */}
           <div className="flex items-center gap-4 bg-teal/5 border border-teal/10 rounded-xl px-4 py-3">
             <div className="flex-1 min-w-0">
-              <p className="text-[10px] text-steel tracking-[0.1em] uppercase mb-0.5">Ügyfél</p>
-              <p className="text-sm text-cream font-semibold truncate">{client?.name || '—'}</p>
+              <label className="text-[10px] text-steel tracking-[0.1em] uppercase mb-1 block">Számlázási név</label>
+              <input
+                type="text"
+                value={billingName}
+                onChange={e => setBillingName(e.target.value)}
+                className="w-full bg-transparent border-b border-teal/15 pb-1 text-sm text-cream font-semibold focus:outline-none focus:border-teal/40 placeholder:text-steel/40"
+                placeholder="Cégnév / számlázási név"
+              />
             </div>
             <div className="w-px h-8 bg-teal/10" />
             <div className="flex-1 min-w-0">
@@ -213,25 +233,25 @@ export default function InvoiceGenerateModal({ project, client, onClose, onSucce
           {/* International scenario banner */}
           {isForeignClient && (
             <div className={`flex items-start gap-2.5 rounded-xl px-4 py-3 border ${
-              invoiceScenario === 'eu-b2b' ? 'bg-emerald-500/5 border-emerald-500/20' :
-              invoiceScenario === 'eu-b2c' ? 'bg-amber-500/5 border-amber-500/20' :
+              scenario.kind === 'eu-b2b' ? 'bg-emerald-500/5 border-emerald-500/20' :
+              scenario.kind === 'eu-b2c' ? 'bg-amber-500/5 border-amber-500/20' :
               'bg-blue-500/5 border-blue-500/20'
             }`}>
               <Globe className={`w-3.5 h-3.5 mt-0.5 shrink-0 ${
-                invoiceScenario === 'eu-b2b' ? 'text-emerald-300' :
-                invoiceScenario === 'eu-b2c' ? 'text-amber-300' :
+                scenario.kind === 'eu-b2b' ? 'text-emerald-300' :
+                scenario.kind === 'eu-b2c' ? 'text-amber-300' :
                 'text-blue-300'
               }`} />
               <div className="flex-1 text-[11px] leading-relaxed">
                 <p className="text-cream font-semibold mb-0.5">
-                  {invoiceScenario === 'eu-b2b' && `EU B2B számla — ${clientCountry} · fordított adózás`}
-                  {invoiceScenario === 'eu-b2c' && `EU magánszemély — ${clientCountry} · ÁFA-mentes`}
-                  {invoiceScenario === 'third-country' && `Harmadik országbeli export — ${clientCountry} · ÁFA körön kívül`}
+                  {scenario.kind === 'eu-b2b' && `EU B2B számla — ${clientCountry} · fordított adózás`}
+                  {scenario.kind === 'eu-b2c' && `EU magánszemély — ${clientCountry} · HU ÁFA-val`}
+                  {scenario.kind === 'third-country' && `Harmadik országbeli export — ${clientCountry} · ÁFA körön kívül`}
                 </p>
                 <p className="text-steel/80">
-                  {invoiceScenario === 'eu-b2b' && 'A számla 0% ÁFÁ-val készül, a vevő számolja el az ÁFÁ-t a saját országában (EU vatCode).'}
-                  {invoiceScenario === 'eu-b2c' && 'EU magánszemély — nincs EU ÁFA szám megadva, így EUK kóddal, 0% ÁFÁ-val készül.'}
-                  {invoiceScenario === 'third-country' && 'EU-n kívüli vevő — EUK (EU-n kívül) kóddal, ÁFA-mentes export szolgáltatásként könyvelődik.'}
+                  {scenario.kind === 'eu-b2b' && 'A számla 0% ÁFÁ-val készül, a vevő számolja el az ÁFÁ-t a saját országában (EU vatCode).'}
+                  {scenario.kind === 'eu-b2c' && `EU magánszemély — nincs EU ÁFA szám, ezért a magyar ${scenario.vatRate}% ÁFA kulcs kerül a számlára (a teljesítés helye HU).`}
+                  {scenario.kind === 'third-country' && 'EU-n kívüli vevő — EUK (EU-n kívül) kóddal, ÁFA-mentes export szolgáltatásként könyvelődik.'}
                 </p>
               </div>
             </div>
@@ -308,28 +328,30 @@ export default function InvoiceGenerateModal({ project, client, onClose, onSucce
                 </div>
                 <div>
                   <label className={labelClass}>ÁFA kulcs</label>
-                  {isForeignClient ? (
+                  {isForeignClient && scenario.vatCode ? (
                     <div className={`${inputClass} flex items-center gap-2 cursor-default bg-teal/8 border-teal/25`}>
-                      <span className="text-[10px] font-bold text-teal px-1.5 py-0.5 rounded bg-teal/20 leading-none shrink-0">{foreignVatCode}</span>
-                      <span className="text-xs text-steel/60">0%</span>
+                      <span className="text-[10px] font-bold text-teal px-1.5 py-0.5 rounded bg-teal/20 leading-none shrink-0">{scenario.vatCode}</span>
+                      <span className="text-xs text-steel/60">{scenario.vatRate}%</span>
                     </div>
                   ) : isAam ? (
-                    <div className="relative">
+                    <div
+                      className="relative"
+                      onMouseEnter={() => {
+                        if (aamTooltipRef.current) clearTimeout(aamTooltipRef.current);
+                        setAamTooltipVisible(true);
+                      }}
+                      onMouseLeave={() => {
+                        aamTooltipRef.current = setTimeout(() => setAamTooltipVisible(false), 150);
+                      }}
+                    >
                       <div
                         className={`${inputClass} flex items-center gap-2 cursor-default bg-amber-500/8 border-amber-400/25`}
-                        onMouseEnter={() => {
-                          if (aamTooltipRef.current) clearTimeout(aamTooltipRef.current);
-                          setAamTooltipVisible(true);
-                        }}
-                        onMouseLeave={() => {
-                          aamTooltipRef.current = setTimeout(() => setAamTooltipVisible(false), 150);
-                        }}
                       >
                         <span className="text-[10px] font-bold text-amber-300 px-1.5 py-0.5 rounded bg-amber-500/20 leading-none shrink-0">AAM</span>
                         <span className="text-xs text-steel/60">0%</span>
                       </div>
                       {aamTooltipVisible && (
-                        <div className="absolute bottom-full left-0 mb-2 z-10 w-64 bg-surface-800 border border-amber-400/20 rounded-xl shadow-xl p-3">
+                        <div className="absolute bottom-full right-0 mb-2 z-30 w-64 max-w-[calc(100vw_-_3rem)] bg-surface-800 border border-amber-400/20 rounded-xl shadow-xl p-3">
                           <div className="flex items-start gap-2">
                             <Info width={13} height={13} className="text-amber-300 shrink-0 mt-0.5" />
                             <div>
