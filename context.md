@@ -230,7 +230,7 @@ Az IPC rendszer `db:` prefixű handler-ekkel működik, a `preload.ts` bridge-el
 | **Team** | `db:team:getAll`, `get`, `create`, `update`, `delete`, `getProjectAssignments`, `getMemberAssignments`, `assignToProject`, `unassignFromProject` |
 | **Tax** | `db:tax:getBusinessTypes`, `getRules`, `checkEligibility`, `calculate`, `getAvailableTypes`, `getUserSettings`, `setUserSettings`, `getCalculationHistory` |
 | **Billing config** | `billing:set-config`, `get-config`, `test-connection`, `clear-config` |
-| **Billingo** | `billing:billingo:get-blocks`, `get-banks`, `ensure-partner`, `create-invoice`, `get-pdf`, `cancel`, `get-status` |
+| **Billingo** | `billing:billingo:get-blocks`, `get-banks`, `ensure-partner`, `create-invoice`, `get-pdf`, `ensure-invoice-pdf`, `cancel`, `get-status` |
 | **Számlázz.hu** | `billing:szamlazz:create-invoice`, `get-by-external-id`, `cancel` |
 | **Unified billing** | `billing:get-active-provider`, `create-invoice`, `mark-invoice-paid`, `sync-invoices`, `get-last-sync-time` |
 | **Files** | `files:getRoot`, `list`, `createFolder`, `rename`, `delete`, `openInExplorer`, `openFile`, `readFile`, `ensureClientFolder`, `ensureProjectFolder`, `saveToClientInvoices`, `renameFolder`, `copyFiles`, `selectFiles`, `selectFolder`, `moveFiles`, `duplicate`, `getAbsolutePath`, `startDrag`, `copyToClipboard` |
@@ -255,6 +255,8 @@ Az IPC rendszer `db:` prefixű handler-ekkel működik, a `preload.ts` bridge-el
 - **Funkciók:** Partner kezelés, számla létrehozás, PDF letöltés (202 retry), storno (`POST /documents/{id}/cancel` üres body-val), fizetés jelölés, email küldés (`POST /documents/{id}/send`)
 - **Rate limit:** 429-re 3x retry, 3 sec delay
 - **Storno response:** `{ id, invoice_number, gross_total, type: "cancellation" }`
+- **Fontos:** Billingónál nincs külön sandbox URL; mindig `https://api.billingo.hu/v3` használandó. Teszt/éles működést az API kulcs és block ID dönti el.
+- **PDF recovery:** `billing:ensure-invoice-pdf` ellenőrzi a mentett PDF útvonalat; hiányzó vagy Windows-unsafe útvonal esetén újraletölti Billingóból, biztonságos `Files/{ClientName}/Szamlak/` mappába menti, és frissíti az `invoices.file_path` mezőt.
 
 ### Számlázz.hu XML API
 - **URL:** `https://www.szamlazz.hu/szamla/`
@@ -273,6 +275,9 @@ Az IPC rendszer `db:` prefixű handler-ekkel működik, a `preload.ts` bridge-el
 ### Stripe
 - **Via Supabase Edge Functions:** `create-checkout` (Monthly/Yearly/Lifetime), `manage-subscription`
 - **Webhook:** Supabase-ben kezelve, `subscriptions` táblát frissíti
+- **Aktuális Supabase secrets állapot (2026-05-03):** `STRIPE_ENV=production`, production price secret-ek beállítva, `create-checkout` és `stripe-webhook` Edge Function aktív.
+- **Billingo webhook állapot:** `BILLINGO_BLOCK_ID=315117` (production block), a beállított Billingo API kulcs nem egyezik a korábbi dokumentált tesztkulccsal. `BILLINGO_ENV` jelenleg `sandbox`, de a kódban csak logolásra szolgál; érdemes `production`-re igazítani, hogy ne legyen félrevezető.
+- **Előfizetéses számla email flow:** a Stripe webhook sikeres első checkout után Billingo számlát hoz létre és meghívja a Billingo `POST /documents/{id}/send` endpointot. Megújuló Stripe terheléseknél az `invoice.paid` / `invoice.payment_succeeded` ág csak `billing_reason=subscription_cycle` esetén készít és küld Billingo számlát. Az idempotenciát a Supabase `subscription_billing_events` tábla adja `stripe_event_id` és `stripe_invoice_id` alapján.
 
 ### Deepgram
 - **Real-time:** WebSocket `wss://api.deepgram.com/v1/listen` (magyar nyelv)
@@ -378,11 +383,13 @@ Az IPC rendszer `db:` prefixű handler-ekkel működik, a `preload.ts` bridge-el
 3. Edge Function → OpenAI GPT-4o-mini (PDF mint `type: 'file'`) → strukturált JSON válasz
 4. Visszakapott mezők: name, amount, currency, category, type, frequency, date, vendor, notes, subscription_hint, extra_amount, extra_description
 5. Form automatikus kitöltés + AI prefill banner + subscription hint megjelenítés
+- **Összegszabály:** az AI prompt a fizetendő bruttó végösszeget használja (`Total`, `Amount due`, `Balance due`, tax-inclusive total), nem a nettó subtotal/line item árat. Példa: 18 EUR + 27% VAT → 22.86 EUR.
+- **Decimal költségbevitel:** HUF egész számra normalizál, nem-HUF pénznemeknél (EUR/USD stb.) két tizedesjegyet enged a `parseDecimalNum` / `fmtDecimalNum` helperrel.
 
 ### Fájlrendszer
 - Root: `{userData}/Files/{ClientName}/{ProjectName}/`
-- Auto-created: ügyfél mappa, projekt mappa, `Számlák/`, `Szerződések/`
-- Fájlnév sanitization: `<>:"/\|?*` → `_`
+- Auto-created: ügyfél mappa, projekt mappa, `Szamlak/`, `Szerződések/`
+- Fájlnév/mappanév sanitization: `<>:"/\|?*` és control karakterek → `_`, valamint záró pont/szóköz eltávolítása. Windows alatt a trailing `.` vagy space útvonalszegmens webview/Electron `ERR_FILE_NOT_FOUND` hibát okozhat.
 - **Drag-out:** `ipcMain.on` + `ipcRenderer.send` (szinkron, nem handle/invoke) → `webContents.startDrag`
 - **Copy to OS clipboard:** PowerShell `Set-Clipboard -Path` (Windows) / `file://` URI (macOS/Linux)
 - **Műveletek:** copy, cut, paste, duplicate, move, rename, delete, rubber-band selection
@@ -417,6 +424,11 @@ Az IPC rendszer `db:` prefixű handler-ekkel működik, a `preload.ts` bridge-el
 - 4 téma, Pomodoro timer (átnevezés, láthatóság), Exchange rates
 - AI kiadás feldolgozás (PDF → OpenAI GPT-4o-mini → form kitöltés, subscription hint)
 - Előfizetésen felüli plusz költségek (extra_amount + extra_description, pl. GitHub Copilot Usage)
+- Nem-HUF költségek tizedes összeggel rögzíthetők (pl. 22.86 EUR), HUF továbbra is egész számra kerekítve/normalizálva.
+- Pénzügyek oldalon a költségdoboz két szekcióra bontva jelenik meg: eszközök/szolgáltatások és személyi jellegű költségek; a kártya magassága kötött, belső scrollal.
+- A korábbi külön bevételi grafikon megszűnt; a jobb oldali `BEVÉTEL ÉS KÖLTSÉG` widget kombinált bevételi oszlop + költségvonal grafikont mutat. Egyetlen bevételes hónapot is renderel, és a költségpontok HTML körök, hogy ne torzuljanak SVG skálázás miatt.
+- Billingo PDF megnyitás ellenőrzött: Finances, ClientDetail és ProjectDetail előbb `ensureInvoicePdf`-et hív, így hiányzó/unsafe PDF lokális útvonal Billingóból újraletölthető.
+- Stripe előfizetéses Billingo email MVP: első sikeres checkout és havi/éves megújuló terhelés után Billingo számla email küldés, `subscription_billing_events` eseménynaplóval a duplikált webhook eventek és azonos Stripe invoice-ok ellen.
 - Fájlkezelő: drag-out OS-re, copy-to-clipboard (PowerShell Set-Clipboard), duplicate, move, rubber-band selection
 - DatePicker overflow fix, light téma amber színek
 
@@ -434,6 +446,7 @@ Az IPC rendszer `db:` prefixű handler-ekkel működik, a `preload.ts` bridge-el
 - Account selector ügyfélnév-prioritással az Ads overview fejlécében
 
 ### Friss megjegyzések
+- A kanonikus Klient előfizetési árak 2026-05-04-től: havi `4 990 Ft`, éves `49 900 Ft`, lifetime `149 900 Ft`; weboldal, app UI, Stripe/Billingo tesztlista és egyéb dokumentáció ezeket használja.
 - A base Dashboardból az Ads widget el lett távolítva, hogy a Klient főfelület fókuszált maradjon.
 - A `npm run dev` fejlesztői indulása gyorsítva lett: Electron watch build + `nodemon` restart, nincs automatikus DevTools megnyitás.
 - A base polish terv UX-001 feladata elkészült: a Dashboard, Pénzügyek, Ügyfelek, Projektek, Naptár, Fájlok és Beállítások most közös `PageHeader` komponensre épülnek, egységes title/subtitle/actions ritmussal.
@@ -441,9 +454,14 @@ Az IPC rendszer `db:` prefixű handler-ekkel működik, a `preload.ts` bridge-el
 - A base polish terv UX-002 feladata elkészült: a sidebar shortcut blokk másodlagosabb vizuális súlyt kapott, a fő navigáció dominánsabb lett, a jobb alsó Notes/Pomodoro/Ads utility-k pedig közös railbe rendeződtek.
 - A base polish terv UX-101 feladata elkészült: a Dashboard headerben az óra és a billing shortcut most közös halk utility-csoport, a Gyors felvétel pedig az egyetlen egyértelmű header action maradt.
 - A base polish terv UX-102 feladata elkészült: a Dashboard most egyértelműbben különíti el a hero bevételi blokkot, az operatív mini stat support zónát és a naptár melletti "Mai fókusz" panelt.
+- Az onboarding ÁFA lépése áfakörös felhasználóknál már bekéri és a tax profile-ba menti az ÁFA bevallási gyakoriságot (`havi` / `negyedeves` / `eves`), a TaxSection pedig az éves ÁFA bevallást és a 2026-os 20M Ft-os AAM limitet is következetesen jelzi.
+- A Supabase regisztrációs flow javítva lett: email-megerősítésnél a signUp már nem hoz létre fél-authenticated lokális user állapotot, a login/register valódi hibaüzenetet ad, és az onboardingból újraküldhető a megerősítő email.
+- A Google auth közben jelentkező `no such column: country_code` hiba javítva lett: a kliens ország/EU ÁFA mezők migrációja most a VAT backfill előtt fut le, így régebbi lokális adatbázisokon sem akad el az auth utáni DB inicializálás.
+- 2026-05-03 ellenőrzés: Stripe production módban van a Supabase secrets szerint; Billingo production block ID-val fut, de `BILLINGO_ENV` logcímke még `sandbox`. Következő élesítés előtt igazítsd `production`-re. A webhook kód már tartalmaz Billingo számla email küldést és megújuló terhelés számlázást; production deploy előtt futtasd a `subscription_billing_events` migrációt, deployold újra a `stripe-webhook` functiont, és kapcsold be Stripe-ban az `invoice.paid` / `invoice.payment_succeeded` eseményeket.
 
 ### Lehetséges fejlesztések
 - Lejárt számlák automatikus detekció (overdue → email emlékeztető)
+- Tranzakciós app email rendszer: sikeres fizetés visszaigazolás, sikertelen fizetés/dunning, lemondás/lejárás, trial vége előtti értesítés saját email szolgáltatóval (Resend/Postmark/SendGrid). A Billingo számla email küldés első verziója már a Stripe webhookban van.
 - Számlázz.hu PDF újraletöltés
 - Dashboard bővítés (több widget)
 - Offline mode javítás
@@ -451,4 +469,4 @@ Az IPC rendszer `db:` prefixű handler-ekkel működik, a `preload.ts` bridge-el
 
 ---
 
-*Utolsó frissítés: 2026-04-21*
+*Utolsó frissítés: 2026-05-03*

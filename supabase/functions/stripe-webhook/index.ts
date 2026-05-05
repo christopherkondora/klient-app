@@ -22,6 +22,13 @@ interface BillingoInvoiceResult {
   emailError?: string;
 }
 
+interface BillingoPartnerAddress {
+  country_code: string;
+  post_code: string;
+  city: string;
+  address: string;
+}
+
 interface BillingEventInput {
   stripeEventId: string;
   stripeEventType: string;
@@ -74,6 +81,43 @@ function getNestedEmail(obj: Record<string, unknown>): string {
   return readString(obj.customer_email)
     || readString(customerDetails.email)
     || readString(obj.receipt_email);
+}
+
+function getNestedCustomerName(obj: Record<string, unknown>): string {
+  const customerDetails = readObject(obj.customer_details);
+  return readString(customerDetails.name)
+    || readString(obj.customer_name);
+}
+
+function getNestedCustomerAddress(obj: Record<string, unknown>): BillingoPartnerAddress | null {
+  const customerDetails = readObject(obj.customer_details);
+  const detailsAddress = readObject(customerDetails.address);
+  const invoiceAddress = readObject(obj.customer_address);
+  const addr = Object.keys(detailsAddress).length ? detailsAddress : invoiceAddress;
+  const city = readString(addr.city);
+  const line1 = readString(addr.line1);
+  const line2 = readString(addr.line2);
+  const postalCode = readString(addr.postal_code);
+  const country = readString(addr.country);
+  if (!city && !line1 && !postalCode) return null;
+  return {
+    country_code: country || 'HU',
+    post_code: postalCode || '0000',
+    city: city || 'N/A',
+    address: [line1, line2].filter(Boolean).join(', ') || 'N/A',
+  };
+}
+
+function getNestedCustomerTaxCode(obj: Record<string, unknown>): string {
+  const customerDetails = readObject(obj.customer_details);
+  const detailsTaxIds = Array.isArray(customerDetails.tax_ids)
+    ? customerDetails.tax_ids as Array<Record<string, unknown>>
+    : [];
+  const invoiceTaxIds = Array.isArray(obj.customer_tax_ids)
+    ? obj.customer_tax_ids as Array<Record<string, unknown>>
+    : [];
+  const firstTaxId = detailsTaxIds[0] || invoiceTaxIds[0];
+  return readString(firstTaxId?.value);
 }
 
 function getStripeInvoiceAmountHuf(obj: Record<string, unknown>): number {
@@ -336,6 +380,9 @@ async function verifyStripeSignature(payload: string, sigHeader: string): Promis
 // ─── Billingo invoice creation ───
 async function createBillingoInvoice(params: {
   customerEmail: string;
+  customerName?: string;
+  customerAddress?: BillingoPartnerAddress | null;
+  customerTaxCode?: string;
   plan: string;
   amountHuf: number;
   userId: string;
@@ -395,6 +442,33 @@ async function createBillingoInvoice(params: {
 
       if (existing) {
         partnerId = existing.id;
+        if (params.customerName || params.customerAddress || params.customerTaxCode) {
+          const updateBody: Record<string, unknown> = {
+            name: params.customerName || existing.name || params.customerEmail,
+            emails: existing.emails?.length ? existing.emails : [params.customerEmail],
+            taxcode: params.customerTaxCode || existing.taxcode || '',
+            address: params.customerAddress || existing.address,
+            type: existing.type || 'company',
+          };
+
+          const updateRes = await fetch(`${billingoBaseUrl}/partners/${partnerId}`, {
+            method: 'PUT',
+            headers: {
+              'X-API-KEY': BILLINGO_API_KEY,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(updateBody),
+          });
+
+          if (!updateRes.ok) {
+            console.warn('[Billingo] Existing partner update failed, continuing with existing partner:', {
+              timestamp: new Date().toISOString(),
+              partner_id: partnerId,
+              status: updateRes.status,
+              error_detail: await updateRes.text(),
+            });
+          }
+        }
         console.log('[Billingo] Using existing partner:', {
           timestamp: new Date().toISOString(),
           partner_id: partnerId,
@@ -410,15 +484,16 @@ async function createBillingoInvoice(params: {
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
-            name: params.customerEmail,
+            name: params.customerName || params.customerEmail,
             emails: [params.customerEmail],
-            taxcode: '',
-            address: {
+            taxcode: params.customerTaxCode || '',
+            address: params.customerAddress || {
               country_code: 'HU',
               post_code: '0000',
               city: 'N/A',
               address: 'N/A',
             },
+            type: 'company',
           }),
         });
 
@@ -698,6 +773,9 @@ Deno.serve(async (req) => {
 
           const adsBillingoResult = await createBillingoInvoice({
             customerEmail,
+            customerName: getNestedCustomerName(obj),
+            customerAddress: getNestedCustomerAddress(obj),
+            customerTaxCode: getNestedCustomerTaxCode(obj),
             plan: `ads_${plan}`,
             amountHuf: ADS_PLAN_AMOUNTS[plan] || 0,
             userId,
@@ -858,6 +936,9 @@ Deno.serve(async (req) => {
         });
         const billingoResult = await createBillingoInvoice({
           customerEmail,
+          customerName: getNestedCustomerName(obj),
+          customerAddress: getNestedCustomerAddress(obj),
+          customerTaxCode: getNestedCustomerTaxCode(obj),
           plan,
           amountHuf: PLAN_AMOUNTS[plan] || 0,
           userId,
@@ -1087,6 +1168,9 @@ Deno.serve(async (req) => {
         const billingoPlan = lookup.module === 'ads' ? `ads_${plan}` : plan;
         const billingoResult = await createBillingoInvoice({
           customerEmail,
+          customerName: getNestedCustomerName(obj),
+          customerAddress: getNestedCustomerAddress(obj),
+          customerTaxCode: getNestedCustomerTaxCode(obj),
           plan: billingoPlan,
           amountHuf,
           userId: lookup.userId,

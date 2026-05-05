@@ -116,6 +116,8 @@ Deno.serve(async (req) => {
     params.append('client_reference_id', user.id);
     params.append('metadata[user_id]', user.id);
     params.append('metadata[plan]', plan);
+    params.append('billing_address_collection', 'required');
+    params.append('tax_id_collection[enabled]', 'true');
     if (isAdsModule) {
       params.append('metadata[module]', 'ads');
     }
