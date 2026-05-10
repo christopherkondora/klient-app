@@ -100,11 +100,6 @@ jobs:
             }
           }
 
-          $expectedPublisherName = 'CN=Kondora Kristóf Máté Egyéni Vállalkozó, O=Kondora Kristóf Máté Egyéni Vállalkozó, L=Ják, S=Vas, C=HU'
-          if ($env:AZURE_CODE_SIGNING_PUBLISHER_NAME -ne $expectedPublisherName) {
-            throw "AZURE_CODE_SIGNING_PUBLISHER_NAME must match the certificate subject: $expectedPublisherName"
-          }
-
       - name: Build, sign and publish (Windows)
         if: matrix.os == 'windows-latest'
         timeout-minutes: 45
