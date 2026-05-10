@@ -25,7 +25,9 @@
     "freelancer",
     "agency"
   ],
-  "author": "",
+  "author": {
+    "name": "Kondora Kristóf Máté Egyéni Vállalkozó"
+  },
   "license": "ISC",
   "type": "commonjs",
   "devDependencies": {

@@ -8,7 +8,64 @@ let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let isQuitting = false;
 
+type UpdateStatus = {
+  status: 'idle' | 'checking' | 'available' | 'downloaded' | 'error';
+  info?: unknown;
+  message?: string;
+};
+
+let updateStatus: UpdateStatus = { status: 'idle' };
+
 const isDev = !app.isPackaged;
+
+function sendUpdateStatus(status: UpdateStatus) {
+  updateStatus = status;
+  mainWindow?.webContents.send('update:status', status);
+}
+
+function setupAutoUpdater() {
+  ipcMain.handle('update:status', () => updateStatus);
+  ipcMain.handle('update:install', () => {
+    autoUpdater.quitAndInstall();
+  });
+
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+
+  autoUpdater.on('checking-for-update', () => {
+    sendUpdateStatus({ status: 'checking' });
+  });
+
+  autoUpdater.on('update-available', (info) => {
+    sendUpdateStatus({ status: 'available', info });
+    mainWindow?.webContents.send('update:available', info);
+  });
+
+  autoUpdater.on('update-downloaded', (info) => {
+    sendUpdateStatus({ status: 'downloaded', info });
+    mainWindow?.webContents.send('update:downloaded', info);
+  });
+
+  autoUpdater.on('update-not-available', () => {
+    sendUpdateStatus({ status: 'idle' });
+  });
+
+  autoUpdater.on('error', (error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn('[main] Auto-update failed:', message);
+    sendUpdateStatus({ status: 'error', message });
+    mainWindow?.webContents.send('update:error', message);
+  });
+
+  if (!isDev) {
+    autoUpdater.checkForUpdatesAndNotify().catch((error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn('[main] Auto-update check failed:', message);
+      sendUpdateStatus({ status: 'error', message });
+      mainWindow?.webContents.send('update:error', message);
+    });
+  }
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -100,25 +157,7 @@ app.whenReady().then(async () => {
 
   createWindow();
   createTray();
-
-  // Auto-updater (only in production)
-  if (!isDev) {
-    autoUpdater.autoDownload = true;
-    autoUpdater.autoInstallOnAppQuit = true;
-    autoUpdater.checkForUpdatesAndNotify();
-  }
-
-  // Forward update events to renderer
-  autoUpdater.on('update-available', (info) => {
-    mainWindow?.webContents.send('update:available', info);
-  });
-  autoUpdater.on('update-downloaded', (info) => {
-    mainWindow?.webContents.send('update:downloaded', info);
-  });
-
-  ipcMain.handle('update:install', () => {
-    autoUpdater.quitAndInstall();
-  });
+  setupAutoUpdater();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

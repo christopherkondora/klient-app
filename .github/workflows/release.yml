@@ -8,7 +8,7 @@ on:
 
 env:
   AZURE_CODE_SIGNING_ENDPOINT: https://weu.codesigning.azure.net/
-  AZURE_CODE_SIGNING_PUBLISHER_NAME: Klient
+  AZURE_CODE_SIGNING_PUBLISHER_NAME: CN=Kondora Kristóf Máté Egyéni Vállalkozó, O=Kondora Kristóf Máté Egyéni Vállalkozó, L=Ják, S=Vas, C=HU
 
 jobs:
   release:
@@ -76,9 +76,33 @@ jobs:
       - name: Validate Azure Trusted Signing config
         if: matrix.os == 'windows-latest'
         shell: powershell
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_CODE_SIGNING_ACCOUNT_NAME: ${{ secrets.AZURE_CODE_SIGNING_ACCOUNT_NAME }}
+          AZURE_CERTIFICATE_PROFILE_NAME: ${{ secrets.AZURE_CERTIFICATE_PROFILE_NAME }}
         run: |
-          if ([string]::IsNullOrWhiteSpace($env:AZURE_CODE_SIGNING_ENDPOINT) -or $env:AZURE_CODE_SIGNING_ENDPOINT -eq '__SET_AZURE_CODE_SIGNING_ENDPOINT__') {
-            throw "Set AZURE_CODE_SIGNING_ENDPOINT in .github/workflows/release.yml to your Artifact Signing regional endpoint, for example https://weu.codesigning.azure.net/"
+          $required = @(
+            'AZURE_CODE_SIGNING_ENDPOINT',
+            'AZURE_CODE_SIGNING_PUBLISHER_NAME',
+            'AZURE_TENANT_ID',
+            'AZURE_CLIENT_ID',
+            'AZURE_CLIENT_SECRET',
+            'AZURE_CODE_SIGNING_ACCOUNT_NAME',
+            'AZURE_CERTIFICATE_PROFILE_NAME'
+          )
+
+          foreach ($name in $required) {
+            $value = [Environment]::GetEnvironmentVariable($name)
+            if ([string]::IsNullOrWhiteSpace($value) -or $value.StartsWith('__SET_')) {
+              throw "Missing Azure Trusted Signing configuration: $name"
+            }
+          }
+
+          $expectedPublisherName = 'CN=Kondora Kristóf Máté Egyéni Vállalkozó, O=Kondora Kristóf Máté Egyéni Vállalkozó, L=Ják, S=Vas, C=HU'
+          if ($env:AZURE_CODE_SIGNING_PUBLISHER_NAME -ne $expectedPublisherName) {
+            throw "AZURE_CODE_SIGNING_PUBLISHER_NAME must match the certificate subject: $expectedPublisherName"
           }
 
       - name: Build, sign and publish (Windows)

@@ -1,23 +1,49 @@
 import { useEffect, useState } from 'react';
-import { Download, RefreshCw, X } from 'lucide-react';
+import { AlertCircle, Download, RefreshCw, X } from 'lucide-react';
+
+type UpdateStatus = 'idle' | 'available' | 'downloaded' | 'error';
+
+function extractVersion(info: unknown) {
+  return typeof info === 'object' && info !== null && 'version' in info ? String((info as { version?: unknown }).version || '') : '';
+}
 
 export default function UpdateBanner() {
-  const [status, setStatus] = useState<'idle' | 'available' | 'downloaded'>('idle');
+  const [status, setStatus] = useState<UpdateStatus>('idle');
   const [version, setVersion] = useState('');
   const [dismissed, setDismissed] = useState(false);
 
   useEffect(() => {
-    const cleanupAvailable = window.electronAPI.onUpdateAvailable((info: any) => {
-      setVersion(info?.version || '');
+    const applyStatus = (nextStatus: { status?: string; info?: unknown }) => {
+      if (nextStatus.status === 'available' || nextStatus.status === 'downloaded') {
+        setVersion(extractVersion(nextStatus.info));
+        setStatus(nextStatus.status);
+        setDismissed(false);
+      } else if (nextStatus.status === 'error') {
+        setVersion('');
+        setStatus('error');
+        setDismissed(false);
+      }
+    };
+
+    window.electronAPI.getUpdateStatus().then(applyStatus).catch(() => {});
+
+    const cleanupStatus = window.electronAPI.onUpdateStatus(applyStatus);
+    const cleanupAvailable = window.electronAPI.onUpdateAvailable((info) => {
+      setVersion(extractVersion(info));
       setStatus('available');
       setDismissed(false);
     });
-    const cleanupDownloaded = window.electronAPI.onUpdateDownloaded((info: any) => {
-      setVersion(info?.version || '');
+    const cleanupDownloaded = window.electronAPI.onUpdateDownloaded((info) => {
+      setVersion(extractVersion(info));
       setStatus('downloaded');
       setDismissed(false);
     });
-    return () => { cleanupAvailable(); cleanupDownloaded(); };
+    const cleanupError = window.electronAPI.onUpdateError(() => {
+      setVersion('');
+      setStatus('error');
+      setDismissed(false);
+    });
+    return () => { cleanupStatus(); cleanupAvailable(); cleanupDownloaded(); cleanupError(); };
   }, []);
 
   if (status === 'idle' || dismissed) return null;
@@ -29,7 +55,7 @@ export default function UpdateBanner() {
           <Download className="w-3.5 h-3.5 animate-bounce" />
           <span>Új verzió érhető el{version ? ` (v${version})` : ''} — letöltés folyamatban...</span>
         </>
-      ) : (
+      ) : status === 'downloaded' ? (
         <>
           <RefreshCw className="w-3.5 h-3.5" />
           <span>A frissítés{version ? ` (v${version})` : ''} letöltődött.</span>
@@ -39,6 +65,11 @@ export default function UpdateBanner() {
           >
             Telepítés most
           </button>
+        </>
+      ) : (
+        <>
+          <AlertCircle className="w-3.5 h-3.5" />
+          <span>A frissítés ellenőrzése sikertelen.</span>
         </>
       )}
       <button

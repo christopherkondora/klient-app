@@ -26,7 +26,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   reactivateSubscription: (module?: string) => ipcRenderer.invoke('db:subscription:reactivate', module),
 
   // Update
+  getUpdateStatus: () => ipcRenderer.invoke('update:status'),
   installUpdate: () => ipcRenderer.invoke('update:install'),
+  onUpdateStatus: (callback: (status: unknown) => void) => {
+    const handler = (_event: unknown, status: unknown) => callback(status);
+    ipcRenderer.on('update:status', handler);
+    return () => { ipcRenderer.removeListener('update:status', handler); };
+  },
   onUpdateAvailable: (callback: (info: unknown) => void) => {
     const handler = (_event: unknown, info: unknown) => callback(info);
     ipcRenderer.on('update:available', handler);
@@ -36,6 +42,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const handler = (_event: unknown, info: unknown) => callback(info);
     ipcRenderer.on('update:downloaded', handler);
     return () => { ipcRenderer.removeListener('update:downloaded', handler); };
+  },
+  onUpdateError: (callback: (message: unknown) => void) => {
+    const handler = (_event: unknown, message: unknown) => callback(message);
+    ipcRenderer.on('update:error', handler);
+    return () => { ipcRenderer.removeListener('update:error', handler); };
   },
 
   // Database operations - Clients

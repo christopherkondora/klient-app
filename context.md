@@ -131,6 +131,17 @@ Klient/
 │       ├── AdsCampaignView.tsx    # Kampány nézet: header+chart (közös) → típus alapján route Search/PMax
 │       └── AdsAiPanel.tsx         # AI elemzés panel (dropdown menu + A5 document viewer)
 │
+├── shared/                       # Közös domain modulok (sem electron, sem react import)
+│   ├── invoice-scenario.ts       # Számla szcenárió: ÁFA szabályok, vatCode, záradék
+│   └── types/                    # Domain típusok (Client, Project, Invoice…)
+│       └── client.ts             # Client interface (renderer + electron közös)
+│
+├── electron/stores/              # Per-domain SQLite store-ok (factory pattern)
+│   └── clients-store.ts          # Clients tábla domain-tipizált CRUD felülete
+│
+├── src/view-models/              # Renderer-szintű adat-orchestráció (page-szintű)
+│   └── dashboard-view-model.ts   # Dashboard load logika tiszta async fn-ekben
+│
 ├── supabase/                     # Supabase Edge Functions + migrations
 │   └── functions/ads-analyze/    # Claude API edge function (AI elemzés)
 ├── scripts/                      # Build/deploy scriptek
@@ -396,6 +407,56 @@ Az IPC rendszer `db:` prefixű handler-ekkel működik, a `preload.ts` bridge-el
 
 ---
 
+## Page view-modelek (`src/view-models/`)
+
+A nagy oldal-komponensek (Dashboard ~1000 sor, Finances ~1300, ProjectDetail ~1500) eddig egyszerre voltak megjelenítők és adat-orchestrátorok. A betöltési logika — 8+ párhuzamos IPC-hívás, derived state összeállítás, sync-event reakció — a komponens body-jában élt, és csak a teljes oldal renderelésével lehetett volna tesztelni.
+
+Az új minta: minden ilyen oldalhoz tartozik egy view-model modul (pl. `dashboard-view-model.ts`), ami **tiszta async függvényeket** exportál:
+
+- `loadDashboardSnapshot(api: DashboardApi): Promise<DashboardSnapshot>` — egy kép a Dashboardhoz tartozó összes adatról.
+- `loadCalendarSnapshot(api, view, anchor)` — a naptár-tartomány lekérése.
+- `calendarRange(view, anchor)` — tiszta dátum-kalkuláció.
+
+A `DashboardApi` interface a `window.electronAPI` vonatkozó részhalmaza, így a komponens egyszerűen `loadDashboardSnapshot(window.electronAPI)`-t hív. A teszt mock-objektumot ad át, és ellenőrzi az IPC-hívások számát, a snapshot összeállítását, a derived state-et (pl. csak az aktív projektek maradnak), és a hibautakat.
+
+A komponens JSX-e érintetlen marad — csak a `loadData()` és `loadCalendarEvents()` belső 30-40 sora zsugorodik 5-6 sorrá.
+
+**Migráció állapota:** Dashboard ✅. A Finances, ProjectDetail, ClientDetail page-ek még inline orchestrációt használnak. Fokozatosan migrálódnak.
+
+---
+
+## Per-domain stores (`electron/stores/`)
+
+A 142 IPC handler korábban közvetlenül `db-helpers.ts`-en keresztül raw SQL-t futtatott, és nyers `Record<string, unknown>` sorokat lökött a renderer felé — a domain típusok (Client, Project, …) csak a renderer oldali `vite-env.d.ts`-ben éltek, a main process nem tudott róluk.
+
+Az új minta: minden tábla saját store-modult kap (`clients-store.ts`, később `projects-store.ts` stb.). A store-modul **factory** (`createClientsStore({ getDb, saveDb })`), ami:
+
+- **Domain-tipizált felületet ad** — pl. `list(): Client[]`, `byId(id): Client | null`, `create(input: ClientInput): Client`. Ezek a típusok a `shared/types/`-ban élnek, mindkét oldal innen importál.
+- **A row → Client mapping a store felelőssége** — a renderer biztos lehet abban, hogy minden mező megvan és a default értékek normalizáltak.
+- **Tesztben in-memory sql.js-szel hajtható** — a `getDb`/`saveDb` deps kívülről jönnek, nincs szükség az alkalmazás teljes db-állapotára.
+
+Az IPC handlerek vékonyak: `ipcMain.handle('db:clients:getAll', () => clientsStore.list())`. Fájlrendszer mellékhatások (mappa-létrehozás, átnevezés ügyfél-rename-kor) az IPC rétegben maradnak — nem domain logika.
+
+**Migráció állapota:** clients ✅. A többi domain (projects, invoices, expenses, calendar, notes, recordings, contracts, shortcuts, team, tax, ads…) még közvetlenül `db-helpers.ts`-t használ. Fokozatosan migrálódnak — a `db-helpers.ts` akkor törölhető, ha minden hívó áttért.
+
+---
+
+## Számla szcenárió (`shared/invoice-scenario.ts`)
+
+Egyetlen igazság a magyar számlázás ÁFA-szabályaira. Bemenet: vevő országkódja, vevő EU ÁFA száma, eladó áfa-státusza (`standard | exempt`), alapértelmezett HU ÁFA kulcs, számla nyelve. Kimenet: `{ kind, vatRate, vatCode?, comment, useEuVatNumberAsTaxCode }`.
+
+A `kind` öt eset: `hu-domestic-standard`, `hu-domestic-aam` (alanyi adómentes), `eu-b2b` (EU vevő érvényes EU VAT számmal — fordított adózás), `eu-b2c` (EU vevő VAT szám nélkül — HU 27% ÁFA), `third-country` (EU-n kívül — EUK).
+
+Mindkét folyamat innen vezeti le az értékeit:
+- `src/components/InvoiceGenerateModal.tsx` — űrlap-előnézet, vatCode/záradék mezők kitöltése.
+- `electron/ipc.ts` (`resolveLocalInvoiceVatRate`) — kézi rögzített számláknál a HU ÁFA kulcs visszaállítása.
+
+A `vatCode` értékkészlete a magyar számlázási rövidítések (AAM, EU, EUK, ATHK, …). A Billingo / Számlázz.hu adapter ezeket a saját formátumára fordítja át — a szcenárió nem ismeri a provider API-kat.
+
+A modul tilos electron- vagy React-importot tenni, hogy mindkét oldal terhelés nélkül használhassa.
+
+---
+
 ## Konvenciók
 
 - **Nyelv:** Magyar UI szövegek, angol kód (változónevek, kommentek)
@@ -469,4 +530,8 @@ Az IPC rendszer `db:` prefixű handler-ekkel működik, a `preload.ts` bridge-el
 
 ---
 
-*Utolsó frissítés: 2026-05-03*
+- 2026-05-05: Page view-model minta indult — `src/view-models/dashboard-view-model.ts`. A Dashboard (1000 sor, 17 useState) betöltési logikája egy tiszta `loadDashboardSnapshot(api)` függvényben él, amit teszt mock-API-val hajtott. A komponens JSX-e érintetlen, csak a `loadData()`/`loadCalendarEvents()` 30-40 sora zsugorodott 5-6 sorrá. A Vitest config bővült: `src/**/*.test.ts` és `shared/**/*.test.ts` is felfedezésre kerül.
+- 2026-05-05: Per-domain stores minta indult — `electron/stores/clients-store.ts` factory pattern alapján, in-memory sql.js teszttel. Az `db:clients:*` 5 IPC handler innen szolgálódik ki, a Client típus pedig átkerült a `shared/types/client.ts`-be (a renderer `vite-env.d.ts` `declare global`-lá szervezve, hogy az importok ne változzanak). A pattern később megy át a többi domainre.
+- 2026-05-05: A számla szcenárió logika konszolidálva egy közös modulba (`shared/invoice-scenario.ts`). Korábban a renderer (`src/utils/vat.ts`) és a main (`billing-service.ts resolveVatCode`) párhuzamosan, hiányosan tartotta — pl. AAM eladó esetén az űrlap-előnézet 27%-ot mutatott, miközben a kiküldött számla AAM 0%-ot. Az új modul mindkét oldalt egyetlen igazságról szolgálja ki, és többnyelvű (hu/en/de) záradékot is tud. Egy korábbi inkonzisztencia is javítva: EU B2C esetben a régi modul "VAT-exempt" záradékot tett, miközben 27% ÁFA-val ment ki a számla — most B2C-re nincs auto-záradék.
+
+*Utolsó frissítés: 2026-05-05*

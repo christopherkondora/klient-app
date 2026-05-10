@@ -32,9 +32,12 @@ interface ElectronAPI {
   reactivateSubscription: () => Promise<{ success: boolean }>;
 
   // Update
+  getUpdateStatus: () => Promise<{ status: 'idle' | 'checking' | 'available' | 'downloaded' | 'error'; info?: unknown; message?: string }>;
   installUpdate: () => Promise<void>;
+  onUpdateStatus: (callback: (status: { status: 'idle' | 'checking' | 'available' | 'downloaded' | 'error'; info?: unknown; message?: string }) => void) => () => void;
   onUpdateAvailable: (callback: (info: unknown) => void) => () => void;
   onUpdateDownloaded: (callback: (info: unknown) => void) => () => void;
+  onUpdateError: (callback: (message: unknown) => void) => () => void;
 
   // Clients
   getClients: () => Promise<Client[]>;

@@ -1,7 +1,7 @@
 const azureCodeSigningEndpoint = process.env.AZURE_CODE_SIGNING_ENDPOINT || '';
 const azureCodeSigningAccountName = process.env.AZURE_CODE_SIGNING_ACCOUNT_NAME || '';
 const azureCertificateProfileName = process.env.AZURE_CERTIFICATE_PROFILE_NAME || '';
-const azurePublisherName = process.env.AZURE_CODE_SIGNING_PUBLISHER_NAME || 'Klient';
+const azurePublisherName = process.env.AZURE_CODE_SIGNING_PUBLISHER_NAME || 'CN=Kondora Kristóf Máté Egyéni Vállalkozó, O=Kondora Kristóf Máté Egyéni Vállalkozó, L=Ják, S=Vas, C=HU';
 
 module.exports = {
   appId: 'com.klient.app',
