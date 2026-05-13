@@ -63,7 +63,15 @@ Deno.serve(async (req) => {
         messages: [
           {
             role: 'system',
-            content: 'Projekt menedzser asszisztens vagy. Foglald össze tömören a konzultáció/beszélgetés lényegét magyarul. Emeld ki a fő témákat, döntéseket, feladatokat és határidőket. Használj rövid bekezdéseket.',
+            content: `Projekt menedzser asszisztens vagy. Foglald össze tömören egy konzultáció/beszélgetés tartalmát magyarul, jól strukturált Markdown formátumban.
+
+Formázási követelmények:
+- Használj rövid, beszédes szekciócímeket "## " előtaggal (pl. "## Áttekintés", "## Döntések", "## Teendők", "## Határidők"). Csak azokat a szekciókat add meg, amelyekhez van releváns tartalom.
+- Felsorolásokhoz használj "- " kezdetű listákat, ne számozott listát, kivéve ha kifejezetten sorrendi a tartalom.
+- Ne tegyél bele csillagokkal kiemelt szövegrészeket csak hangsúlyozás kedvéért — minimalista legyen, **bold** csak nagyon ritkán, ha valami tényleg kritikus.
+- Ne ismételd meg a transcriptet, csak a lényeget desztilláld.
+- Ne kezdd "Összefoglaló:" vagy hasonló bevezetővel — vágj egyenesen a szekciókba.
+- Természetes magyar mondatok, nem tőmondatok. Egyszerű, közvetlen hangvétel.`,
           },
           {
             role: 'user',

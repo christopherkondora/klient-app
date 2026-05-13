@@ -1,6 +1,8 @@
 import { useEffect, useState, useRef } from 'react';
 import { Mic, Square, Play, Pause, Trash2, Clock } from 'lucide-react';
 import ConfirmDialog from '../components/ConfirmDialog';
+import SttDisclaimerModal, { isSttDisclaimerDismissed } from '../components/SttDisclaimerModal';
+import { stripMarkdown } from '../components/MarkdownSummary';
 import { startAudioRecording, canCaptureSystemAudio, RecordingSession } from '../utils/recording';
 
 export default function Recordings() {
@@ -13,6 +15,7 @@ export default function Recordings() {
   const [showSaveForm, setShowSaveForm] = useState(false);
   const [loading, setLoading] = useState(true);
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [showSttDisclaimer, setShowSttDisclaimer] = useState(false);
 
   const mediaRecorder = useRef<MediaRecorder | null>(null);
   const audioChunks = useRef<Blob[]>([]);
@@ -40,6 +43,14 @@ export default function Recordings() {
       console.error('Failed to load recordings:', err);
     } finally {
       setLoading(false);
+    }
+  }
+
+  function handleStartRecordingClick() {
+    if (isSttDisclaimerDismissed()) {
+      startRecording();
+    } else {
+      setShowSttDisclaimer(true);
     }
   }
 
@@ -172,7 +183,7 @@ export default function Recordings() {
               </div>
               <p className="text-sm text-surface-500">Kattints a gombra a felvétel indításához</p>
               <button
-                onClick={startRecording}
+                onClick={handleStartRecordingClick}
                 className="flex items-center gap-2 px-6 py-2.5 bg-primary-600 text-white rounded-lg font-medium hover:bg-primary-700"
               >
                 <Mic size={16} /> Felvétel indítása
@@ -185,7 +196,7 @@ export default function Recordings() {
                     onChange={(e) => setIncludeSystemAudio(e.target.checked)}
                     className="accent-primary-600"
                   />
-                  Rendszerhang is rögzítése <span className="text-surface-400">(pl. Google Meet, Teams)</span>
+                  Rendszerhang rögzítése <span className="text-surface-400">(pl. Google Meet, Teams)</span>
                 </label>
               )}
             </>
@@ -232,7 +243,7 @@ export default function Recordings() {
                   </span>
                 </div>
                 {recording.ai_summary && (
-                  <p className="text-xs text-surface-500 mt-1 truncate">{recording.ai_summary}</p>
+                  <p className="text-xs text-surface-500 mt-1 truncate">{stripMarkdown(recording.ai_summary)}</p>
                 )}
               </div>
               <button
@@ -266,6 +277,14 @@ export default function Recordings() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* STT Disclaimer */}
+      {showSttDisclaimer && (
+        <SttDisclaimerModal
+          onConfirm={() => { setShowSttDisclaimer(false); startRecording(); }}
+          onClose={() => setShowSttDisclaimer(false)}
+        />
       )}
 
       {/* Delete Confirm */}

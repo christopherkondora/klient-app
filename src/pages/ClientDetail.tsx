@@ -14,6 +14,7 @@ import InvoicePdfViewer from '../components/InvoicePdfViewer';
 import ConfirmDialog from '../components/ConfirmDialog';
 import ContractGenerateModal from '../components/ContractGenerateModal';
 import ContractPdfViewer from '../components/ContractPdfViewer';
+import MarkdownSummary from '../components/MarkdownSummary';
 import { ClientForm } from './Clients';
 import { useThemedColor } from '../utils/colors';
 import { startAudioRecording, canCaptureSystemAudio, RecordingSession } from '../utils/recording';
@@ -650,7 +651,7 @@ export default function ClientDetail() {
                           <h4 className="text-xs font-semibold text-emerald-400 flex items-center gap-1 mb-1">
                             <Sparkles width={11} height={11} /> AI Összefoglaló
                           </h4>
-                          <p className="text-sm text-cream/80 whitespace-pre-wrap leading-relaxed">{recording.ai_summary}</p>
+                          <MarkdownSummary content={recording.ai_summary} />
                         </div>
                       )}
                       {recording.transcription && (

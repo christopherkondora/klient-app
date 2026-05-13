@@ -184,17 +184,26 @@ ipcMain.on('window-maximize', () => {
 ipcMain.on('window-close', () => mainWindow?.close());
 ipcMain.handle('window-is-maximized', () => mainWindow?.isMaximized());
 
-// --- Speech Recognition via Deepgram + AI via Supabase Edge Functions ---
+// --- Speech Recognition via ElevenLabs Scribe + AI via Supabase Edge Functions ---
 import WebSocket from 'ws';
 import fs from 'fs';
 import { getSupabase } from './supabase';
 
-// ── Deepgram real-time streaming (for dictation) ──
-let dgSocket: WebSocket | null = null;
-let cachedDgKey: string | null = null;
+// Hungarian-specific keyterms (Klient domain vocabulary).
+// Realtime cap: 50 keyterms, ≤20 chars each. Batch cap: 1000 keyterms, ≤50 chars.
+const HU_KEYTERMS_REALTIME = [
+  'számla', 'Billingo', 'NAV', 'KATA', 'KIVA', 'TAO', 'ÁFA',
+  'ügyfél', 'projekt', 'határidő', 'megbízási', 'vállalkozói',
+  'számlázz.hu', 'Klient', 'bevétel', 'kiadás',
+];
+const HU_KEYTERMS_BATCH = HU_KEYTERMS_REALTIME;
 
-async function getDgKey(): Promise<{ key: string | null; error?: string }> {
-  if (cachedDgKey) return { key: cachedDgKey };
+// ── ElevenLabs Scribe real-time streaming (for dictation) ──
+let sttSocket: WebSocket | null = null;
+let cachedElevenLabsKey: string | null = null;
+
+async function getElevenLabsKey(): Promise<{ key: string | null; error?: string }> {
+  if (cachedElevenLabsKey) return { key: cachedElevenLabsKey };
   try {
     const sb = getSupabase();
 
@@ -203,7 +212,7 @@ async function getDgKey(): Promise<{ key: string | null; error?: string }> {
       return { key: null, error: `Session hiba: ${sessionError?.message || 'Nincs aktív munkamenet'}` };
     }
 
-    const { data, error } = await sb.functions.invoke('get-deepgram-key');
+    const { data, error } = await sb.functions.invoke('get-elevenlabs-key');
     if (error) {
       let detail = error.message || String(error);
       try {
@@ -217,52 +226,65 @@ async function getDgKey(): Promise<{ key: string | null; error?: string }> {
     if (!data?.key) {
       return { key: null, error: `Nem érkezett kulcs a válaszban` };
     }
-    cachedDgKey = data.key;
-    return { key: cachedDgKey };
+    cachedElevenLabsKey = data.key;
+    return { key: cachedElevenLabsKey };
   } catch (err) {
     return { key: null, error: `Váratlan hiba: ${err}` };
   }
 }
 
 ipcMain.handle('speech:startStream', async () => {
-  const { key: apiKey, error: keyError } = await getDgKey();
-  if (!apiKey) return { ok: false, error: keyError || 'No Deepgram API key' };
-  if (dgSocket && dgSocket.readyState === WebSocket.OPEN) return { ok: true };
+  const { key: apiKey, error: keyError } = await getElevenLabsKey();
+  if (!apiKey) return { ok: false, error: keyError || 'Hiányzó ElevenLabs API kulcs' };
+  if (sttSocket && sttSocket.readyState === WebSocket.OPEN) return { ok: true };
 
   return new Promise<{ ok: boolean; error?: string }>((resolve) => {
-    const url = 'wss://api.deepgram.com/v1/listen?language=hu&model=nova-3&punctuate=true&interim_results=true&encoding=linear16&sample_rate=16000&channels=1';
-    const ws = new WebSocket(url, { headers: { Authorization: `Token ${apiKey}` } });
+    const params = new URLSearchParams({
+      model_id: 'scribe_v2_realtime',
+      language_code: 'hun',
+      audio_format: 'pcm_16000',
+      commit_strategy: 'vad',
+    });
+    for (const term of HU_KEYTERMS_REALTIME) params.append('keyterms', term);
+    const url = `wss://api.elevenlabs.io/v1/speech-to-text/realtime?${params.toString()}`;
+    const ws = new WebSocket(url, { headers: { 'xi-api-key': apiKey } });
 
     ws.on('open', () => {
-      dgSocket = ws;
+      sttSocket = ws;
       resolve({ ok: true });
     });
 
     ws.on('message', (raw: WebSocket.RawData) => {
       try {
         const msg = JSON.parse(raw.toString());
-        if (msg.type === 'Results' && msg.channel?.alternatives?.[0]) {
-          const alt = msg.channel.alternatives[0];
+        if (msg.message_type === 'partial_transcript') {
           mainWindow?.webContents.send('speech:transcript', {
-            text: alt.transcript || '',
-            isFinal: msg.is_final ?? false,
+            text: msg.text || '',
+            isFinal: false,
           });
+        } else if (msg.message_type === 'committed_transcript' || msg.message_type === 'committed_transcript_with_timestamps') {
+          mainWindow?.webContents.send('speech:transcript', {
+            text: msg.text || '',
+            isFinal: true,
+          });
+        } else if (typeof msg.message_type === 'string' && msg.message_type.toLowerCase().includes('error')) {
+          console.error('[ElevenLabs] STT error event:', msg);
         }
       } catch { /* ignore malformed */ }
     });
 
     ws.on('error', (err) => {
-      console.error('[Deepgram] WebSocket error:', err.message);
-      dgSocket = null;
+      console.error('[ElevenLabs] WebSocket error:', err.message);
+      sttSocket = null;
       resolve({ ok: false, error: err.message });
     });
 
-    ws.on('close', () => { dgSocket = null; });
+    ws.on('close', () => { sttSocket = null; });
 
     setTimeout(() => {
       if (ws.readyState !== WebSocket.OPEN) {
         ws.terminate();
-        dgSocket = null;
+        sttSocket = null;
         resolve({ ok: false, error: 'Connection timeout' });
       }
     }, 10000);
@@ -270,52 +292,75 @@ ipcMain.handle('speech:startStream', async () => {
 });
 
 ipcMain.on('speech:sendAudio', (_event, audioBase64: string) => {
-  if (dgSocket && dgSocket.readyState === WebSocket.OPEN) {
-    dgSocket.send(Buffer.from(audioBase64, 'base64'));
+  if (sttSocket && sttSocket.readyState === WebSocket.OPEN) {
+    sttSocket.send(JSON.stringify({
+      message_type: 'input_audio_chunk',
+      audio_base_64: audioBase64,
+      sample_rate: 16000,
+    }));
   }
 });
 
 ipcMain.handle('speech:stopStream', () => {
-  if (dgSocket && dgSocket.readyState === WebSocket.OPEN) {
-    dgSocket.send(JSON.stringify({ type: 'CloseStream' }));
-    dgSocket.close();
+  if (sttSocket && sttSocket.readyState === WebSocket.OPEN) {
+    try {
+      // Force-commit any pending audio before closing so trailing words aren't lost.
+      sttSocket.send(JSON.stringify({
+        message_type: 'input_audio_chunk',
+        audio_base_64: '',
+        commit: true,
+        sample_rate: 16000,
+      }));
+    } catch { /* ignore */ }
+    sttSocket.close();
   }
-  dgSocket = null;
+  sttSocket = null;
   return { ok: true };
 });
 
-// ── Transcribe a full recording file via Deepgram directly ──
+// ── Transcribe a full recording file via ElevenLabs Scribe v2 (batch) ──
 ipcMain.handle('recordings:transcribe', async (_event, filePath: string) => {
   try {
-    const { key: apiKey, error: keyError } = await getDgKey();
-    if (!apiKey) return { text: '', error: keyError || 'Nem sikerült a Deepgram API kulcsot lekérni' };
+    const { key: apiKey, error: keyError } = await getElevenLabsKey();
+    if (!apiKey) return { text: '', error: keyError || 'Nem sikerült az ElevenLabs API kulcsot lekérni' };
 
     const audio = fs.readFileSync(filePath);
     console.log(`[Transcribe] File: ${filePath}, size: ${(audio.length / 1024 / 1024).toFixed(1)} MB`);
-    const ext = path.extname(filePath).slice(1) || 'webm';
-    const mimeMap: Record<string, string> = { webm: 'audio/webm', wav: 'audio/wav', mp3: 'audio/mpeg', ogg: 'audio/ogg' };
+    const ext = path.extname(filePath).slice(1).toLowerCase() || 'webm';
+    const mimeMap: Record<string, string> = {
+      webm: 'audio/webm',
+      wav: 'audio/wav',
+      mp3: 'audio/mpeg',
+      ogg: 'audio/ogg',
+      m4a: 'audio/mp4',
+      mp4: 'audio/mp4',
+      flac: 'audio/flac',
+    };
     const contentType = mimeMap[ext] || 'audio/webm';
 
-    const response = await fetch(
-      'https://api.deepgram.com/v1/listen?language=hu&model=nova-3&punctuate=true&smart_format=true',
-      {
-        method: 'POST',
-        headers: {
-          'Authorization': `Token ${apiKey}`,
-          'Content-Type': contentType,
-        },
-        body: audio,
-      }
-    );
+    const form = new FormData();
+    form.append('model_id', 'scribe_v2');
+    form.append('language_code', 'hun');
+    form.append('tag_audio_events', 'false');
+    form.append('diarize', 'false');
+    form.append('timestamps_granularity', 'none');
+    for (const term of HU_KEYTERMS_BATCH) form.append('keyterms', term);
+    form.append('file', new Blob([new Uint8Array(audio)], { type: contentType }), `audio.${ext}`);
+
+    const response = await fetch('https://api.elevenlabs.io/v1/speech-to-text', {
+      method: 'POST',
+      headers: { 'xi-api-key': apiKey },
+      body: form,
+    });
 
     if (!response.ok) {
       const errText = await response.text();
-      console.error(`[Transcribe] Deepgram HTTP ${response.status}:`, errText);
-      return { text: '', error: `Deepgram hiba: ${response.status}` };
+      console.error(`[Transcribe] ElevenLabs HTTP ${response.status}:`, errText);
+      return { text: '', error: `ElevenLabs hiba: ${response.status}` };
     }
 
-    const json = await response.json() as { results?: { channels?: { alternatives?: { transcript?: string }[] }[] } };
-    const transcript = json.results?.channels?.[0]?.alternatives?.[0]?.transcript || '';
+    const json = await response.json() as { text?: string };
+    const transcript = json.text || '';
     console.log(`[Transcribe] Success, transcript length: ${transcript.length} chars`);
     return { text: transcript };
   } catch (err) {

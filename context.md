@@ -21,7 +21,7 @@
 | Auth/Backend | Supabase | – |
 | Payment | Stripe | – |
 | Invoicing | Billingo API v3, Számlázz.hu XML API | – |
-| Speech | Deepgram (WebSocket + HTTP) | – |
+| Speech | ElevenLabs Scribe v2 (WebSocket + HTTP) | – |
 | PDF | pdf-lib | – |
 | Rich Text | TipTap | – |
 | Fonts | Space Grotesk (heading), Red Hat Display (body) | – |
@@ -33,7 +33,7 @@
 ```
 Klient/
 ├── electron/                     # Electron main process
-│   ├── main.ts                   # App lifecycle, window, tray, Deepgram WS, auto-updater
+│   ├── main.ts                   # App lifecycle, window, tray, ElevenLabs Scribe WS, auto-updater
 │   ├── preload.ts                # contextBridge – 90+ IPC method exposed to renderer
 │   ├── database.ts               # sql.js SQLite init, migrations, user-scoped DB
 │   ├── db-helpers.ts             # Generic CRUD helpers (getAll, getById, create, update, delete)
@@ -70,7 +70,7 @@ Klient/
 │   │   ├── Calendar.tsx          # Heti/havi naptár, drag-drop események
 │   │   ├── Finances.tsx          # Bevétel/kiadás, számlák, grafikonok, adó kalkulátor, extra costs
 │   │   ├── Notes.tsx             # Globális jegyzetek (TipTap editor, képek)
-│   │   ├── Recordings.tsx        # Hangfelvétel + Deepgram átirás + AI összefoglaló
+│   │   ├── Recordings.tsx        # Hangfelvétel + ElevenLabs Scribe v2 átirás + AI összefoglaló (MarkdownSummary)
 │   │   ├── Files.tsx             # Fájlkezelő (Explorer-szerű, drag-out, OS clipboard, rubber-band)
 │   │   ├── Shortcuts.tsx         # Gyorslinkek kezelése
 │   │   ├── Team.tsx              # Csapattagok, hozzárendelés projektekhez
@@ -103,6 +103,8 @@ Klient/
 │   │   ├── InvoiceGenerateModal.tsx   # Számla generálás modal (Billingo/Számlázz.hu)
 │   │   ├── InvoiceUploadModal.tsx     # Manuális számla feltöltés
 │   │   ├── InvoicePdfViewer.tsx       # PDF előnézet
+│   │   ├── SttDisclaimerModal.tsx     # STT disclaimer popup ("ne jelenjen meg" checkbox, localStorage)
+│   │   ├── MarkdownSummary.tsx        # react-markdown alapú AI összefoglaló megjelenítő + stripMarkdown util
 │   │   ├── ManualRevenueModal.tsx     # Kézi bevétel rögzítés
 │   │   ├── ExpenseModal.tsx           # Kiadás hozzáadás/szerkesztés (AI PDF extraction + extra cost)
 │   │   ├── ContractGenerateModal.tsx  # Szerződés generálás modal
@@ -279,7 +281,7 @@ Az IPC rendszer `db:` prefixű handler-ekkel működik, a `preload.ts` bridge-el
 ### Supabase
 - **URL:** `https://arbhhltbjovuxwvfcnni.supabase.co`
 - **Auth:** Email/password + Google OAuth (PKCE), file-based session persistence
-- **Edge Functions:** `get-deepgram-key`, `summarize`, `invoice-extract`, `expense-extract`, `create-checkout`, `manage-subscription`, `stripe-webhook`, `sync-stripe-subscriptions`, `transcribe` (mind `--no-verify-jwt`)
+- **Edge Functions:** `get-elevenlabs-key`, `get-deepgram-key` (deprecated, megtartva rollback-hez), `summarize`, `invoice-extract`, `expense-extract`, `create-checkout`, `manage-subscription`, `stripe-webhook`, `sync-stripe-subscriptions`, `transcribe` (mind `--no-verify-jwt`)
 - **RPC:** `expire_subscription(p_user_id)`
 - **Tábla:** `subscriptions` (status, trial_ends_at, current_period_end)
 
@@ -290,10 +292,12 @@ Az IPC rendszer `db:` prefixű handler-ekkel működik, a `preload.ts` bridge-el
 - **Billingo webhook állapot:** `BILLINGO_BLOCK_ID=315117` (production block), a beállított Billingo API kulcs nem egyezik a korábbi dokumentált tesztkulccsal. `BILLINGO_ENV` jelenleg `sandbox`, de a kódban csak logolásra szolgál; érdemes `production`-re igazítani, hogy ne legyen félrevezető.
 - **Előfizetéses számla email flow:** a Stripe webhook sikeres első checkout után Billingo számlát hoz létre és meghívja a Billingo `POST /documents/{id}/send` endpointot. Megújuló Stripe terheléseknél az `invoice.paid` / `invoice.payment_succeeded` ág csak `billing_reason=subscription_cycle` esetén készít és küld Billingo számlát. Az idempotenciát a Supabase `subscription_billing_events` tábla adja `stripe_event_id` és `stripe_invoice_id` alapján.
 
-### Deepgram
-- **Real-time:** WebSocket `wss://api.deepgram.com/v1/listen` (magyar nyelv)
-- **Batch:** HTTP `POST /v1/listen` (fájl átirás)
-- **AI summary:** Supabase `summarize` Edge Function
+### ElevenLabs Scribe v2
+- **Real-time (Notes diktálás):** WebSocket `wss://api.elevenlabs.io/v1/speech-to-text/realtime`, auth: `xi-api-key` header, `model_id=scribe_v2_realtime`, `language_code=hun`, `commit_strategy=vad`, `audio_format=pcm_16000`
+- **Batch (Recordings átirás):** HTTP `POST https://api.elevenlabs.io/v1/speech-to-text`, multipart form, `model_id=scribe_v2`, `language_code=hun`, max 3 GB, WebM/WAV/MP3/OGG/M4A/FLAC formátumok
+- **Keyterms:** `számla, Billingo, NAV, KATA, KIVA, TAO, ÁFA, ügyfél, projekt, határidő, megbízási, vállalkozói, számlázz.hu, Klient, bevétel, kiadás` — mindkét pipeline-on aktív (+20% surcharge)
+- **API kulcs:** Supabase secret `ELEVENLABS_API_KEY`, kiadja a `get-elevenlabs-key` Edge Function; a main process cache-eli (`cachedElevenLabsKey`)
+- **AI summary:** Supabase `summarize` Edge Function (GPT-4o-mini, strukturált markdown output: `## ` szekciók, `- ` listák)
 
 ### Frankfurter
 - **URL:** `https://api.frankfurter.dev`
@@ -481,7 +485,10 @@ A modul tilos electron- vagy React-importot tenni, hogy mindkét oldal terhelés
 - Szerződés generálás (3 sablon) + in-app PDF megjelenítő
 - Adó kalkulátor (6 magyar adónem, 2026 szabályok) + adóhatáridők naptár szinkron
 - Előfizetés kezelés (Stripe: Monthly/Yearly/Lifetime, trial)
-- Deepgram speech-to-text (real-time + batch)
+- ElevenLabs Scribe v2 speech-to-text (real-time WebSocket + batch HTTP), magyar `hun` language code, Klient domain keyterms
+- STT disclaimer modal (`SttDisclaimerModal`) — minden STT gomb előtt jelenik meg, localStorage "ne mutasd újra" opcióval
+- AI összefoglaló markdown renderelés (`MarkdownSummary` + `stripMarkdown`), listanézeti preview szöveggé alakítva
+- `summarize` Edge Function frissítve: strukturált markdown output (## szekciók + bullet listák)
 - 4 téma, Pomodoro timer (átnevezés, láthatóság), Exchange rates
 - AI kiadás feldolgozás (PDF → OpenAI GPT-4o-mini → form kitöltés, subscription hint)
 - Előfizetésen felüli plusz költségek (extra_amount + extra_description, pl. GitHub Copilot Usage)
@@ -534,4 +541,8 @@ A modul tilos electron- vagy React-importot tenni, hogy mindkét oldal terhelés
 - 2026-05-05: Per-domain stores minta indult — `electron/stores/clients-store.ts` factory pattern alapján, in-memory sql.js teszttel. Az `db:clients:*` 5 IPC handler innen szolgálódik ki, a Client típus pedig átkerült a `shared/types/client.ts`-be (a renderer `vite-env.d.ts` `declare global`-lá szervezve, hogy az importok ne változzanak). A pattern később megy át a többi domainre.
 - 2026-05-05: A számla szcenárió logika konszolidálva egy közös modulba (`shared/invoice-scenario.ts`). Korábban a renderer (`src/utils/vat.ts`) és a main (`billing-service.ts resolveVatCode`) párhuzamosan, hiányosan tartotta — pl. AAM eladó esetén az űrlap-előnézet 27%-ot mutatott, miközben a kiküldött számla AAM 0%-ot. Az új modul mindkét oldalt egyetlen igazságról szolgálja ki, és többnyelvű (hu/en/de) záradékot is tud. Egy korábbi inkonzisztencia is javítva: EU B2C esetben a régi modul "VAT-exempt" záradékot tett, miközben 27% ÁFA-val ment ki a számla — most B2C-re nincs auto-záradék.
 
-*Utolsó frissítés: 2026-05-05*
+- 2026-05-13: ElevenLabs Scribe v2 migráció — a Deepgram Nova-3 mindkét pipeline-ban (real-time WS + batch HTTP) le van cserélve ElevenLabs Scribe v2-re. A frontend (preload.ts, NotesPanel, Recordings) változatlan; a `speech:sendAudio` handler Deepgram-nél nyers bufferrel, ElevenLabs-nél JSON `{ message_type: "input_audio_chunk", audio_base_64 }` formátummal küldi az adatot. Magyar Klient domain keyterms mindkét pipeline-on aktív. Új Supabase edge function: `get-elevenlabs-key` (deployolva). `get-deepgram-key` megtartva rollback céljára.
+- 2026-05-13: STT disclaimer modal hozzáadva (`src/components/SttDisclaimerModal.tsx`) — minden STT indítás előtt jelenik meg (Recordings + NotesPanel), közös localStorage kulcson (`stt_disclaimer_dismissed`) tárolja a "ne mutasd újra" döntést.
+- 2026-05-13: AI összefoglaló markdown renderelés — `src/components/MarkdownSummary.tsx` (`react-markdown` + `remark-gfm`, Klient témájú stílus), `stripMarkdown()` util a listanézeti previewhoz. `summarize` Edge Function átdolgozva: strukturált `## ` szekciók és `- ` listák, nincs nyers `**` karakter a szövegben.
+
+*Utolsó frissítés: 2026-05-13*

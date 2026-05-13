@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
+import SttDisclaimerModal, { isSttDisclaimerDismissed } from './SttDisclaimerModal';
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Highlight from '@tiptap/extension-highlight';
@@ -336,6 +337,7 @@ export default function NotesPanel({ open, onClose }: NotesPanelProps) {
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const transcriptCleanupRef = useRef<(() => void) | null>(null);
   const [dictationError, setDictationError] = useState('');
+  const [showSttDisclaimer, setShowSttDisclaimer] = useState(false);
 
   const toggleSpeechRecognition = useCallback(async () => {
     setDictationError('');
@@ -416,6 +418,18 @@ export default function NotesPanel({ open, onClose }: NotesPanelProps) {
       mediaStreamRef.current = null;
     }
   }, [isRecording, editor]);
+
+  function handleMicButtonClick() {
+    if (isRecording) {
+      toggleSpeechRecognition();
+      return;
+    }
+    if (isSttDisclaimerDismissed()) {
+      toggleSpeechRecognition();
+    } else {
+      setShowSttDisclaimer(true);
+    }
+  }
 
   const filtered = notes.filter(n =>
     (n.title || '').toLowerCase().includes(search.toLowerCase()) ||
@@ -674,7 +688,7 @@ export default function NotesPanel({ open, onClose }: NotesPanelProps) {
           {/* Bottom bar */}
           <div className="px-3 py-2 border-t border-teal/10 flex items-center gap-2 shrink-0">
             <button
-              onClick={toggleSpeechRecognition}
+              onClick={handleMicButtonClick}
               className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors ${
                 isRecording
                   ? 'bg-red-500/20 text-red-400 border border-red-500/30'
@@ -798,6 +812,14 @@ export default function NotesPanel({ open, onClose }: NotesPanelProps) {
           <path d="M14 14L11 14L14 11Z" fill="currentColor" opacity="0.5" />
         </svg>
       </div>
+
+      {/* STT Disclaimer */}
+      {showSttDisclaimer && (
+        <SttDisclaimerModal
+          onConfirm={() => { setShowSttDisclaimer(false); toggleSpeechRecognition(); }}
+          onClose={() => setShowSttDisclaimer(false)}
+        />
+      )}
     </div>
   );
 }
