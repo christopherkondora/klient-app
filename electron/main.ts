@@ -74,7 +74,7 @@ function createWindow() {
     minWidth: 1024,
     minHeight: 700,
     title: 'Klient',
-    icon: path.join(__dirname, '../assets/icon.png'),
+    icon: path.join(__dirname, '../../assets/icon.png'),
     frame: false,
     titleBarStyle: 'hidden',
     webPreferences: {
@@ -91,7 +91,7 @@ function createWindow() {
       mainWindow.webContents.openDevTools({ mode: 'detach' });
     }
   } else {
-    mainWindow.loadFile(path.join(__dirname, '../dist-react/index.html'));
+    mainWindow.loadFile(path.join(__dirname, '../../dist-react/index.html'));
   }
 
   mainWindow.on('close', (e) => {
@@ -107,7 +107,7 @@ function createWindow() {
 }
 
 function createTray() {
-  const iconPath = path.join(__dirname, '../assets/icon.png');
+  const iconPath = path.join(__dirname, '../../assets/icon.png');
   const icon = nativeImage.createFromPath(iconPath).resize({ width: 16, height: 16 });
   tray = new Tray(icon);
   tray.setToolTip('Klient');
