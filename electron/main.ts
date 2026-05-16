@@ -198,6 +198,76 @@ const HU_KEYTERMS_REALTIME = [
 ];
 const HU_KEYTERMS_BATCH = HU_KEYTERMS_REALTIME;
 
+type RecordingSegment = {
+  speakerId: string;
+  text: string;
+  start: number | null;
+  end: number | null;
+};
+
+type RecordingSpeaker = {
+  id: string;
+  label: string;
+  role: 'user' | 'client' | 'participant';
+};
+
+type AssignSpeakersInput = {
+  segments: RecordingSegment[];
+  expectedSpeakerCount: number;
+  recordingType: 'client_call' | 'internal_meeting';
+  clientName?: string | null;
+  userName?: string | null;
+  userCompanyName?: string | null;
+};
+
+function buildFallbackSpeakers(input: AssignSpeakersInput): RecordingSpeaker[] {
+  const speakerIds = Array.from(new Set(input.segments.map(segment => segment.speakerId))).filter(Boolean);
+  const ids = speakerIds.length > 0
+    ? speakerIds
+    : Array.from({ length: Math.max(input.expectedSpeakerCount || 2, 1) }, (_, index) => `speaker_${index}`);
+
+  return ids.map((id, index) => {
+    if (input.recordingType === 'client_call' && index === 0) return { id, label: 'Te', role: 'user' };
+    if (input.recordingType === 'client_call' && index === 1) return { id, label: 'Ügyfél', role: 'client' };
+    return { id, label: `Beszélő ${index + 1}`, role: 'participant' };
+  });
+}
+
+function buildSegmentsFromWords(words: unknown): RecordingSegment[] {
+  if (!Array.isArray(words)) return [];
+
+  const segments: RecordingSegment[] = [];
+  let current: RecordingSegment | null = null;
+
+  for (const item of words) {
+    if (!item || typeof item !== 'object') continue;
+    const word = item as Record<string, unknown>;
+    const text = typeof word.text === 'string' ? word.text.trim() : '';
+    if (!text) continue;
+
+    const speakerId = typeof word.speaker_id === 'string' ? word.speaker_id : 'speaker_0';
+    const start = typeof word.start === 'number' ? word.start : null;
+    const end = typeof word.end === 'number' ? word.end : null;
+
+    if (!current || current.speakerId !== speakerId) {
+      current = { speakerId, text, start, end };
+      segments.push(current);
+    } else {
+      current.text = `${current.text} ${text}`.trim();
+      current.end = end;
+    }
+  }
+
+  return segments;
+}
+
+function formatTranscriptFromSegments(segments: RecordingSegment[], speakers?: RecordingSpeaker[]): string {
+  const labels = new Map((speakers || []).map(speaker => [speaker.id, speaker.label]));
+  return segments
+    .map(segment => `${labels.get(segment.speakerId) || segment.speakerId}: ${segment.text}`)
+    .join('\n\n');
+}
+
 // ── ElevenLabs Scribe real-time streaming (for dictation) ──
 let sttSocket: WebSocket | null = null;
 let cachedElevenLabsKey: string | null = null;
@@ -319,7 +389,7 @@ ipcMain.handle('speech:stopStream', () => {
 });
 
 // ── Transcribe a full recording file via ElevenLabs Scribe v2 (batch) ──
-ipcMain.handle('recordings:transcribe', async (_event, filePath: string) => {
+ipcMain.handle('recordings:transcribe', async (_event, filePath: string, options?: { expectedSpeakerCount?: number; diarize?: boolean }) => {
   try {
     const { key: apiKey, error: keyError } = await getElevenLabsKey();
     if (!apiKey) return { text: '', error: keyError || 'Nem sikerült az ElevenLabs API kulcsot lekérni' };
@@ -342,8 +412,11 @@ ipcMain.handle('recordings:transcribe', async (_event, filePath: string) => {
     form.append('model_id', 'scribe_v2');
     form.append('language_code', 'hun');
     form.append('tag_audio_events', 'false');
-    form.append('diarize', 'false');
-    form.append('timestamps_granularity', 'none');
+    form.append('diarize', options?.diarize === false ? 'false' : 'true');
+    form.append('timestamps_granularity', options?.diarize === false ? 'none' : 'word');
+    if (options?.expectedSpeakerCount && options.expectedSpeakerCount >= 1 && options.expectedSpeakerCount <= 32) {
+      form.append('num_speakers', String(options.expectedSpeakerCount));
+    }
     for (const term of HU_KEYTERMS_BATCH) form.append('keyterms', term);
     form.append('file', new Blob([new Uint8Array(audio)], { type: contentType }), `audio.${ext}`);
 
@@ -359,13 +432,51 @@ ipcMain.handle('recordings:transcribe', async (_event, filePath: string) => {
       return { text: '', error: `ElevenLabs hiba: ${response.status}` };
     }
 
-    const json = await response.json() as { text?: string };
+    const json = await response.json() as { text?: string; words?: unknown[] };
     const transcript = json.text || '';
-    console.log(`[Transcribe] Success, transcript length: ${transcript.length} chars`);
-    return { text: transcript };
+    const segments = buildSegmentsFromWords(json.words);
+    const detectedSpeakerCount = new Set(segments.map(segment => segment.speakerId)).size || undefined;
+    const text = segments.length > 0 ? formatTranscriptFromSegments(segments) : transcript;
+    console.log(`[Transcribe] Success, transcript length: ${text.length} chars, speakers: ${detectedSpeakerCount || 0}`);
+    return { text, segments, detectedSpeakerCount };
   } catch (err) {
     console.error('[Transcribe] Error:', err);
     return { text: '', error: String(err) };
+  }
+});
+
+ipcMain.handle('recordings:assignSpeakers', async (_event, input: AssignSpeakersInput) => {
+  const fallback = buildFallbackSpeakers(input);
+  try {
+    const sb = getSupabase();
+    const { data, error } = await sb.functions.invoke('assign-recording-speakers', {
+      body: input,
+    });
+    if (error) {
+      console.error('[AssignSpeakers] Edge Function error:', error);
+      return {
+        speakers: fallback,
+        confidence: 'low',
+        needsReview: true,
+        reason: 'A beszélők automatikus hozzárendelése nem sikerült, ezért ellenőrzés szükséges.',
+        error: String(error),
+      };
+    }
+    return {
+      speakers: Array.isArray(data?.speakers) && data.speakers.length > 0 ? data.speakers : fallback,
+      confidence: data?.confidence || 'medium',
+      needsReview: Boolean(data?.needsReview),
+      reason: data?.reason || '',
+    };
+  } catch (err) {
+    console.error('[AssignSpeakers] Error:', err);
+    return {
+      speakers: fallback,
+      confidence: 'low',
+      needsReview: true,
+      reason: 'A beszélők automatikus hozzárendelése nem sikerült, ezért ellenőrzés szükséges.',
+      error: String(err),
+    };
   }
 });
 

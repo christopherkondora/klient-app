@@ -5,14 +5,16 @@ import Sidebar from './Sidebar';
 import TitleBar from './TitleBar';
 import NotesPanel from './NotesPanel';
 import PomodoroTimer from './PomodoroTimer';
+import RecordingsPanel from './RecordingsPanel';
 import TrialBanner from './TrialBanner';
 import UpdateBanner from './UpdateBanner';
-import { ArrowLeft, ChevronLeft, StickyNote, X } from 'lucide-react';
+import { ArrowLeft, AudioLines, ChevronLeft, StickyNote, X } from 'lucide-react';
 import { useTheme } from '../contexts/ThemeContext';
 
 export default function Layout({ paywalled }: { paywalled?: boolean } = {}) {
   const [activeShortcutUrl, setActiveShortcutUrl] = useState<string | null>(null);
   const [notesPanelOpen, setNotesPanelOpen] = useState(false);
+  const [recordingsPanelOpen, setRecordingsPanelOpen] = useState(false);
   const [quickBarOpen, setQuickBarOpen] = useState(true);
   const { theme } = useTheme();
   const isLight = theme === 'light' || theme === 'ash-soft';
@@ -71,6 +73,7 @@ export default function Layout({ paywalled }: { paywalled?: boolean } = {}) {
       {!paywalled && (
         <>
           <NotesPanel open={notesPanelOpen} onClose={() => setNotesPanelOpen(false)} />
+          <RecordingsPanel open={recordingsPanelOpen} onClose={() => setRecordingsPanelOpen(false)} />
 
           {/* Quick-bar: morphing container — slides & morphs between full bar and half-circle handle */}
           <div className="fixed bottom-6 right-0 z-30 flex items-end justify-end">
@@ -114,6 +117,13 @@ export default function Layout({ paywalled }: { paywalled?: boolean } = {}) {
                 </button>
 
                 <PomodoroTimer />
+                <button
+                  onClick={() => setRecordingsPanelOpen(true)}
+                  className="w-12 h-12 rounded-full bg-surface-800/80 border border-teal/10 text-cream hover:bg-teal/20 hover:border-teal/25 transition-colors flex items-center justify-center"
+                  title="Felvételek"
+                >
+                  <AudioLines size={20} />
+                </button>
                 <button
                   onClick={() => setNotesPanelOpen(true)}
                   className="w-12 h-12 rounded-full bg-teal text-cream hover:bg-teal/80 transition-colors flex items-center justify-center"

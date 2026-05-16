@@ -156,6 +156,15 @@ function createTables() {
       duration_seconds REAL,
       transcription TEXT,
       ai_summary TEXT,
+      recording_type TEXT DEFAULT 'client_call',
+      expected_speaker_count INTEGER DEFAULT 2,
+      detected_speaker_count INTEGER,
+      speaker_segments TEXT,
+      speaker_labels TEXT,
+      speaker_confidence TEXT,
+      speaker_review_reason TEXT,
+      processing_status TEXT DEFAULT 'recorded',
+      processing_error TEXT,
       created_at TEXT DEFAULT (datetime('now')),
       FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE SET NULL,
       FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE SET NULL
@@ -463,6 +472,37 @@ function runMigrations() {
   }
   if (!noteColNames.includes('reminder_time')) {
     db.run("ALTER TABLE notes ADD COLUMN reminder_time TEXT");
+  }
+
+  // Add recording processing + diarization metadata columns
+  const recordingCols = db.exec("PRAGMA table_info(recordings)");
+  const recordingColNames = recordingCols[0]?.values.map(row => row[1]) || [];
+  if (!recordingColNames.includes('recording_type')) {
+    db.run("ALTER TABLE recordings ADD COLUMN recording_type TEXT DEFAULT 'client_call'");
+  }
+  if (!recordingColNames.includes('expected_speaker_count')) {
+    db.run("ALTER TABLE recordings ADD COLUMN expected_speaker_count INTEGER DEFAULT 2");
+  }
+  if (!recordingColNames.includes('detected_speaker_count')) {
+    db.run("ALTER TABLE recordings ADD COLUMN detected_speaker_count INTEGER");
+  }
+  if (!recordingColNames.includes('speaker_segments')) {
+    db.run("ALTER TABLE recordings ADD COLUMN speaker_segments TEXT");
+  }
+  if (!recordingColNames.includes('speaker_labels')) {
+    db.run("ALTER TABLE recordings ADD COLUMN speaker_labels TEXT");
+  }
+  if (!recordingColNames.includes('speaker_confidence')) {
+    db.run("ALTER TABLE recordings ADD COLUMN speaker_confidence TEXT");
+  }
+  if (!recordingColNames.includes('speaker_review_reason')) {
+    db.run("ALTER TABLE recordings ADD COLUMN speaker_review_reason TEXT");
+  }
+  if (!recordingColNames.includes('processing_status')) {
+    db.run("ALTER TABLE recordings ADD COLUMN processing_status TEXT DEFAULT 'recorded'");
+  }
+  if (!recordingColNames.includes('processing_error')) {
+    db.run("ALTER TABLE recordings ADD COLUMN processing_error TEXT");
   }
 
   // Add amount_huf column to expenses

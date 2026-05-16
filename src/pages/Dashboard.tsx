@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { useNavigate, useOutletContext } from 'react-router-dom';
-import { Users, Briefcase, Calendar, StickyNote, Mic, Plus, ChevronLeft, ChevronRight, X, MoreHorizontal, Clock, ExternalLink, Loader2, Target } from 'lucide-react';
+import { Users, Briefcase, Calendar, StickyNote, Plus, ChevronLeft, ChevronRight, X, MoreHorizontal, Clock, ExternalLink, Loader2, Target } from 'lucide-react';
 import {
   format,
   parseISO,
@@ -37,7 +37,6 @@ export default function Dashboard() {
   const [calendarMonth, setCalendarMonth] = useState(new Date());
   const [calendarView, setCalendarView] = useState<'month' | 'week' | 'day'>('month');
   const [selectedCalDay, setSelectedCalDay] = useState(new Date());
-  const [showRecPicker, setShowRecPicker] = useState(false);
   const [showEventForm, setShowEventForm] = useState(false);
   const [eventFormDate, setEventFormDate] = useState(new Date());
   const [projects, setProjects] = useState<Project[]>([]);
@@ -235,35 +234,6 @@ export default function Dashboard() {
               <img src="https://www.billingo.hu/images/logo-blue.svg" alt="Billingo" className="h-6 block object-contain mt-0.5" />
             </button>
           )}
-          {/* Quick Recording Shortcut */}
-          <div className="relative">
-            <button
-              onClick={() => setShowRecPicker(!showRecPicker)}
-              className="flex items-center gap-3 bg-surface-800/50 rounded-lg border border-teal/10 px-4 py-2.5 hover:border-teal/30 transition-colors cursor-pointer"
-            >
-              <div className="w-7 h-7 rounded-md bg-red-500/15 flex items-center justify-center">
-                <Mic width={14} height={14} className="text-red-400" />
-              </div>
-              <span className="text-sm font-medium text-cream">Gyors felvétel</span>
-            </button>
-            {showRecPicker && clients.length > 0 && (
-              <div className="absolute top-full right-0 mt-2 w-64 bg-surface-800 border border-teal/10 rounded-lg shadow-xl z-20 overflow-hidden">
-                <p className="text-[10px] text-steel tracking-wider px-4 pt-3 pb-2">Válassz ügyfelet</p>
-                <div className="max-h-48 overflow-auto">
-                  {clients.map((c) => (
-                    <button
-                      key={c.id}
-                      onClick={() => { setShowRecPicker(false); navigate(`/clients/${c.id}?tab=recordings`); }}
-                      className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-teal/10 transition-colors text-left cursor-pointer"
-                    >
-                      <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: tc(c.color) }} />
-                      <span className="text-sm text-cream truncate">{c.name}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
         </div>
       </div>
 

@@ -6,6 +6,38 @@
 
 **Klient** egy magyar nyelvű, Electron asztali alkalmazás szabadúszók és kisvállalkozások számára. Projektek, ügyfelek, számlázás, szerződések, naptár, jegyzetek, hangfelvételek, fájlok és adózás kezelése egyetlen appban. Két magyar számlázó szolgáltatóval integrálódik (Billingo, Számlázz.hu), Stripe előfizetéssel és Supabase auth/edge functions háttérrel.
 
+## Domain nyelv - felvételek
+
+**Ügyfélhívás**: Ügyfélhez kötött, alapértelmezetten kétszereplős beszélgetés a felhasználó és az ügyfél között.
+_Kerüld_: általános meeting, meeting transcription
+
+**Belső megbeszélés**: Ügyfélhez nem kötött céges/csapatbeszélgetés, amely külön felvételi use case-ként kezelendő.
+_Kerüld_: ügyfélhívás
+
+**Beszélő**: Egy diarizációval elkülönített résztvevő, akinek a szerepe vagy neve automatikusan javasolható, de felhasználó által pontosítható.
+_Kerüld_: speaker, szereplő
+
+### Felvételi kapcsolatok
+
+- Az **Ügyfélhívás** alapértelmezetten 2 **Beszélőből** áll: a felhasználóból és az ügyfélből.
+- Az **Ügyfélhívás** indítása előtt a felhasználó megadhatja a várt **Beszélők** számát; 2 az alapértelmezett.
+- A **Belső megbeszélés** nem az **Ügyfélhívás** speciális esete, hanem későbbi külön felvételi use case.
+- A **Felvételek** belépési pontja a jobb alsó utility railből nyíló, elhomályosított háttér fölötti panel; nem sidebar menüpont és nem teljes képernyős oldal.
+- A Dashboard headerben lévő gyors felvétel nem marad elsődleges felvételi belépési pont.
+- A **Felvételek** panel elsődleges nézete az új felvétel indítása; az ügyfél választása opcionális, hogy **Belső megbeszélés** is rögzíthető legyen.
+- A felvételek elsődleges felhasználói értéke az AI összefoglaló; a teljes átirat ellenőrzési, keresési és audit célú másodlagos nézet.
+- A teljes átirat nem hosszú inline görgetős blokk, hanem az összefoglalóhoz hasonlóan külön megnyitható, strukturált nézet.
+- A speaker-tagolt átirat elsődleges célja a jobb AI összefoglaló; első körben csak könnyű beszélőnév/szerep ellenőrzést és javítást igényel, nem teljes CRM-memória rendszert.
+- Felvétel előtt csak az elvárt **Beszélők** számát kell megadni; beszélőneveket/szerepeket a feldolgozás után lehet pontosítani, mert előtte lassítaná és zavarná a gyors indítást.
+- A felvétel feldolgozása automatikus: diarizáció, beszélő-szerep javaslat és összefoglaló készül; ha a szerep-hozzárendelés bizonytalan, a felvétel review státuszt kap, és az összefoglaló újragenerálható javítás után.
+- **Ügyfélhívásnál** a summary automatikusan készülhet a javasolt `Te`/`Ügyfél` szerepekkel; **Belső megbeszélésnél** a summary előtt a felhasználó hozzárendeli a neveket a beszélőkhöz.
+- **Belső megbeszélésnél** a beszélők elnevezése ajánlott, de nem hard-blocker; a review UI beszélőnként mutasson rövid mintamondatot, hogy gyorsan azonosítható legyen ki beszélt.
+- Első verziós review triggerek: az elvárt és talált beszélőszám eltér, az AI szerep-hozzárendelés confidence értéke `medium` vagy `low`, vagy nincs ügyfél kiválasztva egy ügyfélhívásként címkézett felvételhez.
+- A speaker-tagolt felvételek első implementációja ElevenLabs Scribe v2-re épül; Soniox későbbi migrációs lehetőség, de jelenleg az API előfizetési kötelezettség miatt nem első verziós opció.
+- A felvételek feldolgozási állapota explicit státusz, nem a `transcription` és `ai_summary` mezők meglétéből következtetett állapot; első státuszok: `recorded`, `transcribing`, `summarizing`, `ready`, `needs_review`, `failed`.
+- A beszélő-szerep hozzárendelés külön Supabase Edge Function felelősség (`assign-recording-speakers`), nem a meglévő summary prompt része; a summary már címkézett/tagolt transcriptből készül.
+- A beszélő-szerep hozzárendelés minimális kontextust kap: diarizált szegmensek, elvárt beszélőszám, felvételtípus, ügyfélhívásnál ügyfél/user név vagy cégnév; nem kap teljes ügyféladatlapot, számlázási adatokat, jegyzeteket vagy projektelőzményt.
+
 ---
 
 ## Tech Stack

@@ -84,7 +84,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   createRecording: (data: unknown) => ipcRenderer.invoke('db:recordings:create', data),
   updateRecording: (id: string, data: unknown) => ipcRenderer.invoke('db:recordings:update', id, data),
   deleteRecording: (id: string) => ipcRenderer.invoke('db:recordings:delete', id),
-  transcribeRecording: (filePath: string) => ipcRenderer.invoke('recordings:transcribe', filePath),
+  transcribeRecording: (filePath: string, options?: unknown) => ipcRenderer.invoke('recordings:transcribe', filePath, options),
+  assignRecordingSpeakers: (input: unknown) => ipcRenderer.invoke('recordings:assignSpeakers', input),
   summarizeRecording: (transcription: string) => ipcRenderer.invoke('recordings:summarize', transcription),
 
   // Database operations - Shortcuts

@@ -807,8 +807,30 @@ export function registerIpcHandlers() {
   ipcMain.handle('db:recordings:create', (_event, data: Record<string, unknown>) => {
     const id = uuidv4();
     execute(
-      `INSERT INTO recordings (id, client_id, project_id, title, file_path, duration_seconds, transcription, ai_summary) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [id, data.client_id, data.project_id, data.title, data.file_path, data.duration_seconds, data.transcription, data.ai_summary]
+      `INSERT INTO recordings (
+        id, client_id, project_id, title, file_path, duration_seconds, transcription, ai_summary,
+        recording_type, expected_speaker_count, detected_speaker_count, speaker_segments, speaker_labels,
+        speaker_confidence, speaker_review_reason, processing_status, processing_error
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id,
+        data.client_id,
+        data.project_id,
+        data.title,
+        data.file_path,
+        data.duration_seconds,
+        data.transcription,
+        data.ai_summary,
+        data.recording_type || (data.client_id ? 'client_call' : 'internal_meeting'),
+        data.expected_speaker_count || 2,
+        data.detected_speaker_count,
+        data.speaker_segments,
+        data.speaker_labels,
+        data.speaker_confidence,
+        data.speaker_review_reason,
+        data.processing_status || 'recorded',
+        data.processing_error,
+      ]
     );
     return queryOne('SELECT * FROM recordings WHERE id = ?', [id]);
   });
@@ -823,7 +845,11 @@ export function registerIpcHandlers() {
   });
 
   ipcMain.handle('db:recordings:update', (_event, id: string, data: Record<string, unknown>) => {
-    const allowedFields = ['title', 'transcription', 'ai_summary'];
+    const allowedFields = [
+      'title', 'transcription', 'ai_summary', 'recording_type', 'expected_speaker_count',
+      'detected_speaker_count', 'speaker_segments', 'speaker_labels', 'speaker_confidence',
+      'speaker_review_reason', 'processing_status', 'processing_error',
+    ];
     const filteredData: Record<string, unknown> = {};
     for (const key of allowedFields) {
       if (key in data) filteredData[key] = data[key];

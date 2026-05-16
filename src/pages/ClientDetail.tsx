@@ -25,6 +25,21 @@ const PLATFORM_URLS: Record<string, { label: string; url: string }> = {
   nav: { label: 'NAV Online', url: 'https://onlineszamla.nav.gov.hu' },
 };
 
+function parseJsonArray<T>(value: string | null | undefined): T[] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function formatTranscript(segments: RecordingSegment[], speakers: RecordingSpeaker[]) {
+  const labels = new Map(speakers.map(speaker => [speaker.id, speaker.label]));
+  return segments.map(segment => `${labels.get(segment.speakerId) || segment.speakerId}: ${segment.text}`).join('\n\n');
+}
+
 export default function ClientDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -71,6 +86,7 @@ export default function ClientDetail() {
   const recordingSession = useRef<RecordingSession | null>(null);
   const [processingId, setProcessingId] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [transcriptRecording, setTranscriptRecording] = useState<Recording | null>(null);
 
   useEffect(() => {
     if (id) loadData();
@@ -213,6 +229,9 @@ export default function ClientDetail() {
         client_id: id,
         file_path: filePath,
         duration_seconds: recordingTime,
+        recording_type: 'client_call',
+        expected_speaker_count: 2,
+        processing_status: 'recorded',
       });
       setShowSaveForm(false);
       recordedBlob.current = null;
@@ -229,20 +248,46 @@ export default function ClientDetail() {
   async function processRecording(recordingId: string, filePath: string) {
     setProcessingId(recordingId);
     try {
-      const { text, error: transcribeError } = await window.electronAPI.transcribeRecording(filePath);
+      await window.electronAPI.updateRecording(recordingId, { processing_status: 'transcribing', processing_error: null });
+      const { text, segments, detectedSpeakerCount, error: transcribeError } = await window.electronAPI.transcribeRecording(filePath, {
+        expectedSpeakerCount: 2,
+        diarize: true,
+      });
       if (transcribeError) {
         console.error('Transcription error:', transcribeError);
         alert(`Lejegyzési hiba: ${transcribeError}`);
         return;
       }
       if (text) {
-        await window.electronAPI.updateRecording(recordingId, { transcription: text });
-        const { summary, error: summarizeError } = await window.electronAPI.summarizeRecording(text);
+        const assignment = await window.electronAPI.assignRecordingSpeakers({
+          segments: segments || [],
+          expectedSpeakerCount: 2,
+          recordingType: 'client_call',
+          clientName: client?.name || null,
+          userName: user?.name || null,
+          userCompanyName: user?.company_name || null,
+        });
+        const speakers = assignment.speakers;
+        const formattedTranscript = segments?.length ? formatTranscript(segments, speakers) : text;
+        const speakerCountMismatch = Boolean(detectedSpeakerCount && detectedSpeakerCount !== 2);
+        await window.electronAPI.updateRecording(recordingId, {
+          transcription: formattedTranscript,
+          speaker_segments: JSON.stringify(segments || []),
+          speaker_labels: JSON.stringify(speakers),
+          detected_speaker_count: detectedSpeakerCount || speakers.length,
+          speaker_confidence: assignment.confidence,
+          speaker_review_reason: speakerCountMismatch ? 'Az elvárt és talált beszélőszám eltér.' : (assignment.reason || null),
+          processing_status: 'summarizing',
+        });
+        const { summary, error: summarizeError } = await window.electronAPI.summarizeRecording(formattedTranscript);
         if (summarizeError) {
           console.error('Summarize error:', summarizeError);
         }
         if (summary) {
-          await window.electronAPI.updateRecording(recordingId, { ai_summary: summary });
+          await window.electronAPI.updateRecording(recordingId, {
+            ai_summary: summary,
+            processing_status: assignment.needsReview || assignment.confidence !== 'high' || speakerCountMismatch ? 'needs_review' : 'ready',
+          });
         }
         loadData();
       } else {
@@ -250,6 +295,7 @@ export default function ClientDetail() {
       }
     } catch (err) {
       console.error('Failed to process recording:', err);
+      await window.electronAPI.updateRecording(recordingId, { processing_status: 'failed', processing_error: String(err) });
       alert(`Feldolgozási hiba: ${err}`);
     } finally {
       setProcessingId(null);
@@ -659,7 +705,12 @@ export default function ClientDetail() {
                           <h4 className="text-xs font-semibold text-sky-400 flex items-center gap-1 mb-1">
                             <ScrollText width={11} height={11} /> Szöveges átirat
                           </h4>
-                          <p className="text-sm text-steel/80 whitespace-pre-wrap leading-relaxed max-h-60 overflow-y-auto">{recording.transcription}</p>
+                          <button
+                            onClick={() => setTranscriptRecording(recording)}
+                            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-surface-900/60 border border-teal/10 text-xs text-cream hover:border-teal/25 transition-colors"
+                          >
+                            <ScrollText width={13} height={13} /> Átirat megnyitása
+                          </button>
                         </div>
                       )}
                     </div>
@@ -886,6 +937,13 @@ export default function ClientDetail() {
         />
       )}
 
+      {transcriptRecording && (
+        <TranscriptModal
+          recording={transcriptRecording}
+          onClose={() => setTranscriptRecording(null)}
+        />
+      )}
+
       {/* Edit Client Modal */}
       {showEditClient && (
         <ClientForm
@@ -976,5 +1034,47 @@ function SaveRecordingForm({ duration, clientName, onSave, onCancel }: {
         <button type="submit" className="px-5 py-2 text-xs font-medium bg-teal text-cream rounded-lg hover:bg-teal/80 transition-colors duration-150 ease-out cursor-pointer">Mentés</button>
       </div>
     </form>
+  );
+}
+
+function TranscriptModal({ recording, onClose }: { recording: Recording; onClose: () => void }) {
+  const [query, setQuery] = useState('');
+  const segments = parseJsonArray<RecordingSegment>(recording.speaker_segments);
+  const speakers = parseJsonArray<RecordingSpeaker>(recording.speaker_labels);
+  const labels = new Map(speakers.map(speaker => [speaker.id, speaker.label]));
+  const filteredSegments = segments.filter(segment => !query.trim() || segment.text.toLowerCase().includes(query.toLowerCase()));
+
+  return (
+    <div className="fixed inset-0 z-[9999] bg-black/60 backdrop-blur-sm flex items-center justify-center p-6" onDoubleClick={onClose}>
+      <div className="w-full max-w-3xl max-h-[86vh] bg-surface-900 border border-teal/15 rounded-2xl shadow-2xl overflow-hidden flex flex-col" onDoubleClick={event => event.stopPropagation()}>
+        <div className="flex items-center justify-between px-5 py-4 border-b border-teal/10 shrink-0">
+          <div>
+            <h3 className="font-pixel text-[14px] text-cream">Átirat</h3>
+            <p className="text-xs text-steel mt-1 truncate">{recording.title}</p>
+          </div>
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-teal/10 text-steel hover:text-cream">
+            <X width={16} height={16} />
+          </button>
+        </div>
+        <div className="p-4 border-b border-teal/10 shrink-0">
+          <input
+            value={query}
+            onChange={event => setQuery(event.target.value)}
+            className="w-full px-3 py-2 bg-surface-800/60 border border-teal/10 rounded-lg text-sm text-cream focus:outline-none focus:border-teal/30 placeholder:text-steel/40"
+            placeholder="Keresés az átiratban"
+          />
+        </div>
+        <div className="p-5 overflow-auto space-y-3">
+          {filteredSegments.length > 0 ? filteredSegments.map((segment, index) => (
+            <div key={`${segment.speakerId}-${index}`} className="rounded-lg border border-teal/8 bg-surface-800/40 p-3">
+              <p className="text-xs font-semibold text-teal mb-1">{labels.get(segment.speakerId) || segment.speakerId}</p>
+              <p className="text-sm text-cream/80 leading-relaxed">{segment.text}</p>
+            </div>
+          )) : (
+            <p className="text-sm text-steel whitespace-pre-wrap leading-relaxed">{recording.transcription}</p>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }

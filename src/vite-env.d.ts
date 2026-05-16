@@ -75,7 +75,8 @@ interface ElectronAPI {
   createRecording: (data: Partial<Recording>) => Promise<Recording>;
   updateRecording: (id: string, data: Partial<Recording>) => Promise<Recording>;
   deleteRecording: (id: string) => Promise<{ success: boolean }>;
-  transcribeRecording: (filePath: string) => Promise<{ text: string; error?: string }>;
+  transcribeRecording: (filePath: string, options?: TranscribeRecordingOptions) => Promise<TranscribeRecordingResult>;
+  assignRecordingSpeakers: (input: AssignRecordingSpeakersInput) => Promise<AssignRecordingSpeakersResult>;
   summarizeRecording: (transcription: string) => Promise<{ summary: string; error?: string }>;
 
   // Shortcuts
@@ -430,6 +431,53 @@ interface Note {
   updated_at: string;
 }
 
+type RecordingType = 'client_call' | 'internal_meeting';
+type RecordingProcessingStatus = 'recorded' | 'transcribing' | 'summarizing' | 'ready' | 'needs_review' | 'failed';
+type SpeakerConfidence = 'high' | 'medium' | 'low';
+type RecordingSpeakerRole = 'user' | 'client' | 'participant';
+
+interface RecordingSpeaker {
+  id: string;
+  label: string;
+  role: RecordingSpeakerRole;
+}
+
+interface RecordingSegment {
+  speakerId: string;
+  text: string;
+  start: number | null;
+  end: number | null;
+}
+
+interface TranscribeRecordingOptions {
+  expectedSpeakerCount?: number;
+  diarize?: boolean;
+}
+
+interface TranscribeRecordingResult {
+  text: string;
+  segments?: RecordingSegment[];
+  detectedSpeakerCount?: number;
+  error?: string;
+}
+
+interface AssignRecordingSpeakersInput {
+  segments: RecordingSegment[];
+  expectedSpeakerCount: number;
+  recordingType: RecordingType;
+  clientName?: string | null;
+  userName?: string | null;
+  userCompanyName?: string | null;
+}
+
+interface AssignRecordingSpeakersResult {
+  speakers: RecordingSpeaker[];
+  confidence: SpeakerConfidence;
+  needsReview: boolean;
+  reason?: string;
+  error?: string;
+}
+
 interface Recording {
   id: string;
   client_id: string | null;
@@ -439,6 +487,15 @@ interface Recording {
   duration_seconds: number;
   transcription: string | null;
   ai_summary: string | null;
+  recording_type: RecordingType | null;
+  expected_speaker_count: number | null;
+  detected_speaker_count: number | null;
+  speaker_segments: string | null;
+  speaker_labels: string | null;
+  speaker_confidence: SpeakerConfidence | null;
+  speaker_review_reason: string | null;
+  processing_status: RecordingProcessingStatus | null;
+  processing_error: string | null;
   created_at: string;
 }
 
