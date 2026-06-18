@@ -27,6 +27,12 @@ interface BillingoInvoiceResult {
   emailError?: string;
 }
 
+// Discriminated outcome so callers can persist the Billingo failure reason
+// (status + error_detail) instead of losing it once function logs roll off.
+type BillingoInvoiceOutcome =
+  | ({ ok: true } & BillingoInvoiceResult)
+  | { ok: false; error: string };
+
 interface BillingoPartnerAddress {
   country_code: string;
   post_code: string;
@@ -480,10 +486,10 @@ async function createBillingoInvoice(params: {
   userId: string;
   stripeReference?: string;
   sendEmail?: boolean;
-}): Promise<BillingoInvoiceResult | null> {
+}): Promise<BillingoInvoiceOutcome> {
   if (!BILLINGO_API_KEY) {
     console.log('[Billingo] No API key configured, skipping invoice');
-    return null;
+    return { ok: false, error: 'Billingo API key not configured' };
   }
 
   if (!params.customerEmail) {
@@ -493,7 +499,7 @@ async function createBillingoInvoice(params: {
       plan: params.plan,
       amount: params.amountHuf,
     });
-    return null;
+    return { ok: false, error: 'Missing customer email' };
   }
 
   const billingoBaseUrl = getBillingoBaseUrl();
@@ -610,7 +616,7 @@ async function createBillingoInvoice(params: {
             plan: params.plan,
             amount: params.amountHuf,
           });
-          return null;
+          return { ok: false, error: `Partner creation failed (${partnerRes.status} ${partnerRes.statusText}): ${errorText.slice(0, 500)}` };
         }
       }
     } else {
@@ -623,7 +629,7 @@ async function createBillingoInvoice(params: {
         status_text: searchRes.statusText,
         error_detail: errorText,
       });
-      return null;
+      return { ok: false, error: `Partner search failed (${searchRes.status} ${searchRes.statusText}): ${errorText.slice(0, 500)}` };
     }
 
     const planNames: Record<string, string> = {
@@ -690,7 +696,7 @@ async function createBillingoInvoice(params: {
         email: params.customerEmail,
         email_sent: emailSent,
       });
-      return { invoiceId: invoice.id, partnerId, emailSent, emailError };
+      return { ok: true, invoiceId: invoice.id, partnerId, emailSent, emailError };
     } else {
       const errorText = await invoiceRes.text();
       console.error('[Billingo] Invoice creation failed:', {
@@ -704,19 +710,20 @@ async function createBillingoInvoice(params: {
         status_text: invoiceRes.statusText,
         error_detail: errorText,
       });
-      return null;
+      return { ok: false, error: `Invoice creation failed (${invoiceRes.status} ${invoiceRes.statusText}): ${errorText.slice(0, 500)}` };
     }
   } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
     console.error('[Billingo] Unexpected error:', {
       timestamp: new Date().toISOString(),
       user_id: params.userId,
       plan: params.plan,
       amount: params.amountHuf,
       email: params.customerEmail,
-      error: err instanceof Error ? err.message : String(err),
+      error: message,
       stack: err instanceof Error ? err.stack : undefined,
     });
-    return null;
+    return { ok: false, error: `Unexpected Billingo error: ${message.slice(0, 500)}` };
   }
 }
 
@@ -873,7 +880,7 @@ Deno.serve(async (req) => {
             userId,
             stripeReference: readString(obj.id),
           });
-          if (adsBillingoResult && userId) {
+          if (adsBillingoResult.ok && userId) {
             await supabase.from('subscriptions').update({
               billingo_invoice_id: adsBillingoResult.invoiceId.toString(),
               billingo_partner_id: adsBillingoResult.partnerId,
@@ -888,7 +895,7 @@ Deno.serve(async (req) => {
           } else {
             await finishBillingEvent(stripeEventId, {
               status: 'failed',
-              error: 'Billingo invoice creation failed for Ads checkout',
+              error: adsBillingoResult.ok ? 'Billingo invoice creation failed for Ads checkout' : adsBillingoResult.error,
             });
           }
           break;
@@ -1038,7 +1045,7 @@ Deno.serve(async (req) => {
         });
 
         // Store Billingo IDs if invoice was created successfully
-        if (billingoResult && userId) {
+        if (billingoResult.ok && userId) {
           const { error: billingoUpdateErr } = await supabase
             .from('subscriptions')
             .update({
@@ -1082,7 +1089,7 @@ Deno.serve(async (req) => {
           const resendResult = await sendWelcomeResend({ plan, customerEmail, displayName, userId, eventType: event.type });
           await finishBillingEvent(stripeEventId, {
             status: 'failed',
-            error: 'Billingo invoice creation failed for checkout',
+            error: billingoResult.ok ? 'Billingo invoice creation failed for checkout' : billingoResult.error,
             resendEmailId: resendResult.emailId,
             resendEmailSent: resendResult.sent,
             resendEmailError: resendResult.error,
@@ -1295,7 +1302,7 @@ Deno.serve(async (req) => {
           });
         }
 
-        if (billingoResult) {
+        if (billingoResult.ok) {
           const { error: billingoUpdateErr } = await supabase
             .from('subscriptions')
             .update({
@@ -1326,7 +1333,7 @@ Deno.serve(async (req) => {
         } else {
           await finishBillingEvent(stripeEventId, {
             status: 'failed',
-            error: 'Billingo invoice creation failed for recurring Stripe invoice',
+            error: billingoResult.error,
             resendEmailId: renewalResend.emailId,
             resendEmailSent: renewalResend.sent,
             resendEmailError: renewalResend.error,
