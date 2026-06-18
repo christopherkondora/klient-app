@@ -1,4 +1,6 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { signBillingPortalToken } from '../_shared/hmac-token.ts';
+import { welcomeEmail, lifetimeWelcomeEmail, renewalEmail, dunningEmail, planLabelHu, planAmountHu } from '../_shared/email-templates.ts';
 
 const STRIPE_WEBHOOK_SECRET = Deno.env.get('STRIPE_WEBHOOK_SECRET')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -7,7 +9,10 @@ const BILLINGO_API_KEY = Deno.env.get('BILLINGO_API_KEY') || '';
 const STRIPE_ENV = Deno.env.get('STRIPE_ENV') || 'test';
 const BILLINGO_ENV = Deno.env.get('BILLINGO_ENV') || 'sandbox';
 const BILLINGO_BLOCK_ID = parseInt(Deno.env.get('BILLINGO_BLOCK_ID') || '315117', 10);
+const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY') || '';
+const BILLING_PORTAL_TOKEN_SECRET = Deno.env.get('BILLING_PORTAL_TOKEN_SECRET') || '';
 const BILLING_EVENT_TABLE = 'subscription_billing_events';
+const RESEND_FROM = 'Kristóf a Klient-től <hello@klient.work>';
 
 // Supabase client with service_role (bypasses RLS)
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
@@ -278,6 +283,9 @@ async function finishBillingEvent(stripeEventId: string, patch: {
   billingoPartnerId?: number;
   billingoEmailSent?: boolean;
   billingoEmailError?: string;
+  resendEmailId?: string;
+  resendEmailSent?: boolean;
+  resendEmailError?: string;
   error?: string;
 }): Promise<void> {
   const { error } = await supabase.from(BILLING_EVENT_TABLE).update({
@@ -286,12 +294,96 @@ async function finishBillingEvent(stripeEventId: string, patch: {
     billingo_partner_id: patch.billingoPartnerId,
     billingo_email_sent: patch.billingoEmailSent ?? false,
     billingo_email_error: patch.billingoEmailError || null,
+    resend_email_id: patch.resendEmailId || null,
+    resend_email_sent: patch.resendEmailSent ?? false,
+    resend_email_error: patch.resendEmailError || null,
     error: patch.error || null,
   }).eq('stripe_event_id', stripeEventId);
 
   if (error && error.code !== '42P01') {
     console.error('[Webhook] Could not update billing event log:', { stripe_event_id: stripeEventId, error });
   }
+}
+
+interface ResendResult {
+  emailId?: string;
+  sent: boolean;
+  error?: string;
+}
+
+async function sendResendEmail(params: {
+  to: string;
+  subject: string;
+  html: string;
+  userId: string;
+  eventType: string;
+}): Promise<ResendResult> {
+  if (!RESEND_API_KEY) {
+    console.warn('[Resend] No API key configured, skipping email:', { event_type: params.eventType, to: params.to });
+    return { sent: false, error: 'RESEND_API_KEY not configured' };
+  }
+
+  try {
+    const res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${RESEND_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        from: RESEND_FROM,
+        to: [params.to],
+        subject: params.subject,
+        html: params.html,
+      }),
+    });
+
+    const body = await res.json();
+
+    if (res.ok) {
+      console.log('[Resend] Email sent:', { event_type: params.eventType, to: params.to, id: body.id, user_id: params.userId });
+      return { sent: true, emailId: body.id as string | undefined };
+    }
+
+    const errMsg = (body as Record<string, unknown>).message as string || `HTTP ${res.status}`;
+    console.error('[Resend] Send failed:', { event_type: params.eventType, to: params.to, status: res.status, error: errMsg, user_id: params.userId });
+    return { sent: false, error: errMsg };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error('[Resend] Unexpected error:', { event_type: params.eventType, to: params.to, error: message, user_id: params.userId });
+    return { sent: false, error: message };
+  }
+}
+
+function getCustomerDisplayName(email: string, name?: string): string {
+  if (name && name.trim()) return name.trim().split(' ')[0];
+  return email.split('@')[0] || 'Kedves előfizető';
+}
+
+// Sends the post-checkout welcome email (lifetime vs. monthly/yearly variants).
+async function sendWelcomeResend(params: {
+  plan: string;
+  customerEmail: string;
+  displayName: string;
+  userId: string;
+  eventType: string;
+}): Promise<ResendResult> {
+  if (params.plan === 'lifetime') {
+    return sendResendEmail({
+      to: params.customerEmail,
+      subject: 'Köszönjük! Lifetime hozzáférésed aktiválva ✓',
+      html: lifetimeWelcomeEmail(params.displayName),
+      userId: params.userId,
+      eventType: params.eventType,
+    });
+  }
+  return sendResendEmail({
+    to: params.customerEmail,
+    subject: 'Üdvözöl a Klient! ✓',
+    html: welcomeEmail(params.displayName, planLabelHu(params.plan)),
+    userId: params.userId,
+    eventType: params.eventType,
+  });
 }
 
 async function sendBillingoInvoice(invoiceId: number, email: string, userId: string): Promise<{ success: boolean; error?: string }> {
@@ -970,17 +1062,30 @@ Deno.serve(async (req) => {
             });
           }
 
+          // Send Resend welcome email
+          const displayName = getCustomerDisplayName(customerEmail, getNestedCustomerName(obj));
+          const resendResult = await sendWelcomeResend({ plan, customerEmail, displayName, userId, eventType: event.type });
+
           await finishBillingEvent(stripeEventId, {
             status: 'processed',
             billingoInvoiceId: billingoResult.invoiceId,
             billingoPartnerId: billingoResult.partnerId,
             billingoEmailSent: billingoResult.emailSent,
             billingoEmailError: billingoResult.emailError,
+            resendEmailId: resendResult.emailId,
+            resendEmailSent: resendResult.sent,
+            resendEmailError: resendResult.error,
           });
         } else {
+          // Billingo failed — still try to send welcome email
+          const displayName = getCustomerDisplayName(customerEmail, getNestedCustomerName(obj));
+          const resendResult = await sendWelcomeResend({ plan, customerEmail, displayName, userId, eventType: event.type });
           await finishBillingEvent(stripeEventId, {
             status: 'failed',
             error: 'Billingo invoice creation failed for checkout',
+            resendEmailId: resendResult.emailId,
+            resendEmailSent: resendResult.sent,
+            resendEmailError: resendResult.error,
           });
         }
 
@@ -1177,6 +1282,19 @@ Deno.serve(async (req) => {
           stripeReference: stripeInvoiceId,
         });
 
+        // Send yearly renewal email (only for klient module yearly plan)
+        let renewalResend: ResendResult = { sent: false };
+        if (lookup.module === 'klient' && plan === 'yearly') {
+          const displayName = getCustomerDisplayName(customerEmail);
+          renewalResend = await sendResendEmail({
+            to: customerEmail,
+            subject: 'Éves Klient előfizetésed megújult',
+            html: renewalEmail(displayName, planAmountHu('yearly')),
+            userId: lookup.userId,
+            eventType: event.type,
+          });
+        }
+
         if (billingoResult) {
           const { error: billingoUpdateErr } = await supabase
             .from('subscriptions')
@@ -1201,11 +1319,17 @@ Deno.serve(async (req) => {
             billingoPartnerId: billingoResult.partnerId,
             billingoEmailSent: billingoResult.emailSent,
             billingoEmailError: billingoResult.emailError,
+            resendEmailId: renewalResend.emailId,
+            resendEmailSent: renewalResend.sent,
+            resendEmailError: renewalResend.error,
           });
         } else {
           await finishBillingEvent(stripeEventId, {
             status: 'failed',
             error: 'Billingo invoice creation failed for recurring Stripe invoice',
+            resendEmailId: renewalResend.emailId,
+            resendEmailSent: renewalResend.sent,
+            resendEmailError: renewalResend.error,
           });
         }
 
@@ -1320,20 +1444,80 @@ Deno.serve(async (req) => {
           break;
         }
 
-        if (sub?.user_id) {
-          const updatePayload = isAdsPaymentFailed
-            ? { ads_status: 'past_due' }
-            : { status: 'past_due' };
-          const { error: updateErr } = await supabase.from('subscriptions')
-            .update(updatePayload).eq('user_id', sub.user_id);
-
-          if (updateErr) {
-            console.error('[Webhook] Failed to mark subscription past_due:', { user_id: sub.user_id, error: updateErr });
-          } else {
-            console.log('[Webhook] Subscription marked past_due:', { user_id: sub.user_id, attempt_count: attemptCount });
-          }
-        } else {
+        if (!sub?.user_id) {
           console.error('[Webhook] Subscription not found in database:', { subscription_id: subscriptionId });
+          break;
+        }
+
+        // Update subscription status to past_due
+        const updatePayload = isAdsPaymentFailed
+          ? { ads_status: 'past_due' }
+          : { status: 'past_due' };
+        const { error: updateErr } = await supabase.from('subscriptions')
+          .update(updatePayload).eq('user_id', sub.user_id);
+
+        if (updateErr) {
+          console.error('[Webhook] Failed to mark subscription past_due:', { user_id: sub.user_id, error: updateErr });
+        } else {
+          console.log('[Webhook] Subscription marked past_due:', { user_id: sub.user_id, attempt_count: attemptCount });
+        }
+
+        // Send dunning email (idempotent: one per stripe_invoice_id, klient module only)
+        if (!isAdsPaymentFailed && invoiceId && BILLING_PORTAL_TOKEN_SECRET) {
+          const stripeEventId = getStripeEventId(event, obj);
+          const customerEmail = getNestedEmail(obj) || await getAuthUserEmail(sub.user_id);
+
+          const dunningEvent = await beginBillingEvent({
+            stripeEventId,
+            stripeEventType: event.type,
+            stripeInvoiceId: invoiceId,
+            stripeSubscriptionId: subscriptionId,
+            userId: sub.user_id,
+            module: 'klient',
+            customerEmail,
+          });
+
+          if (dunningEvent.shouldProcess) {
+            if (!customerEmail) {
+              await finishBillingEvent(stripeEventId, {
+                status: 'skipped',
+                error: 'No customer email available for dunning',
+              });
+            } else {
+              // Look up stripe_customer_id for the HMAC token
+              const { data: subData } = await supabase
+                .from('subscriptions')
+                .select('stripe_customer_id')
+                .eq('user_id', sub.user_id)
+                .maybeSingle();
+
+              const stripeCustomerId = (subData?.stripe_customer_id as string) || '';
+              const expiresAt = Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60; // 7 days
+              const hmacToken = stripeCustomerId
+                ? await signBillingPortalToken(sub.user_id, stripeCustomerId, expiresAt, BILLING_PORTAL_TOKEN_SECRET)
+                : '';
+              const portalLink = hmacToken
+                ? `https://klient.work/billing?token=${encodeURIComponent(hmacToken)}`
+                : 'https://klient.work';
+
+              const displayName = getCustomerDisplayName(customerEmail, getNestedCustomerName(obj));
+              const dunningResend = await sendResendEmail({
+                to: customerEmail,
+                subject: 'Fizetési hiba — Klient előfizetés',
+                html: dunningEmail(displayName, portalLink),
+                userId: sub.user_id,
+                eventType: event.type,
+              });
+
+              await finishBillingEvent(stripeEventId, {
+                status: dunningResend.sent ? 'processed' : 'failed',
+                resendEmailId: dunningResend.emailId,
+                resendEmailSent: dunningResend.sent,
+                resendEmailError: dunningResend.error,
+                error: dunningResend.sent ? undefined : `Dunning email not sent: ${dunningResend.error}`,
+              });
+            }
+          }
         }
 
         break;
