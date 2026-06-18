@@ -318,11 +318,25 @@ Az IPC rendszer `db:` prefixű handler-ekkel működik, a `preload.ts` bridge-el
 - **Tábla:** `subscriptions` (status, trial_ends_at, current_period_end)
 
 ### Stripe
-- **Via Supabase Edge Functions:** `create-checkout` (Monthly/Yearly/Lifetime), `manage-subscription`
+- **Via Supabase Edge Functions:** `create-checkout` (Monthly/Yearly/Lifetime), `manage-subscription`, `create-billing-portal`
 - **Webhook:** Supabase-ben kezelve, `subscriptions` táblát frissíti
 - **Aktuális Supabase secrets állapot (2026-05-03):** `STRIPE_ENV=production`, production price secret-ek beállítva, `create-checkout` és `stripe-webhook` Edge Function aktív.
 - **Billingo webhook állapot:** `BILLINGO_BLOCK_ID=315117` (production block), a beállított Billingo API kulcs nem egyezik a korábbi dokumentált tesztkulccsal. `BILLINGO_ENV` jelenleg `sandbox`, de a kódban csak logolásra szolgál; érdemes `production`-re igazítani, hogy ne legyen félrevezető.
 - **Előfizetéses számla email flow:** a Stripe webhook sikeres első checkout után Billingo számlát hoz létre és meghívja a Billingo `POST /documents/{id}/send` endpointot. Megújuló Stripe terheléseknél az `invoice.paid` / `invoice.payment_succeeded` ág csak `billing_reason=subscription_cycle` esetén készít és küld Billingo számlát. Az idempotenciát a Supabase `subscription_billing_events` tábla adja `stripe_event_id` és `stripe_invoice_id` alapján.
+- **Customer Portal:** Stripe Dashboard-on konfigurált, kártyaadatok és fizetési módszer kezelésére. Session URL generálás: `create-billing-portal` Edge Function (app-ból Bearer JWT-vel, emailből HMAC tokennel). `return_url`: `https://klient.work/subscription`.
+
+### Resend
+- **Cél:** Klient-branded tranzakciós emailek küldése (nem számla — az Billingo dolga)
+- **Feladó:** `Kristóf a Klient-től <hello@klient.work>`
+- **API kulcs:** Supabase secret `RESEND_API_KEY`
+- **Küldés helye:** `stripe-webhook` Edge Function, a Billingo hívások mellé építve
+- **Email típusok:**
+  - **Welcome Email** — első sikeres havi/éves előfizetésnél (`checkout.session.completed`, plan≠lifetime)
+  - **Lifetime Welcome Email** — lifetime vásárlásnál (`checkout.session.completed`, plan=lifetime); külön, speciális szöveg
+  - **Renewal Notification** — csak éves megújulásnál (`invoice.paid`, `billing_reason=subscription_cycle`, plan=yearly)
+  - **Dunning Email** — sikertelen fizetésnél (`invoice.payment_failed`); stripe_invoice_id alapján idempotens, max 1 email/invoice
+- **Nyomkövetés:** `subscription_billing_events` tábla, új mezők: `resend_email_id`, `resend_email_sent`, `resend_email_error`
+- **Billing Portal Redirect flow:** email tartalmaz `https://klient.work/billing?token=<hmac_token>` linket → `billing.html` oldal JS-sel hívja a `create-billing-portal` Edge Functiont → redirect a Stripe Customer Portalra. HMAC token: `HMAC-SHA256(user_id + ":" + stripe_customer_id + ":" + expires_at)`, 7 napos lejárat, secret: `BILLING_PORTAL_TOKEN_SECRET` Supabase secret.
 
 ### ElevenLabs Scribe v2
 - **Real-time (Notes diktálás):** WebSocket `wss://api.elevenlabs.io/v1/speech-to-text/realtime`, auth: `xi-api-key` header, `model_id=scribe_v2_realtime`, `language_code=hun`, `commit_strategy=vad`, `audio_format=pcm_16000`
@@ -577,4 +591,6 @@ A modul tilos electron- vagy React-importot tenni, hogy mindkét oldal terhelés
 - 2026-05-13: STT disclaimer modal hozzáadva (`src/components/SttDisclaimerModal.tsx`) — minden STT indítás előtt jelenik meg (Recordings + NotesPanel), közös localStorage kulcson (`stt_disclaimer_dismissed`) tárolja a "ne mutasd újra" döntést.
 - 2026-05-13: AI összefoglaló markdown renderelés — `src/components/MarkdownSummary.tsx` (`react-markdown` + `remark-gfm`, Klient témájú stílus), `stripMarkdown()` util a listanézeti previewhoz. `summarize` Edge Function átdolgozva: strukturált `## ` szekciók és `- ` listák, nincs nyers `**` karakter a szövegben.
 
-*Utolsó frissítés: 2026-05-13*
+- 2026-05-20: Klient-branded Resend email rendszer és Stripe Customer Portal integráció. Új migráció `subscription_billing_events` Resend tracking mezőkkel (`resend_email_id`, `resend_email_sent`, `resend_email_error`). Új `create-billing-portal` Edge Function kétféle auth útvonallal (Bearer JWT az appból, HMAC token az emailből) — testable `handler.ts` + `index.ts` Deno entry split, 11 integrációs teszttel. Új `shared/hmac-token.ts` (Web Crypto, 9 unit teszt) és párhuzamos `supabase/functions/_shared/hmac-token.ts`. A `stripe-webhook` négy Resend emailt küld: Welcome (monthly/yearly), Lifetime Welcome (lifetime), Yearly Renewal (`invoice.paid` + `subscription_cycle`), Dunning (`invoice.payment_failed`) — utóbbi 7 napos HMAC-aláírt `klient.work/billing?token=` linkkel. Új klient.work oldalak: `billing.html` (token → portal redirect) és `subscription.html` (return confirmation), mindkettő a `vite.config.js` rollupOptions-ban. Settings → Előfizetés tabba új "Fizetési adatok módosítása" gomb `active`/`past_due` státusznál (lifetime/trial kivételével). Production deploy előtt szükséges manuális lépések: Stripe Customer Portal konfigurálás (`return_url=https://klient.work/subscription`), Resend `klient.work` domain hitelesítés (`hello@klient.work` sender), Supabase secrets: `RESEND_API_KEY` és `BILLING_PORTAL_TOKEN_SECRET` (32+ byte random hex).
+
+*Utolsó frissítés: 2026-05-20*
