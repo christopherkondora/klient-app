@@ -4,7 +4,6 @@ import { AnimatePresence, motion } from 'framer-motion';
 import Sidebar from './Sidebar';
 import TitleBar from './TitleBar';
 import NotesPanel from './NotesPanel';
-import PomodoroTimer from './PomodoroTimer';
 import RecordingsPanel from './RecordingsPanel';
 import TrialBanner from './TrialBanner';
 import UpdateBanner from './UpdateBanner';
@@ -116,7 +115,6 @@ export default function Layout({ paywalled }: { paywalled?: boolean } = {}) {
                   <X size={10} />
                 </button>
 
-                <PomodoroTimer />
                 <button
                   onClick={() => setRecordingsPanelOpen(true)}
                   className="w-12 h-12 rounded-full bg-surface-800/80 border border-teal/10 text-cream hover:bg-teal/20 hover:border-teal/25 transition-colors flex items-center justify-center"

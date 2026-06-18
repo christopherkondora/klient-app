@@ -120,7 +120,7 @@ function calculateInvoiceVatSplit(amount: number, amountHuf: number, vatRate: nu
   return { netAmount, vatAmount, netAmountHuf, vatAmountHuf };
 }
 
-const USER_FIELDS = 'id, name, email, invoice_platform, onboarding_complete, pomodoro_project_tracking, revenue_goal_yearly, profit_goal_yearly, company_name, tax_number, address, bank_account, team_mode, vat_status, vat_rate_default, vat_number, is_business, created_at';
+const USER_FIELDS = 'id, name, email, invoice_platform, onboarding_complete, revenue_goal_yearly, profit_goal_yearly, company_name, tax_number, address, bank_account, team_mode, vat_status, vat_rate_default, vat_number, is_business, created_at';
 const AUTH_EMAIL_REDIRECT = 'https://klient.work/confirmed';
 
 /** Ensure a local user_settings row exists for a Supabase user, return it */
@@ -374,7 +374,7 @@ export function registerIpcHandlers() {
 
   // Update local user settings (non-auth fields)
   ipcMain.handle('db:user:update', (_event, id: string, data: Record<string, unknown>) => {
-    const allowedFields = ['name', 'email', 'invoice_platform', 'onboarding_complete', 'pomodoro_project_tracking', 'revenue_goal_yearly', 'profit_goal_yearly', 'company_name', 'tax_number', 'address', 'bank_account', 'team_mode', 'vat_status', 'vat_rate_default', 'vat_number', 'is_business'];
+    const allowedFields = ['name', 'email', 'invoice_platform', 'onboarding_complete', 'revenue_goal_yearly', 'profit_goal_yearly', 'company_name', 'tax_number', 'address', 'bank_account', 'team_mode', 'vat_status', 'vat_rate_default', 'vat_number', 'is_business'];
     const filteredData: Record<string, unknown> = {};
     for (const key of allowedFields) {
       if (key in data) filteredData[key] = data[key];

@@ -750,7 +750,6 @@ interface UserSettings {
   email: string;
   invoice_platform: string;
   onboarding_complete: number;
-  pomodoro_project_tracking: number;
   revenue_goal_yearly: number;
   profit_goal_yearly: number;
   company_name: string;

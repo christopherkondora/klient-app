@@ -33,7 +33,7 @@ const VAT_FREQUENCY_OPTIONS: { value: VatFrequency; label: string; desc: string 
 
 const FEATURES = [
   { icon: BarChart3, label: 'Pénzügyi áttekintés', desc: 'Bevételek, kiadások, profit' },
-  { icon: Calendar, label: 'Naptár & időkövetés', desc: 'Pomodoro, órabeosztás' },
+  { icon: Calendar, label: 'Naptár & időkövetés', desc: 'Órabeosztás, határidők' },
   { icon: FolderOpen, label: 'Fájlkezelés', desc: 'Ügyfél- és projektmappák' },
   { icon: FileText, label: 'Számlázás', desc: 'Készítés, nyomonkövetés' },
   { icon: Mic, label: 'Hangfelvétel & AI', desc: 'Átírás, összefoglaló' },

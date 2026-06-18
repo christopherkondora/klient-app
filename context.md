@@ -128,7 +128,6 @@ Klient/
 │   │   ├── Paywall.tsx           # Előfizetési paywall
 │   │   ├── TrialBanner.tsx       # Próbaidő visszaszámláló banner
 │   │   ├── UpdateBanner.tsx      # App frissítés banner
-│   │   ├── PomodoroTimer.tsx     # Pomodoro timer projekthez kötve
 │   │   ├── NotesPanel.tsx        # TipTap rich text editor panel
 │   │   ├── ResizableImage.tsx    # TipTap image node view (resize handles)
 │   │   ├── ResizableImageExtension.ts # TipTap extension
