@@ -482,6 +482,23 @@ export function registerIpcHandlers() {
     return { success: true };
   });
 
+  // Open Stripe Customer Portal (app-initiated, Bearer JWT)
+  ipcMain.handle('db:subscription:billing-portal', async () => {
+    const sb = getSupabase();
+    const { data: { session } } = await sb.auth.getSession();
+    if (!session?.user) throw new Error('Nincs bejelentkezve');
+
+    const res = await sb.functions.invoke('create-billing-portal', {
+      body: {},
+    });
+
+    if (res.error) throw new Error(res.error.message || 'Portál hiba');
+    const result = res.data as { url?: string; error?: string };
+    if (result.error) throw new Error(result.error);
+    if (!result.url) throw new Error('Nincs portal URL');
+    return { success: true, url: result.url };
+  });
+
   // ============ CLIENTS ============
   ipcMain.handle('db:clients:getAll', () => clientsStore.list());
 

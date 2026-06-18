@@ -133,6 +133,7 @@ export default function Settings() {
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
   const [cancelLoading, setCancelLoading] = useState(false);
   const [reactivateLoading, setReactivateLoading] = useState(false);
+  const [billingPortalLoading, setBillingPortalLoading] = useState(false);
   const [subActionError, setSubActionError] = useState('');
 
   // Billing config state
@@ -227,6 +228,9 @@ export default function Settings() {
   const isTrial = subscription?.status === 'trial';
   const isPaid = subscription?.status === 'active' && currentPlan !== 'trial';
   const isCancelled = subscription?.status === 'cancelled';
+  const isPastDue = subscription?.status === 'past_due';
+  // Stripe Customer Portal only meaningful for recurring subs that have a Stripe customer
+  const canManageBilling = (subscription?.status === 'active' || isPastDue) && currentPlan !== 'lifetime' && currentPlan !== 'trial';
 
   const handleCancelSubscription = async () => {
     setCancelLoading(true);
@@ -250,6 +254,23 @@ export default function Settings() {
       setSubActionError(err.message || 'Hiba történt az újraaktiválás során');
     } finally {
       setReactivateLoading(false);
+    }
+  };
+
+  const handleBillingPortal = async () => {
+    setBillingPortalLoading(true);
+    setSubActionError('');
+    try {
+      const res = await window.electronAPI.openBillingPortal();
+      if (res?.url) {
+        await window.electronAPI.openExternal(res.url);
+      } else {
+        throw new Error('Nincs portal URL');
+      }
+    } catch (err: any) {
+      setSubActionError(err.message || 'Nem sikerült megnyitni a fizetési portált');
+    } finally {
+      setBillingPortalLoading(false);
     }
   };
 
@@ -635,6 +656,41 @@ export default function Settings() {
                       </div>
                     );
                   })}
+                </div>
+              </div>
+            )}
+
+            {/* Manage billing (Stripe Customer Portal) */}
+            {canManageBilling && (
+              <div className="bg-surface-800/50 rounded-lg border border-teal/10 p-6">
+                <div className="flex items-start gap-4">
+                  <div className="w-10 h-10 rounded-lg bg-teal/10 flex items-center justify-center shrink-0">
+                    <CreditCard className="w-5 h-5 text-teal" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-semibold text-cream">Fizetési adatok</p>
+                    <p className="text-xs text-steel mt-0.5">
+                      {isPastDue
+                        ? 'A legutóbbi fizetés sikertelen volt. Frissítsd a kártyaadataidat a hozzáférés visszaállításához.'
+                        : 'Kártya frissítése, számlázási adatok módosítása, korábbi fizetések megtekintése.'}
+                    </p>
+                  </div>
+                  <button
+                    onClick={handleBillingPortal}
+                    disabled={billingPortalLoading}
+                    className={`shrink-0 flex items-center gap-1.5 px-4 py-2 text-xs font-medium rounded-lg transition-colors disabled:opacity-40 ${
+                      isPastDue
+                        ? 'bg-amber-500/20 text-amber-400 hover:bg-amber-500/30'
+                        : 'bg-teal/15 text-teal hover:bg-teal/25'
+                    }`}
+                  >
+                    {billingPortalLoading ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <CreditCard className="w-3.5 h-3.5" />
+                    )}
+                    Fizetési adatok módosítása
+                  </button>
                 </div>
               </div>
             )}

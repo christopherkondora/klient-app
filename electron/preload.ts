@@ -24,6 +24,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openCheckout: (data: { plan: string; module?: string }) => ipcRenderer.invoke('db:subscription:checkout', data),
   cancelSubscription: (module?: string) => ipcRenderer.invoke('db:subscription:cancel', module),
   reactivateSubscription: (module?: string) => ipcRenderer.invoke('db:subscription:reactivate', module),
+  openBillingPortal: () => ipcRenderer.invoke('db:subscription:billing-portal'),
 
   // Update
   getUpdateStatus: () => ipcRenderer.invoke('update:status'),

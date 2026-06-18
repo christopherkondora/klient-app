@@ -30,6 +30,7 @@ interface ElectronAPI {
   openCheckout: (data: { plan: 'monthly' | 'yearly' | 'lifetime' }) => Promise<{ success: boolean; url: string }>;
   cancelSubscription: () => Promise<{ success: boolean }>;
   reactivateSubscription: () => Promise<{ success: boolean }>;
+  openBillingPortal: () => Promise<{ success: boolean; url: string }>;
 
   // Update
   getUpdateStatus: () => Promise<{ status: 'idle' | 'checking' | 'available' | 'downloaded' | 'error'; info?: unknown; message?: string }>;
