@@ -312,7 +312,7 @@ Az IPC rendszer `db:` prefixű handler-ekkel működik, a `preload.ts` bridge-el
 ### Supabase
 - **URL:** `https://arbhhltbjovuxwvfcnni.supabase.co`
 - **Auth:** Email/password + Google OAuth (PKCE), file-based session persistence
-- **Edge Functions:** `get-elevenlabs-key`, `get-deepgram-key` (deprecated, megtartva rollback-hez), `summarize`, `invoice-extract`, `expense-extract`, `create-checkout`, `manage-subscription`, `stripe-webhook`, `sync-stripe-subscriptions`, `transcribe` (mind `--no-verify-jwt`)
+- **Edge Functions:** `get-elevenlabs-key`, `get-deepgram-key` (deprecated, megtartva rollback-hez), `summarize`, `invoice-extract`, `expense-extract`, `create-checkout`, `manage-subscription`, `stripe-webhook`, `create-billing-portal`, `sync-stripe-subscriptions`, `transcribe` (mind `--no-verify-jwt`)
 - **RPC:** `expire_subscription(p_user_id)`
 - **Tábla:** `subscriptions` (status, trial_ends_at, current_period_end)
 
@@ -321,7 +321,7 @@ Az IPC rendszer `db:` prefixű handler-ekkel működik, a `preload.ts` bridge-el
 - **Webhook:** Supabase-ben kezelve, `subscriptions` táblát frissíti
 - **Aktuális Supabase secrets állapot (2026-05-03):** `STRIPE_ENV=production`, production price secret-ek beállítva, `create-checkout` és `stripe-webhook` Edge Function aktív.
 - **Billingo webhook állapot:** `BILLINGO_BLOCK_ID=315117` (production block), a beállított Billingo API kulcs nem egyezik a korábbi dokumentált tesztkulccsal. `BILLINGO_ENV` jelenleg `sandbox`, de a kódban csak logolásra szolgál; érdemes `production`-re igazítani, hogy ne legyen félrevezető.
-- **Előfizetéses számla email flow:** a Stripe webhook sikeres első checkout után Billingo számlát hoz létre és meghívja a Billingo `POST /documents/{id}/send` endpointot. Megújuló Stripe terheléseknél az `invoice.paid` / `invoice.payment_succeeded` ág csak `billing_reason=subscription_cycle` esetén készít és küld Billingo számlát. Az idempotenciát a Supabase `subscription_billing_events` tábla adja `stripe_event_id` és `stripe_invoice_id` alapján.
+- **Előfizetéses számla email flow:** a Stripe webhook sikeres első checkout után Billingo számlát hoz létre és meghívja a Billingo `POST /documents/{id}/send` endpointot. Megújuló Stripe terheléseknél az `invoice.paid` / `invoice.payment_succeeded` ág csak `billing_reason=subscription_cycle` esetén készít és küld Billingo számlát. Az idempotenciát a Supabase `subscription_billing_events` tábla adja `stripe_event_id` és `stripe_invoice_id` alapján. **(2026-06-18 / v1.3.0)** A `createBillingoInvoice` hiba esetén már nem `null`-t, hanem strukturált kimenetet ad vissza (`{ ok: false, error }` a Billingo HTTP státusszal + `error_detail`-lel), és mindhárom hívási hely (ads/klient checkout, renewal) a valódi okot menti a `subscription_billing_events.error` mezőbe — így a „fizetett, de nincs számla" esetek log nélkül is visszakövethetők.
 - **Customer Portal:** Stripe Dashboard-on konfigurált, kártyaadatok és fizetési módszer kezelésére. Session URL generálás: `create-billing-portal` Edge Function (app-ból Bearer JWT-vel, emailből HMAC tokennel). `return_url`: `https://klient.work/subscription`.
 
 ### Resend
@@ -534,7 +534,7 @@ A modul tilos electron- vagy React-importot tenni, hogy mindkét oldal terhelés
 - STT disclaimer modal (`SttDisclaimerModal`) — minden STT gomb előtt jelenik meg, localStorage "ne mutasd újra" opcióval
 - AI összefoglaló markdown renderelés (`MarkdownSummary` + `stripMarkdown`), listanézeti preview szöveggé alakítva
 - `summarize` Edge Function frissítve: strukturált markdown output (## szekciók + bullet listák)
-- 4 téma, Pomodoro timer (átnevezés, láthatóság), Exchange rates
+- 4 téma, Exchange rates (a Pomodoro timer a v1.3.0-ban eltávolítva)
 - AI kiadás feldolgozás (PDF → OpenAI GPT-4o-mini → form kitöltés, subscription hint)
 - Előfizetésen felüli plusz költségek (extra_amount + extra_description, pl. GitHub Copilot Usage)
 - Nem-HUF költségek tizedes összeggel rögzíthetők (pl. 22.86 EUR), HUF továbbra is egész számra kerekítve/normalizálva.
@@ -571,6 +571,10 @@ A modul tilos electron- vagy React-importot tenni, hogy mindkét oldal terhelés
 - A Supabase regisztrációs flow javítva lett: email-megerősítésnél a signUp már nem hoz létre fél-authenticated lokális user állapotot, a login/register valódi hibaüzenetet ad, és az onboardingból újraküldhető a megerősítő email.
 - A Google auth közben jelentkező `no such column: country_code` hiba javítva lett: a kliens ország/EU ÁFA mezők migrációja most a VAT backfill előtt fut le, így régebbi lokális adatbázisokon sem akad el az auth utáni DB inicializálás.
 - 2026-05-03 ellenőrzés: Stripe production módban van a Supabase secrets szerint; Billingo production block ID-val fut, de `BILLINGO_ENV` logcímke még `sandbox`. Következő élesítés előtt igazítsd `production`-re. A webhook kód már tartalmaz Billingo számla email küldést és megújuló terhelés számlázást; production deploy előtt futtasd a `subscription_billing_events` migrációt, deployold újra a `stripe-webhook` functiont, és kapcsold be Stripe-ban az `invoice.paid` / `invoice.payment_succeeded` eseményeket.
+- **2026-06-18 release + audit (v1.3.0):** `stripe-webhook` újra-deployolva a Billingo hiba-diagnosztikai fixszel; `main` fast-forward a feature branchről, `v1.3.0` tag → Release workflow draftot épít a telepítőkkel (publish = auto-update, manuálisan kiadandó). Audit közben feltárt, **még nyitott** pontok:
+  - **`RESEND_API_KEY` Supabase secret valószínűleg nincs (vagy rossz) beállítva** — a Resend küldési naplója szerint a webhookból **soha** nem ment ki tranzakciós email (welcome/renewal/dunning), és a 2026-05-16-i welcome-próbánál `resend_email_sent=false`. Ellenőrzés: `supabase secrets list --project-ref arbhhltbjovuxwvfcnni`; ha hiányzik, `supabase secrets set RESEND_API_KEY=<klient-supabase-secret kulcs>` + újra-deploy.
+  - **Lifetime vásárlás nem kap Billingo számlát:** a `createBillingoInvoice` csak az ads/klient checkout és a renewal ágból hívódik; a `checkout.session.completed` `mode==='payment'` (lifetime) ág nem hívja → a 149 900 Ft-os lifetime vásárlásokról nem készül automatikus Billingo számla.
+  - **Orphan-kockázat:** ha egy usert kézzel `lifetime`-ra állítanak (`stripe_subscription_id=null`) miközben aktív Stripe-előfizetése van, a megújítási webhook lookupja elhasal (`findSubscriptionByStripeSubscriptionId` → null), így a terhelésről nincs Billingo számla és nincs `subscription_billing_events` sor. Lifetime-ra váltáskor a Stripe-előfizetést le kell mondani.
 
 ### Lehetséges fejlesztések
 - Lejárt számlák automatikus detekció (overdue → email emlékeztető)
